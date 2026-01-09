@@ -35,7 +35,7 @@ struct BatteryState {
     volatile float vcell_high = 0; // voltage of highest cell reported by BMS
     volatile unsigned long vcell_high_t = 0; // timestamp of highest cell voltage
 
-    EWMA<volatile float, float> vbat_avg{60}; // time-averaged pack voltage
+    EWMA<volatile float, float> vout_avg{60}; // time-averaged pack voltage
     MeanAccumulator ibat_mean{}; // time-averaged battery current (from BMS)
     MeanAccumulator iout_mean{}; // time-averaged out current (from this charger)
 
@@ -48,8 +48,8 @@ struct BatteryState {
         return vcell_high > 0 and wallClockUs() - vcell_high_t < (VCELL_EXPIRATION_TIME_SEC * 1000000);
     }
 
-    void update(float vbat, float iout) {
-        vbat_avg.add(vbat);
+    void update(float vout, float iout) {
+        vout_avg.add(vout);
         // note: iout = ibat + iload
         //if (iout > params.Ibat_lim * 0.005f)
         if (isfinite(iout))iout_mean.add(iout);
@@ -173,10 +173,10 @@ public:
         if (vcell_valid and batSt.vcell_high >= v_eoc) {
             constexpr auto OV_FEEDBACK_GAIN = 2; // 4
             // TODO run average filter on vPin (or vcell_high?)
-            float vPin = fmin(batSt.vbat_avg.get(), vbat) - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN;
+            float vPin = fmin(batSt.vout_avg.get(), vbat) - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN;
             if (isnan(vpack_pin) or vPin < vpack_pin - 0.01f)
                 ESP_LOGI("charger", "vpPin:=%.3fV (cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)", vPin, batSt.vcell_high,
-                     v_eoc, batSt.vbat_avg.get());
+                     v_eoc, batSt.vout_avg.get());
             vpack_pin = vPin;
         } else if (!vcell_valid && params.Vbat_fallback >= 0) {
             ESP_LOGW("charger", "Cell Voltage n/a, fall back to VbatMax=%.3fV", params.Vbat_fallback);
@@ -195,7 +195,7 @@ public:
                 batSt.setVcellHigh(strntof(dat, len));
                 ESP_LOGD("charger",
                          "avg(vbat)=%.3fV cv_max(mqtt)=%.3fV cv_term=%.3fV vbat_lim=%.3fV vbat_max=%.3fV",
-                         batSt.vbat_avg.get(),
+                         batSt.vout_avg.get(),
                          batSt.vcell_high, termCond.v_term, Vout_max(), params.Vbat_max);
                 _updatePackVoltagePinning();
             });
@@ -246,8 +246,8 @@ public:
      */
 
 
-    void update(float vbat, float iout) {
-        batSt.update(vbat, iout);
+    void update(float vout, float iout) {
+        batSt.update(vout, iout);
         _updateTermination();
         _updatePackVoltagePinning();
     }

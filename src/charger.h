@@ -190,7 +190,8 @@ public:
     void beginMqtt(const ConfFile &mqttConf) {
         auto topic = mqttConf.getString("cell_voltages_max_topic", "");
         if (!topic.empty()) {
-            if (params.Vbat_fallback > 0) vpack_pin = params.Vbat_fallback;
+            if (params.Vbat_fallback >= 0)
+                vpack_pin = params.Vbat_fallback;
             MQTT.subscribeTopic(topic, [&](const char *dat, int len) {
                 batSt.setVcellHigh(strntof(dat, len));
                 ESP_LOGD("charger",

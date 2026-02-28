@@ -12,7 +12,7 @@ struct BatChargerParams {
     float Ibat_lim = NAN; // [A] Max bat charge current (Ibat = Iout - Iload)
     float Cbat = NAN; // [C] Battery capacity
 
-    float cv_min = NAN; // where the termination line starts @Ibat=0 (LFP: 3.37V)
+    float cv_min = NAN; // "float" where the termination line starts @Ibat=0 (LFP: 3.37V)
     float cv_eoc = NAN; // termination line ending (LFP: 3.65V@Ibat=0.05C)
 
 
@@ -165,8 +165,9 @@ public:
         // once a cell reaches termination voltage we capture pack voltage and set it as max output voltage
 
         float v_eoc = fmin(params.cv_eoc, termCond.v_term);
-        //  ^ v_eoc: theoretically we could go beyond cv_eoc if ibat is sufficiently high. however a "dumb" BMS will
-        //  cut us off at max 3.65V, causing a voltage transient which we like to avoid. so never go beyond cv_eoc
+        //  ^ v_eoc: we could go beyond cv_eoc if ibat is sufficiently high. however a "dumb" BMS will
+        //  cut us off at max 3.65V (or whatever voltage it is configured to), possibly causing a voltage transient
+        //  which we like to avoid. so never go beyond cv_eoc
 
         bool vcell_valid = batSt.haveValidCellVoltage();
 

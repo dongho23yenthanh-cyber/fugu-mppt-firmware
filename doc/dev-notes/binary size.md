@@ -1,5 +1,11 @@
+
+##
+
 ```
 idf.py size-files
+
+how to find why a specific lib/component is linked, you can add an '#error err' directive to the header file
+
 
 # locale, wlocale
 this got added at some point

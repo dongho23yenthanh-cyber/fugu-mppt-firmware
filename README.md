@@ -6,24 +6,18 @@ It is compatible with
 the [original hardware design](https://www.instructables.com/DIY-1kW-MPPT-Solar-Charge-Controller/) you can find on
 Instructables.
 
-The charger uses a simple CC-CV (constant current - constant voltage) approach.
-This is common for Lithium-Batteries (e.g. LiFePo4, NCA, NCM, Sodium-Ion).
+The charger implements proper charge termination for Lithium-Batteries (e.g. LiFePo4, NCA, NCM, Sodium-Ion) as described in [this article](https://nordkyndesign.com/charging-marine-lithium-battery-banks).
 
 Highlights:
 
+* Proper LiFePo4 [charge termination](https://nordkyndesign.com/charging-marine-lithium-battery-banks/)
 * Supports ESP32 and ESP32-S3
-* Async ADC sampling for low latency control loop (<900µs in-out latency)
-* ADC abstraction layer with implementations for ESP32(S3) [Internal ADC](doc/Internal%20ADC.md), ADS1x15 and
-  INA226/INA228
-* Automatic zero-current calibration
 * Robust signal processing using [notch filters](https://www.youtube.com/watch?v=tpAA5eUb6eo) (reject inverter noise)
   , rolling median (reject burst noise) and fast IIR filters (low pass, like pandas ewm)
 * [PID](https://www.youtube.com/watch?v=wkfEZmsQqiA) control for precise voltage and current regulation
 * Periodic MPPT global search (aka scan, sweep)
-* Sophisticated [Diode Emulation](#synchronous-buck-and-diode-emulation) for low-side switch
+* Sophisticated [Diode Emulation](#synchronous-buck-and-diode-emulation) for low-side switch synchronous rectification
 * Supports buck and boost converter operation, and can be used for power supply too
-* Automatic battery voltage detection
-* Proper LiFePo4 [charge termination](https://nordkyndesign.com/charging-marine-lithium-battery-banks/)
 * Fast protection shutdown in over-voltage and over-current conditions
 * Temperature power de-rating and PWM Fan Control
 * Telemetry to InfluxDB over UDP
@@ -31,6 +25,10 @@ Highlights:
 * Configuration files on flash file system (littlefs)
 * [Serial UART console](doc/Console.md) and telnet to interact with the charger
 * MQTT support to communicate with the BMS and Home Assistant
+* ADC abstraction layer with implementations for ESP32(S3) [Internal ADC](doc/Internal%20ADC.md), ADS1x15 and
+  INA226/INA228
+* Async ADC sampling for low latency control loop (<900µs in-out latency)
+* Automatic zero-current calibration
 * Unit tests, on-board [performance profiler](https://github.com/LiluSoft/esp32-semihosting-profiler/), latency
   profiler and latency watchdog
 
@@ -94,7 +92,7 @@ idf.py flash
 
 ## Board Configuration
 
-The firmware reads IO pin mappings, sensor and system (I2C, WiFi, etc.) configuration values from configuration files on
+The firmware reads IO pin mappings, sensor and board (I2C, WiFi, etc.) configuration values from configuration files on
 a data partition.
 This enables easy OTA updates of the firmware across various hardware configurations. And you can easily alter the
 configuration by flashing a new `littlefs` image or by editing the files over FTP. Some crucial parameters are still
@@ -102,7 +100,7 @@ hard-coded, making them configurable is WIP.
 
 You find existing board configuration in the folder [`config/`](config/):
 
-* `fmetal`: [Fugu2 board](https://github.com/fl4p/Fugu2)
+* `fmetal`: [Fugu2 board](https://github.com/fl4p/Fugu2), the "standard" configuration
 * `fugu1/fugu1`: original fugu design with ADS1015 ADC
 * `fugu1/fugu_int_adc`: original fugu design but using the [internal ADC](doc/Internal%20ADC.md)
 * `psu_12v`: example for a 12V power supply using Forced PWM

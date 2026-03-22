@@ -10,17 +10,11 @@
           </envs>
         </ADDITIONAL_GENERATION_ENVIRONMENT>
       </configuration>
-      <configuration PROFILE_NAME="idf5.1-esp32" ENABLED="false" TOOLCHAIN_NAME="esp-idf-v5.1" NO_GENERATOR="true">
+      <configuration PROFILE_NAME="idf5.5-esp32" ENABLED="true" TOOLCHAIN_NAME="esp-idf-v5.5" NO_GENERATOR="true">
         <ADDITIONAL_GENERATION_ENVIRONMENT>
           <envs>
             <env name="IDF_TARGET" value="esp32" />
-          </envs>
-        </ADDITIONAL_GENERATION_ENVIRONMENT>
-      </configuration>
-      <configuration PROFILE_NAME="idf5.1-esp32s3" ENABLED="false" TOOLCHAIN_NAME="esp-idf-v5.1" NO_GENERATOR="true">
-        <ADDITIONAL_GENERATION_ENVIRONMENT>
-          <envs>
-            <env name="IDF_TARGET" value="esp32s3" />
+            <env name="IDF_COMPONENT_MANAGER" value="1" />
           </envs>
         </ADDITIONAL_GENERATION_ENVIRONMENT>
       </configuration>

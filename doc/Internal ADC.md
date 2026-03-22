@@ -108,3 +108,11 @@ looks like esp32 is the only one with 2Msps
 
 * Waveshare ESP32-S3 Mini (ESP32-S3-Zero) does have no floating pin noise
 * ESP32-S3-WROOM DevBoard has peak noise level of 100~120
+
+
+```
+//#define ADC1_SR 400000 // sampling rate (105k max, see https://www.esp32.com/viewtopic.php?t=1215)
+// 50k, 64k, 80k, 100k, 125k, 128k, 156.25k, 160k, 200k, 250k, 312.5k, 320k, 400k, 500k, 625k, 640k, 800k
+// https://www.wolframalpha.com/input?i=factor+%5B%2F%2Fmath%3A80000000%2F%2F%5D
+//#define ADC1_AVG 64 // num averaging samples, max 256
+```

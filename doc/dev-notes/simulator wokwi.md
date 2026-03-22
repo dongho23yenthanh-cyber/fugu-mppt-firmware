@@ -1,4 +1,17 @@
 
+# Wokwi Simulator
+* configuruation in `diagram.json` and `wokwi.toml`
+* start it from vsstudio code https://docs.wokwi.com/vscode/debugging#start-the-debugger
+
+
+diagram.json:
+```
+ "parts": [ { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": 0, "left": 0, "attrs": {} } ],
+ /*esp32*/: { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": -4.76, "attrs": {} },
+ 
+```
+
+
 https://docs.wokwi.com/guides/esp32-wifi#the-private-gateway
 
 https://docs.wokwi.com/vscode/project-config

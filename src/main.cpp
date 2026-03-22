@@ -832,7 +832,7 @@ void loopNetwork_task(void *arg) {
     }
 
 
-    if ((wallClockUs() - lastTimeOutUs) >= (mppt.converter.disabled() ? (lfPeriod * 6) : lfPeriod) or !lastTimeOutUs) {
+    if ((wallClockUs() - lastTimeOutUs) >= (mppt.converter.disabled() ? (lfPeriod * 8) : lfPeriod) or !lastTimeOutUs) {
         loopLF(wallClockUs());
         float pow = mppt.sensorPhysicalI->ewm.avg.get() * mppt.sensorPhysicalU->ewm.avg.get();
         //if (mppt.converter.disabled()) pow = 0;

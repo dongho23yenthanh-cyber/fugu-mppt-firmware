@@ -17,7 +17,7 @@ dependencies.lock
 
 sdkconfig.old
 
-sdkconfig
+sdkconfig.s3
 
 .DS_Store
 

@@ -1,9 +1,7 @@
 
 #include <INA226_WE.h>
 
-//#include "etc/pinconfig.h"
 #include "sampling.h"
-//#include "ina228.h"
 
 #include "i2c.h"
 #include "conf.h"
@@ -15,7 +13,7 @@ void ina226_alert();
 
 ADC_INA226 *ina226_instance = nullptr;
 
-int console_read_usb(char *buf, size_t len); //debug
+int console_read_usb(char *buf, size_t len); //debug console
 
 class ADC_INA226 : public AsyncADC<float> {
     INA226_WE ina226;

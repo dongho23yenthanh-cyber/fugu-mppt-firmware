@@ -1,51 +1,36 @@
-#include "adc.h"
-//#include <driver/adc.h>
-//#include <esp_adc_cal.h>
+#pragma once
+
 #include <stdexcept>
-
-#include "etc/pinconfig.h"
-#include "math/statmath.h"
-#include "etc/rt.h"
-
 #include <cstring>
 #include <cstdio>
-
-#include "sdkconfig.h"
-#include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/semphr.h"
 
 #include <esp_adc/adc_continuous.h>
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
+#include "esp_log.h"
 
+#include "adc.h"
+#include "math/statmath.h"
+#include "etc/rt.h"
 #include "util.h"
+#include "sdkconfig.h"
 
-
-// TODO decrease READ_LEN and do ADC reading from another dedicated loop with even higher priority
-// than the "big" control loop and a fast shutdown path
-
-// higher values inc latency, driver will always return this read len
-// for abg=32, 2ch, 4bytes/sample:
 
 #define ADC1_READ_LEN 128
 
+#define ADC_ATTEN_NA ((adc_atten_t)-1)
 
 class ADC_ESP32_Cont : public AsyncADC<float> {
-
-public:
-    //adc1_channel_t readingChannel = adc1_channel_t::ADC1_CHANNEL_MAX;
 private:
-    adc_cali_handle_t adc_chars[4]{nullptr, nullptr, nullptr, nullptr};
-    adc_atten_t attenuation[adc_channel_t::ADC_CHANNEL_9 + 1] = {(adc_atten_t)-1};
+    adc_cali_handle_t calByAtten[4]{nullptr, nullptr, nullptr, nullptr};
+    adc_atten_t attenByCh[adc_channel_t::ADC_CHANNEL_9 + 1] = {ADC_ATTEN_NA};
 
     TaskNotification notification;
     adc_continuous_handle_t handle = nullptr;
     uint8_t result[ADC1_READ_LEN] = {0};
 
 
-    uint32_t sr = 0; // sampling rate
+    uint32_t sr = 0; // sampling rate of driver
     uint16_t avgNum = 0;
     uint8_t ntcCh = 255;
 
@@ -53,6 +38,7 @@ private:
         uint32_t agg: 22; // 22bit can store 1024 accumulated 12-bit values
         uint32_t num: 10; // 2**10 = 1024
     };
+
     static_assert(sizeof(ChAvgBuf) <= 4);
 
     ChAvgBuf avgBuf[adc_channel_t::ADC_CHANNEL_9 + 1]{};
@@ -66,8 +52,8 @@ public:
     }
 
     bool init(const ConfFile &boardConf) override {
-        for (auto &at: attenuation)
-            at = (adc_atten_t) -1;
+        for (auto &at: attenByCh)
+            at = ADC_ATTEN_NA;
 
         memset(avgBuf, 0, sizeof(avgBuf));
 
@@ -78,10 +64,10 @@ public:
         int chNum = 0;
         bool hasNtc = false;
         for (auto ch = 0; ch <= adc_channel_t::ADC_CHANNEL_9; ++ch) {
-            if (attenuation[ch] != (adc_atten_t) -1) ++chNum;
+            if (attenByCh[ch] != ADC_ATTEN_NA) ++chNum;
             if (ch == ntcCh) hasNtc = true;
         }
-        assert_throw(chNum > 0,"");
+        assert_throw(chNum > 0, "");
 
         // pattern length:
         chNum = 2 * chNum;
@@ -124,14 +110,14 @@ public:
         auto suggestVolt = 0.81f * maxVolt; /*12dB=max */
         if (voltage > maxVolt) {
             throw std::range_error(
-                    "ch" + std::to_string(ch) + ": expected voltage too high: " + std::to_string(voltage)
-                    + " > " + std::to_string(maxVolt));
+                "ch" + std::to_string(ch) + ": expected voltage too high: " + std::to_string(voltage)
+                + " > " + std::to_string(maxVolt));
         }
 
         if (voltage > suggestVolt) {
             ESP_LOGW("esp32_adc", "%s",
                      ("ch" + std::to_string(ch) + ": expected voltage too high: " + std::to_string(voltage)
-                      + " > " + std::to_string(suggestVolt) + " (suggested)").c_str());
+                         + " > " + std::to_string(suggestVolt) + " (suggested)").c_str());
         }
 
         if (voltage > 1.6f) atten = ADC_ATTEN_DB_12;
@@ -146,16 +132,26 @@ public:
 
         assert_throw(handle == nullptr, "adc already started");
 
-        attenuation[ch] = atten;
+        attenByCh[ch] = atten;
 
-        if (adc_chars[atten] == nullptr) {
+        if (calByAtten[atten] == nullptr) {
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
             adc_cali_curve_fitting_config_t conf{
-                    .unit_id = ADC_UNIT_1,
-                    .chan = ADC_CHANNEL_0,
-                    .atten = atten,
-                    .bitwidth = ADC_BITWIDTH_12,
+                .unit_id = ADC_UNIT_1,
+                .chan = ADC_CHANNEL_0,
+                .atten = atten,
+                .bitwidth = ADC_BITWIDTH_12,
             };
-            ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&conf, &adc_chars[atten]));
+            ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&conf, &calByAtten[atten]));
+#else
+            adc_cali_line_fitting_config_t cali_config = {
+                .unit_id = ADC_UNIT_1,
+                .atten = atten,
+                .bitwidth = ADC_BITWIDTH_DEFAULT,
+                .default_vref = 0,
+            };
+            ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config, & calByAtten[atten]));
+#endif
             //esp_adc_cal_characterize(ADC_UNIT_1, atten, ADC_WIDTH_BIT_12, 1100, adc_chars[atten]);
         }
     }

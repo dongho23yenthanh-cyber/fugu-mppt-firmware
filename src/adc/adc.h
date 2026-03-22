@@ -1,15 +1,11 @@
 #pragma once
 
-//#include <cstdlib>
-
-//#include <driver/adc.h>
-//#include <esp_adc_cal.h>
 #include "store.h" // ConfFile
 
 enum class SampleReadScheme : uint8_t {
     cycle = 0, // cycle around channels
     any, // using callback
-    all,
+    all, // ina226: on alert, read *all* channels
 };
 
 template<class T>

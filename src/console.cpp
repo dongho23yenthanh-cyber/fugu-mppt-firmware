@@ -2,9 +2,9 @@
 #include <Arduino.h>
 
 #include <esp_pm.h>
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG || CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG
 #include <hal/usb_serial_jtag_ll.h>
-#include <sprofiler.h>
-#include "version.h"
+#endif
 #include "util.h"
 
 #include <esp_private/usb_console.h>

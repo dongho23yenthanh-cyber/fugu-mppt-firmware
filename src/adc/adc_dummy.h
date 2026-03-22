@@ -1,6 +1,5 @@
 #include <vector>
 #include "adc.h"
-#include "math/statmath.h"
 
 /**
  * Fake ADC for unit testing

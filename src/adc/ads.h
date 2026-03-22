@@ -4,7 +4,6 @@
 #include <Adafruit_ADS1X15.h>
 #include "adc.h"
 #include "util.h"
-#include "etc/pinconfig.h"
 #include "etc/rt.h"
 #include "tele/scope.h"
 
@@ -46,12 +45,8 @@ public:
 
     /*
     uint32_t read(SampleCallback &&newSampleCallback) override {
-
         //newSampleCallback
-
         newSampleCallback(readingChannel, getSample());
-
-
     } */
 
     bool init(const ConfFile &boardConf) override {

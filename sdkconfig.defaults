@@ -53,6 +53,11 @@ CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y # insecure
 ### perf
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 
+# nano printf: smaller libc_a-vfprintf/svfprintf (~30 KB)
+# trade-off: %f/%g precision capped, %lld unsupported
+CONFIG_LIBC_NEWLIB_NANO_FORMAT=y
+CONFIG_NEWLIB_NANO_FORMAT=y
+
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASH_MODE_AUTO_DETECT=n
 

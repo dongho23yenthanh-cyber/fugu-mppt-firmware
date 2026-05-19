@@ -12,7 +12,7 @@ fi
 echo "BOARD=$BOARD"
 
 if [[ ! -d "$FOLDER/$BOARD" ]] || [[ "" == "$BOARD" ]]; then
-  echo "invalid board, choose from"
+  echo "invalid board '$BOARD', choose from"
   ls $FOLDER/
   exit 1
 fi
@@ -21,5 +21,7 @@ fi
 # check pins.conf/mcu == current target chip
 
 littlefs-python create $FOLDER/"$BOARD" $FOLDER/"$BOARD".bin -v --fs-size=0x20000 --name-max=64 --block-size=4096
- littlefs-python  list $FOLDER/"$BOARD".bin --block-size=4096
+littlefs-python  list $FOLDER/"$BOARD".bin --block-size=4096
+
+echo " parttool.py"
 parttool.py --port $ESPPORT write_partition --partition-name littlefs --input $FOLDER/"$BOARD".bin

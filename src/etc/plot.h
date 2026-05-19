@@ -9,8 +9,6 @@
 #endif
 
 #include <algorithm>
-#include <iomanip>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -100,14 +98,7 @@ struct Plot {
 
         decltype(series)().swap(series); // clear() & shrink_to_fit
 
-        std::stringbuf buffer;
-        std::ostream os(&buffer);
-        os << "  P|" << label << "     " << std::setprecision(3) << minX << " .. " << maxX << "\n\n\n";
-        //UART_LOG_ASYNC(buffer.str().c_str());
-        UART_LOG(buffer.str().c_str());
-
-        //UART_LOG(sc.c_str());
-        //UART_LOG("%.1fV .. %.1fV", minX, maxX);
+        UART_LOG("  P|%s     %.3g .. %.3g\n\n\n", label.c_str(), minX, maxX);
 #endif
     }
 

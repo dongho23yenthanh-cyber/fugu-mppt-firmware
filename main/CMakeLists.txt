@@ -2,7 +2,9 @@
 if ($ENV{RUN_TESTS})
     set(MAIN_SRC "../test/main.cpp"
             "../test/test_meter.cpp"
-            ../test/test_sampler.cpp
+            "../test/test_sampler.cpp"
+            "../test/test_math.cpp"
+            "../test/test_charger.cpp"
     )
 elseif ($ENV{MAIN_SRC})
     set(MAIN_SRC $ENV{MAIN_SRC})

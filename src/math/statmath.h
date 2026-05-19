@@ -361,6 +361,15 @@ public:
         lastX = x;
     }
 
+    // Zero the accumulator and drop the prior sample. The next add() is treated
+    // as a "first sample" — the dt-since-last gap is intentionally discarded
+    // (the existing dt >= maxDt check on lastTime==0 handles it).
+    void reset() {
+        lastTime = 0;
+        lastX = 0;
+        value = 0;
+    }
+
     void restore(D v) {
         assert(value == 0);
         if (isfinite(v))

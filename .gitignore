@@ -52,7 +52,7 @@ wifi.conf
 etc/__pycache__/
 
 
-etc/dl/
+etc/config-tool/dl/
 /config/dl/
 
 test/host-stub/*-test

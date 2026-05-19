@@ -144,18 +144,42 @@ int main() {
             31.16,
     };
 
-    auto a = series[0.0];
+    auto a = series[0];
+
 
     ascii::Asciichart asciichart(std::vector<std::vector<float>>{series});
     auto screen = asciichart.height(18).type(ascii::Asciichart::LINE).Plot();
 
-    /*for(auto row = 0; row < screen.n0; ++row) {
+
+
+
+/*    std::vector<std::vector<ascii::Text> > screen{}; {
+        ascii::Asciichart asciichart(std::vector<std::vector<float> >{series});
+        decltype(series)().swap(series); // clear() & shrink_to_fit
+        screen = asciichart.height(16).Plot();
+    }
+
+    for (auto &line: screen) {
+        std::stringstream ss;
+
+        for (auto &item: line) {
+            ss << item;
+        }
+        ss << ascii::Decoration::From(ascii::Decoration::RESET);
+        ss << "\r\n";
+
+        std::cout << ss.str();
+    }
+    */
+    /*
+    for(auto row = 0; row < screen.n0; ++row) {
         std::stringstream ss;
         for(auto col = 0; col < screen.n1; ++col) {
             std::cout << screen[row][col];
         }
         std::cout  << ascii::Decoration::From(ascii::Decoration::RESET) << "\n";
-    }*/
+    }
+    */
 
 
     for (auto &line: screen) {

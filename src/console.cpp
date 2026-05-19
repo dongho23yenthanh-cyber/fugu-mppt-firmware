@@ -23,6 +23,8 @@ QueueHandle_t uart_queue;
 
 bool handleCommand(const String &inp);
 
+static constexpr auto uartPortNum = UART_NUM_0;
+
 
 void loopConsole(int read(char *buf, size_t len), int write(const char *buf, size_t len), unsigned long nowMs) {
     constexpr uint8_t bufSiz = 128;
@@ -57,17 +59,15 @@ void loopConsole(int read(char *buf, size_t len), int write(const char *buf, siz
 }
 
 int uartRead(char *buf, size_t len) {
-    const uart_port_t uart_num = UART_NUM_0; // Arduino Serial is on port 0
     int length = 0;
-    ESP_ERROR_CHECK(uart_get_buffered_data_len(uart_num, (size_t *) &length));
+    ESP_ERROR_CHECK(uart_get_buffered_data_len(uartPortNum, (size_t *) &length));
     if (length == 0) return 0;
-    length = uart_read_bytes(uart_num, buf, len, 0);
+    length = uart_read_bytes(uartPortNum, buf, len, 10);
     return length;
 }
 
 int uartWrite(const char *buf, size_t len) {
-    const uart_port_t uart_num = UART_NUM_0; // Arduino Serial is on port 0
-    return uart_write_bytes(uart_num, buf, len);
+    return uart_write_bytes(uartPortNum, buf, len);
 }
 
 int console_read_usb(char *buf, size_t len) {
@@ -100,8 +100,8 @@ void loopUart(unsigned long nowMs) {
 }
 
 
-void uartInit(int port_num_) {
-    uart_port_t port_num = (uart_port_t)port_num_;
+void uartInit() {
+    uart_port_t port_num = uartPortNum;
 
     uart_config_t uart_config = {
             .baud_rate = 115200,

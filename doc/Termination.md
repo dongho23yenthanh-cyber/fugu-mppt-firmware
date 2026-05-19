@@ -1,3 +1,6 @@
+*this document is an LLM generated placeholder*
+
+
 # Charge Termination
 
 `Li_ChgTerminationCondition` in `src/charger.h` implements a charge-termination

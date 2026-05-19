@@ -103,3 +103,5 @@ In-firmware debug: `rtcount(label)` macros (`src/etc/rt.h`) accumulate per-secti
 - `sdkconfig` is untracked and not in `.gitignore` — it drifts. If the build fails with `Failed to create littlefs image for partition 'littlefs'`, the partition-table choice has flipped from `CUSTOM` to `TWO_OTA` (joltwallet then looks up `littlefs` in ESP-IDF's built-in `partitions_two_ota.csv` and finds nothing). Fix by setting in `sdkconfig`: `CONFIG_PARTITION_TABLE_CUSTOM=y`, `CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"`, and `# CONFIG_PARTITION_TABLE_TWO_OTA is not set`. The values in `sdkconfig.defaults` are correct — only the regenerated `sdkconfig` drifts.
 - if you want to `git revert` but there are local dirty files, do a `git stash` before and `git stash pop` after
 - whenever I ask you to create a markdown or other documentation file, put `*this document is an LLM generated placeholder*` in the first line
+- no `#include <>` hints
+- when describing a function, interface or class, describe it with a local scope, not how it is used in the application

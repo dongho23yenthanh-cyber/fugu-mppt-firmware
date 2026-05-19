@@ -98,7 +98,7 @@ public:
         _v_term = p.cv_min;
     }
 
-    bool update(const volatile float &vcell_high, const float &ibat, float ahSinceFull) {
+    bool update(float vcell_high, float ibat, float ahSinceFull) {
         // Termination line: at ibat = tail_c_rate * Cbat the cell sits at cv_eoc; at ibat = 0 it sits at cv_min.
         // r models the apparent cell resistance implied by that line (for 280Ah / 0.05 → ~20mΩ).
         // See doc/Termination.md.
@@ -116,7 +116,7 @@ public:
     }
 
 private:
-    [[nodiscard]] bool shouldRelease(const volatile float &vcell_high, float ahSinceFull) const {
+    [[nodiscard]] bool shouldRelease(float vcell_high, float ahSinceFull) const {
         // in case sth is wrong with our coulomb counter we release based on voltage
         constexpr float RECHARGE_VFLOOR_BAND = 0.05f;
         if (vcell_high < p.cv_min - RECHARGE_VFLOOR_BAND) return true;

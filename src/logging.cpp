@@ -213,7 +213,8 @@ int vprintf_mux(const char *fmt, va_list argptr) {
 
 
 int vprintf_(const char *fmt, va_list argptr) {
-    if (xPortGetCoreID() == 1 && deferLogs) {
+    // xPortCanYield() returns true in critical sections and ISR (where print is not allowed)
+    if ((xPortGetCoreID() == 1 && deferLogs) || !xPortCanYield()) {
         // RT core1: defer all log to core0
         return enqueue_log(fmt, 200, argptr);
     } else {

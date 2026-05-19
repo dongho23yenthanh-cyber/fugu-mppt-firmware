@@ -123,11 +123,15 @@ private:
 
 template <typename Sink>
 void Asciichart::Plot(Sink &&sink) {
-    // 1. min/max over all series
+    // 1. min/max over all series. NaN samples are treated as gaps: they
+    //    don't contribute to bounds and don't count toward totalPoints, so
+    //    an all-NaN input returns early instead of dragging infinite bounds
+    //    through (int) conversions below.
     float mn = min_, mx = max_;
     size_t totalPoints = 0;
     for (size_t s = 0; s < seriesCount(); ++s) {
         for (float v : seriesAt(s)) {
+            if (std::isnan(v)) continue;
             if (v < mn) mn = v;
             if (v > mx) mx = v;
             ++totalPoints;
@@ -187,16 +191,21 @@ void Asciichart::Plot(Sink &&sink) {
             uint8_t col = (uint8_t)(CO_SERIES_BASE + (s % kSeriesColorCount));
 
             // First-sample marker at the axis column.
-            int firstY = (int)std::lround(trace[0] * ratio) - min2;
-            if (rows - firstY == r) {
-                rowGlyph[offsetCols - 1] = GL_CENTER;
-                rowColor[offsetCols - 1] = col;
+            if (!std::isnan(trace[0])) {
+                int firstY = (int)std::lround(trace[0] * ratio) - min2;
+                if (rows - firstY == r) {
+                    rowGlyph[offsetCols - 1] = GL_CENTER;
+                    rowColor[offsetCols - 1] = col;
+                }
             }
 
-            // Segment glyphs at column i+offset.
+            // Segment glyphs at column i+offset. NaN endpoints break the
+            // line — the cell is left empty so the gap is visible.
             for (size_t i = 0; i + 1 < trace.size(); ++i) {
-                int y0 = (int)std::lround(trace[i]     * ratio) - min2;
-                int y1 = (int)std::lround(trace[i + 1] * ratio) - min2;
+                float v0 = trace[i], v1 = trace[i + 1];
+                if (std::isnan(v0) || std::isnan(v1)) continue;
+                int y0 = (int)std::lround(v0 * ratio) - min2;
+                int y1 = (int)std::lround(v1 * ratio) - min2;
                 int sy0 = rows - y0;
                 int sy1 = rows - y1;
                 int dataCol = (int)i + offsetCols;

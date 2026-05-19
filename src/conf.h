@@ -1,7 +1,10 @@
 #pragma once
 
 
-#include <fstream>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
+#include <unistd.h>
 #include<unordered_map>
 #include <numeric>
 #include <functional>
@@ -31,34 +34,35 @@ class ConfFile {
     const char *path;
 public:
     explicit ConfFile(const char *path, bool no_warn_if_not_open = false) : path(path) {
-        std::ifstream file(path);
-        if (file.is_open()) {
-            std::string line;
-            while (std::getline(file, line)) {
-                auto ic = line.find_first_of('#');
-                if (ic != std::string::npos)
-                    line = line.substr(0, ic);
-                line = trim(line);
-                if (line.length() == 0)
-                    continue;
-                auto ie = line.find_first_of('=');
-                if (ie == std::string::npos) {
-                    ESP_LOGE(TAG, "error reading %s: '=' not found in line '%s'", path, line.c_str());
-                    throw std::runtime_error("error reading line: " + line);
-                }
-                auto k = trim(line.substr(0, ie));
-                if (_map.find(k) != _map.end()) {
-                    ESP_LOGW(TAG, "duplicate key %s in file '%s'", k.c_str(), path);
-                    //assert(false);
-                }
-                _map[k] = trim(line.substr(ie + 1));
-            }
-            file.close();
-        } else {
+        FILE *f = fopen(path, "r");
+        if (!f) {
             if (!no_warn_if_not_open) {
                 ESP_LOGW(TAG, "cannot read ConfFile %s", path);
             }
+            return;
         }
+        char buf[256];
+        while (fgets(buf, sizeof(buf), f)) {
+            std::string line(buf);
+            auto ic = line.find_first_of('#');
+            if (ic != std::string::npos)
+                line = line.substr(0, ic);
+            line = trim(line);
+            if (line.length() == 0)
+                continue;
+            auto ie = line.find_first_of('=');
+            if (ie == std::string::npos) {
+                ESP_LOGE(TAG, "error reading %s: '=' not found in line '%s'", path, line.c_str());
+                fclose(f);
+                throw std::runtime_error("error reading line: " + line);
+            }
+            auto k = trim(line.substr(0, ie));
+            if (_map.find(k) != _map.end()) {
+                ESP_LOGW(TAG, "duplicate key %s in file '%s'", k.c_str(), path);
+            }
+            _map[k] = trim(line.substr(ie + 1));
+        }
+        fclose(f);
     }
 
 

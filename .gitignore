@@ -60,3 +60,7 @@ test/host-stub/*-test
 *.log
 
 doc/dev-notes/tmp
+
+etc/plotest
+
+.cache/

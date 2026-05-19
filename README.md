@@ -3,8 +3,9 @@
 This is a complete re-write of the
 original [AngeloCasi/FUGU-ARDUINO-MPPT-FIRMWARE](https://github.com/AngeloCasi/FUGU-ARDUINO-MPPT-FIRMWARE) .
 It is compatible with
-the [original hardware design](https://www.instructables.com/DIY-1kW-MPPT-Solar-Charge-Controller/) you can find on
-Instructables.
+the [original hardware design](https://www.instructables.com/DIY-1kW-MPPT-Solar-Charge-Controller/) you can find on Instructables.
+I discourage using this design, as it has poor noise performance among other issues.
+and recommend my improved design [Fugu2](https://github.com/fl4p/Fugu2).
 
 The charger implements proper charge termination for Lithium-Batteries (e.g. LiFePo4, NCA, NCM, Sodium-Ion) as described in [this article](https://nordkyndesign.com/charging-marine-lithium-battery-banks).
 
@@ -54,7 +55,7 @@ Feel free to use parts of the code.
 
 1. Build and flash the firmware
 2. Flash the configuration (provisioning)
-3. Calibrate the ADC (optional, important for proper diode emulation to increase efficiency)
+3. Calibrate the ADC (optional, ensures proper diode emulation to increase efficiency)
 
 You can build with ESP-IDF toolchain using Arduino as a component.
 

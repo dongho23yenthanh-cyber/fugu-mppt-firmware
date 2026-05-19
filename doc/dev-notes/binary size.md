@@ -8,9 +8,6 @@ Notes on what's been done and what's still on the table to shrink the firmware i
 - **Drop `<fstream>` from `src/conf.h`** — `std::ifstream` + `std::getline` pulled in `locale_init.o` and the entire
   classic-locale facet table for both `char` and `wchar_t` (`wlocale-inst.o`, `locale-inst.o`, `cxx11-*`). Replaced with
   `fopen`/`fgets`. Saved ~166 KB.
-- **`CONFIG_LIBC_NEWLIB_NANO_FORMAT=y`** — replaced full newlib printf (~45 KB across `vfprintf`/`svfprintf`/
-  `vfiprintf`/`svfiprintf`) with nano variants (~7.6 KB). Saved ~46 KB. Caveat: `%lld`/`%llu` not supported; `%f`/`%g`
-  precision capped at ~9 sig figs.
 - **Drop `<sstream>` / `std::stringbuf` everywhere** — required to link at all on xtensa-esp-elf 14.2 (
   `undefined reference to 'basic_stringbuf_nop'`). See CLAUDE.md.
 
@@ -28,22 +25,35 @@ Notes on what's been done and what's still on the table to shrink the firmware i
    `CONFIG_LWIP_IPV6=n`. `nd6.c.obj` 9 KB + `ip6.c.obj` 3.7 KB + dual-stack code paths in `sockets.c`/`tcp_in.c`. No
    `AF_INET6` / `in6_` in source. Risk: only if LAN actually serves v6 records for `homeassistant.local` mDNS.
 
+### Requires source audit first
+
+3. **`CONFIG_LIBC_NEWLIB_NANO_FORMAT=y`** — `~46 KB`.
+   Replaces full newlib printf (~45 KB across `vfprintf`/`svfprintf`/`vfiprintf`/`svfiprintf`) with nano variants
+   (~7.6 KB). Tried once (commit `3c9fb60`, reverted in `d51a62c`): crashed in `wait_for_wifi()` because nano-printf
+   silently mis-parses the `%hh` and `%ll` length modifiers and walks the va_args off the rails — `ESP_LOGI("tele",
+   "... RSSI %hhi IP %s", WiFi.RSSI(), ip.c_str())` read the sign-extended RSSI as the `%s` pointer
+   (`0xffffffd4`) → `LoadProhibited` in `memchr`. Before retrying, audit every format string in `src/` for `%hh*`,
+   `%ll*`, `%j*`, `%z*`, `%t*` and replace with plain `%d`/`%u`/`%x` (everything gets varargs-promoted to `int`
+   anyway). Known offenders: `telemetry.cpp`, `metering.h`, `util.cpp`, `i2c.h`, `ina226.h`, `ads.h`, `cooling.h`,
+   `charger.h`, `viz/led.h`, `viz/lcd.cpp`, `adc/sampling.h`, `adc/mock.h`. Also drops `%f`/`%g` precision past
+   ~9 sig figs.
+
 ### Medium-confidence
 
-3. **Drop `<sstream>`/`<iomanip>` includes in arduino-esp32 BLE code** — only matters if BLE is actually compiled in.
+4. **Drop `<sstream>`/`<iomanip>` includes in arduino-esp32 BLE code** — only matters if BLE is actually compiled in.
    Check first.
 
-4. **`CONFIG_COMPILER_OPTIMIZATION_ASSERTION_LEVEL=0`** — `~5–15 KB`.
+5. **`CONFIG_COMPILER_OPTIMIZATION_ASSERTION_LEVEL=0`** — `~5–15 KB`.
    Currently full assertions (`__FILE__/__LINE__` strings in flash). Silent assertions strip them. Trade-off: crashes
    become opaque.
 
-5. **Make sprofiler build-time optional** — `~10 KB`.
+6. **Make sprofiler build-time optional** — `~10 KB`.
    `src/main.cpp:306` runtime-gates `sprofiler_initialize` on `pprof.conf::sprofiler_hz`, but the implementation (
    `libesp32-semihosting-profiler.a`, 10 KB) is always linked. Wrap behind `#ifdef SPROFILER_ENABLE` (CLAUDE.md notes
    it's only useful with OpenOCD attached).
 
 ### High-risk
 
-6. **`CONFIG_COMPILER_OPTIMIZATION_SIZE=y`** (`-Os` instead of `-O2`) — `~100–150 KB`.
+7. **`CONFIG_COMPILER_OPTIMIZATION_SIZE=y`** (`-Os` instead of `-O2`) — `~100–150 KB`.
    Don't do this without measuring `rtcount` numbers before/after — `loopRT` is pinned to core 1, no `vTaskDelay`,
    ADC-sample-to-PWM latency is critical.

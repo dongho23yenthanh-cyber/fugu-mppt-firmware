@@ -1,325 +1,261 @@
 #ifndef INCLUDE_ASCII_ASCII_H_
 #define INCLUDE_ASCII_ASCII_H_
 
+// Low-memory ASCII line chart renderer.
+//
+// The chart is drawn one row at a time into a small per-row buffer of
+// (glyph_index, color_index) pairs and emitted to a sink callback as a single
+// string with embedded ANSI escapes. Nothing else is allocated per cell, and
+// the caller's series data is referenced — never copied.
+//
+// For a chart of R rows and C columns peak working set is roughly:
+//   2 * C  bytes  (row scratch)
+// + ~3 * C bytes  (one line of UTF-8 + ANSI escapes)
+// versus the previous std::vector<std::vector<Text>> design which held
+// ~sizeof(Text) (≈96 B) per cell.
+
+#include <algorithm>
 #include <cmath>
-#include <codecvt>
-#include <iomanip>
-#include <map>
-#include <sstream>
+#include <cstdint>
+#include <cstdio>
+#include <limits>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
-#include "color.h"
-#include "constants.h"
-#include "text.h"
-
 namespace ascii {
+
 class Asciichart {
 public:
-  enum Type {
-    LINE = 0, // line
-    CIRCLE    // circle
-  };
+    enum Type : uint8_t { LINE = 0, CIRCLE = 1 };
 
-public:
-  explicit Asciichart(const std::vector<float> &series)
-      : type_(LINE), height_(kDoubleNotANumber), min_(kDoubleInfinity),
-        max_(kDoubleNegInfinity), offset_(3), legend_padding_(10),
-        basic_width_of_label_(0), show_legend_(false) {
-    InitSeries(series);
-    InitStyles();
-    InitSymbols();
-  }
+    explicit Asciichart(const std::vector<float> &series)
+        : single_(&series) {}
 
-  explicit Asciichart(const std::vector<std::vector<float>> &series)
-      : type_(LINE), height_(kDoubleNotANumber), min_(kDoubleInfinity),
-        max_(kDoubleNegInfinity), offset_(3), legend_padding_(10),
-        basic_width_of_label_(0), show_legend_(false) {
-    InitSeries(series);
-    InitStyles();
-    InitSymbols();
-  }
+    explicit Asciichart(const std::vector<std::vector<float>> &series)
+        : multi_(&series) {}
 
-  // For associating a text label with each series
-  explicit Asciichart(
-      const std::unordered_map<std::string, std::vector<float>> &series)
-      : type_(LINE), height_(kDoubleNotANumber), min_(kDoubleInfinity),
-        max_(kDoubleNegInfinity), offset_(3), legend_padding_(10),
-        basic_width_of_label_(0), show_legend_(false) {
-    InitSeries(series);
-    InitStyles();
-    InitSymbols();
-  }
+    // Series data is referenced, not copied — binding to a temporary would
+    // dangle. Force the caller to keep ownership.
+    Asciichart(std::vector<float> &&) = delete;
+    Asciichart(std::vector<std::vector<float>> &&) = delete;
 
-  /// Set type of chart.
-  Asciichart &type(Type type) {
-    type_ = type;
-    return *this;
-  }
+    Asciichart &type(Type t)    { type_ = t;   return *this; }
+    Asciichart &height(float h) { height_ = h; return *this; }
+    Asciichart &min(float v)    { min_ = v;    return *this; }
+    Asciichart &max(float v)    { max_ = v;    return *this; }
+    Asciichart &offset(int v)   { offset_ = v; return *this; }
 
-  /// Set height of chart.
-  Asciichart &height(float height) {
-    height_ = height;
-    return *this;
-  }
-
-  /// Set colors of chart.
-  Asciichart &styles(const std::vector<Style> &styles) {
-    styles_ = styles;
-    return *this;
-  }
-
-  /// Set min of chart.
-  /// This value will be override if larger than true min value.
-  Asciichart &min(float min) {
-    min_ = min;
-    return *this;
-  }
-
-  /// Set max of chart.
-  /// This value will be override if less than true max value.
-  Asciichart &max(float max) {
-    max_ = max;
-    return *this;
-  }
-
-  /// Set offset of label from axis.
-  Asciichart &offset(size_t offset) {
-    offset_ = offset;
-    return *this;
-  }
-
-  /// Set padding between legend and label.
-  Asciichart &legend_padding(size_t padding) {
-    legend_padding_ = padding;
-    return *this;
-  }
-
-  /// If show legend.
-  Asciichart &show_legend(bool show) {
-    show_legend_ = show;
-    return *this;
-  }
-
-  /// Set symbols used to plot.
-  Asciichart &symbols(const std::map<std::string, std::string> &symbols) {
-    symbols_ = symbols;
-    return *this;
-  }
-
-  /// Generate this chart.
-  std::vector<std::vector<Text>> Plot() {
-      return PlotLineChart();
-  }
+    /// Render the chart. `sink` is called once per row with the fully
+    /// composed line (ANSI-styled, terminated with the SGR reset escape).
+    /// No newline is appended — the caller adds "\n" / "\r\n".
+    template <typename Sink>
+    void Plot(Sink &&sink);
 
 private:
-  std::map<std::string, std::string> symbols_;
-  std::unordered_map<std::string, std::vector<float>> series_;
-  std::vector<Style> styles_;
-
-  Type type_;
-  float height_;
-  float min_;
-  float max_;
-  float offset_;
-  size_t legend_padding_;
-  size_t basic_width_of_label_;
-
-  bool show_legend_;
-
-  void InitSeries(const std::vector<float> &series) {
-    series_["series 0"] = series;
-  }
-
-  void InitSeries(const std::vector<std::vector<float>> &series) {
-    unsigned n = 0;
-    for (const auto &s : series) {
-      series_["series " + std::to_string(n++)] = s;
-    }
-  }
-
-  void InitSeries(
-      const std::unordered_map<std::string, std::vector<float>> &series) {
-    series_ = series;
-  }
-
-  void InitStyles() {
-    styles_ = {
-        Style().fg(Foreground::From(Color::RED)),
-        Style().fg(Foreground::From(Color::CYAN)),
-        Style().fg(Foreground::From(Color::MAGENTA)),
-        Style().fg(Foreground::From(Color::YELLOW)),
-        Style().fg(Foreground::From(Color::WHITE)),
-        Style().fg(Foreground::From(Color::BRIGHT_WHITE)),
+    enum Glyph : uint8_t {
+        GL_EMPTY = 0,
+        GL_CENTER,    // ┼
+        GL_AXIS,      // ┤
+        GL_PARALLEL,  // ─
+        GL_DOWN,      // ╰
+        GL_UP,        // ╭
+        GL_LDOWN,     // ╮
+        GL_LUP,       // ╯
+        GL_VERTICAL,  // │
     };
-  }
 
-  void InitSymbols() {
-    switch (type_) {
-    case LINE:
-      symbols_ = {{"empty", " "}, {"center", "┼"},  {"axis", "┤"},
-                  {"c1", "╶"},    {"c2", "╴"},      {"parellel", "─"},
-                  {"down", "╰"},  {"up", "╭"},      {"ldown", "╮"},
-                  {"lup", "╯"},   {"vertical", "│"}};
-    case CIRCLE:
-      break;
-    default:
-      break;
-    }
-  }
+    enum ColorIdx : uint8_t {
+        CO_NONE = 0,  // unstyled cell (space)
+        CO_BLUE,      // axis labels
+        CO_CYAN,      // axis
+        // series colors cycle from here:
+        CO_SERIES_BASE,
+        CO_RED = CO_SERIES_BASE,
+        CO_MAGENTA,
+        CO_YELLOW,
+        CO_WHITE,
+        CO_BRIGHT_WHITE,
+        CO_SERIES_END,
+    };
+    static constexpr uint8_t kSeriesColorCount = CO_SERIES_END - CO_SERIES_BASE;
 
-  /// Writes each character of a string into its respective cell in the
-  /// `screen` array, starting from the upper left, `row` and `col`.
-  void PutString(std::vector<std::vector<Text>> &screen, const std::string &str,
-                 const Style &style, unsigned row, unsigned col) {
-    for (unsigned i = 0; i < str.length(); i++) {
-      if (str[i] == '\n') {
-        row += 1;
-      } else {
-        screen[row][col + i] = Text(str.substr(i, 1), style);
-      }
-    }
-  }
-
-  std::string FormatLabel(int x) {
-    std::stringstream ss;
-    ss << std::setw(show_legend_ ? legend_padding_ + basic_width_of_label_
-                                 : basic_width_of_label_)
-       << std::setfill(' ') << std::setprecision(2);
-    ss << x;
-    return ss.str();
-  }
-
-  std::string Print(const std::vector<std::vector<Text>> &screen) {
-    std::stringstream os;
-    for (auto &line : screen) {
-      for (auto &item : line) {
-        os << item;
-      }
-      os << "\n";
-    }
-    return os.str();
-  }
-
-    std::vector<std::vector<Text> > PlotLineChart() {
-    // 1. calculate min and max
-    for (auto &label_trace_pair : series_) {
-      for (auto &item : label_trace_pair.second) {
-        min_ = std::min(item, min_);
-        max_ = std::max(item, max_);
-      }
+    static const char *glyphStr(uint8_t g) {
+        switch (g) {
+            case GL_CENTER:   return "\xe2\x94\xbc"; // ┼
+            case GL_AXIS:     return "\xe2\x94\xa4"; // ┤
+            case GL_PARALLEL: return "\xe2\x94\x80"; // ─
+            case GL_DOWN:     return "\xe2\x95\xb0"; // ╰
+            case GL_UP:       return "\xe2\x95\xad"; // ╭
+            case GL_LDOWN:    return "\xe2\x95\xae"; // ╮
+            case GL_LUP:      return "\xe2\x95\xaf"; // ╯
+            case GL_VERTICAL: return "\xe2\x94\x82"; // │
+            default:          return " ";
+        }
     }
 
-    // 2. calaculate range
-    auto range = max_ - min_;
+    static const char *colorEsc(uint8_t c) {
+        switch (c) {
+            case CO_BLUE:         return "\x1b[34m";
+            case CO_CYAN:         return "\x1b[36m";
+            case CO_RED:          return "\x1b[31m";
+            case CO_MAGENTA:      return "\x1b[35m";
+            case CO_YELLOW:       return "\x1b[33m";
+            case CO_WHITE:        return "\x1b[37m";
+            case CO_BRIGHT_WHITE: return "\x1b[97m";
+            default:              return "\x1b[39m";
+        }
+    }
+
+    size_t seriesCount() const { return single_ ? 1u : multi_->size(); }
+    const std::vector<float> &seriesAt(size_t i) const {
+        return single_ ? *single_ : (*multi_)[i];
+    }
+
+    const std::vector<float> *single_ = nullptr;
+    const std::vector<std::vector<float>> *multi_ = nullptr;
+
+    float height_ = std::numeric_limits<float>::quiet_NaN();
+    float min_ = std::numeric_limits<float>::infinity();
+    float max_ = -std::numeric_limits<float>::infinity();
+    int offset_ = 3;
+    Type type_ = LINE;
+};
+
+template <typename Sink>
+void Asciichart::Plot(Sink &&sink) {
+    // 1. min/max over all series
+    float mn = min_, mx = max_;
+    size_t totalPoints = 0;
+    for (size_t s = 0; s < seriesCount(); ++s) {
+        for (float v : seriesAt(s)) {
+            if (v < mn) mn = v;
+            if (v > mx) mx = v;
+            ++totalPoints;
+        }
+    }
+    if (totalPoints == 0) return; // nothing to render — avoid UB from infinite bounds
+
+    float range = mx - mn;
     if (range == 0) range = 1;
 
-    // make basic padding as size of str(max)
-    basic_width_of_label_ = std::max(std::to_string((int)max_).length(),
-                                     std::to_string((int)min_).length());
+    // 2. label width = max digit count of int(min), int(max)
+    char buf[24];
+    int wMin = std::snprintf(buf, sizeof(buf), "%d", (int)mn);
+    int wMax = std::snprintf(buf, sizeof(buf), "%d", (int)mx);
+    int labelW = wMin > wMax ? wMin : wMax;
 
-    // 3. width and height
-    int width = 0;
-    for (auto &label_trace_pair : series_) {
-      width = std::max(width, (int)label_trace_pair.second.size());
+    // 3. widest series determines data columns
+    int dataCols = 0;
+    for (size_t s = 0; s < seriesCount(); ++s) {
+        int n = (int)seriesAt(s).size();
+        if (n > dataCols) dataCols = n;
     }
 
-    int legend_cols = 0, legend_rows = 0;
-    if (show_legend_) {
-      // determine width and height of legend, add to offset.
-      for (auto &label_trace_pair : series_) {
-        legend_rows++;
-        legend_cols =
-            std::max(legend_cols, (int)label_trace_pair.first.length());
-      }
-    }
+    int offsetCols = offset_ < 1 ? 1 : offset_;
+    int cols = dataCols + offsetCols;
 
-    auto offset = offset_ + legend_cols;
+    float h = std::isnan(height_) ? range : height_;
+    float ratio = h / range;
 
-    width += offset;
-
-    if (std::isnan(height_)) {
-      height_ = range;
-    }
-
-    // extend the height of the plot if we need more rows to display the
-    // legend than what the range of the data requires.
-    height_ = std::max((float)legend_rows, height_);
-
-    // calculate ratio using height and range
-    auto ratio = height_ / range;
-
-    int min2 = std::round(min_ * ratio);
-    int max2 = std::round(max_ * ratio);
-
-    // 4. rows and cols of this chart
-    auto rows = max2 - min2;
-    auto cols = width;
-
+    int min2 = (int)std::lround(mn * ratio);
+    int max2 = (int)std::lround(mx * ratio);
+    int rows = max2 - min2;
     if (rows == 0) rows = 1;
 
-    // 5. initialize chart using empty str
-    //printf("sizeof(Text) = %u, total = %u\n", sizeof(Text), sizeof(Text)*(rows+1) * cols);
-    std::vector<std::vector<Text>> screen(
-        rows + 1, std::vector<Text>(cols, symbols_["empty"]));
+    // 4. per-row scratch buffers, reused for every row.
+    //    Each cell holds (glyph, color) as two bytes.
+    std::vector<uint8_t> rowGlyph(cols);
+    std::vector<uint8_t> rowColor(cols);
 
-    // 6. axis + labels
-    for (float y = min2; y <= max2; y++) {
-      auto label = FormatLabel(std::round(min_ + (y - min2) * range / rows));
-      // vertical reverse
-      screen[rows - (y - min2)][legend_cols] =
-          Text(label, Style().fg(Foreground::From(Color::BLUE)));
-      screen[rows - (y - min2)][offset - 1] =
-          Text((y == 0) ? symbols_["center"] : symbols_["axis"],
-               Style().fg(Foreground::From(Color::CYAN)));
-    }
+    std::string line;
+    line.reserve(cols * 4 + 32);
 
-    if (show_legend_) {
-      // 7. Legend
-      {
-        unsigned j = 0;
-        for (auto &label_trace_pair : series_) {
-          auto style = styles_[j % styles_.size()];
-          PutString(screen, label_trace_pair.first, style, j++, 0);
-        }
-      }
-    }
+    for (int r = 0; r <= rows; ++r) {
+        std::fill(rowGlyph.begin(), rowGlyph.end(), (uint8_t)GL_EMPTY);
+        std::fill(rowColor.begin(), rowColor.end(), (uint8_t)CO_NONE);
 
-    // 8. Content
-    {
-      unsigned j = 0;
-      for (auto &label_trace_pair : series_) {
-        auto &trace = label_trace_pair.second;
-        auto style = styles_[j++ % styles_.size()];
-        auto y0 = std::round(trace[0] * ratio) - min2;
-        // vertical reverse
-        screen[rows - y0][offset - 1] = Text(symbols_["center"], style);
+        // Axis at column offset-1: ┼ on the zero line, ┤ elsewhere.
+        int yIdx = rows - r;
+        int yAbs = yIdx + min2;
+        rowGlyph[offsetCols - 1] = (yAbs == 0) ? (uint8_t)GL_CENTER : (uint8_t)GL_AXIS;
+        rowColor[offsetCols - 1] = CO_CYAN;
 
-        for (size_t i = 0; i < trace.size() - 1; i++) {
-          auto y0 = std::round(trace[i] * ratio) - min2;
-          auto y1 = std::round(trace[i + 1] * ratio) - min2;
+        // Series content
+        for (size_t s = 0; s < seriesCount(); ++s) {
+            const auto &trace = seriesAt(s);
+            if (trace.empty()) continue;
+            uint8_t col = (uint8_t)(CO_SERIES_BASE + (s % kSeriesColorCount));
 
-          if (y0 == y1) {
-            screen[rows - y0][i + offset] = Text(symbols_["parellel"], style);
-          } else {
-            screen[rows - y1][i + offset] =
-                Text(y0 > y1 ? symbols_["down"] : symbols_["up"], style);
-            screen[rows - y0][i + offset] =
-                Text(y0 > y1 ? symbols_["ldown"] : symbols_["lup"], style);
-            auto from = std::min(y0, y1);
-            auto to = std::max(y0, y1);
-            for (size_t y = from + 1; y < to; y++) {
-              screen[rows - y][i + offset] = Text(symbols_["vertical"], style);
+            // First-sample marker at the axis column.
+            int firstY = (int)std::lround(trace[0] * ratio) - min2;
+            if (rows - firstY == r) {
+                rowGlyph[offsetCols - 1] = GL_CENTER;
+                rowColor[offsetCols - 1] = col;
             }
-          }
+
+            // Segment glyphs at column i+offset.
+            for (size_t i = 0; i + 1 < trace.size(); ++i) {
+                int y0 = (int)std::lround(trace[i]     * ratio) - min2;
+                int y1 = (int)std::lround(trace[i + 1] * ratio) - min2;
+                int sy0 = rows - y0;
+                int sy1 = rows - y1;
+                int dataCol = (int)i + offsetCols;
+                if (dataCol < 0 || dataCol >= cols) continue;
+
+                if (y0 == y1) {
+                    if (sy0 == r) {
+                        rowGlyph[dataCol] = GL_PARALLEL;
+                        rowColor[dataCol] = col;
+                    }
+                } else if (sy1 == r) {
+                    rowGlyph[dataCol] = (y0 > y1) ? GL_DOWN : GL_UP;
+                    rowColor[dataCol] = col;
+                } else if (sy0 == r) {
+                    rowGlyph[dataCol] = (y0 > y1) ? GL_LDOWN : GL_LUP;
+                    rowColor[dataCol] = col;
+                } else {
+                    int lo = sy0 < sy1 ? sy0 : sy1;
+                    int hi = sy0 > sy1 ? sy0 : sy1;
+                    if (r > lo && r < hi) {
+                        rowGlyph[dataCol] = GL_VERTICAL;
+                        rowColor[dataCol] = col;
+                    }
+                }
+            }
         }
-      }
+
+        // Compose the output line.
+        line.clear();
+
+        // Label (right-aligned to labelW), in blue.
+        int yLabelValue = (int)std::lround(mn + (float)yIdx * range / (float)rows);
+        std::snprintf(buf, sizeof(buf), "%*d", labelW, yLabelValue);
+        line.append(colorEsc(CO_BLUE));
+        line.append(buf);
+        uint8_t prevColor = CO_BLUE;
+
+        // Spaces between the label cell and the axis cell.
+        for (int i = 0; i < offsetCols - 2; ++i) line.push_back(' ');
+
+        // Axis + data cells.
+        for (int c = offsetCols - 1; c < cols; ++c) {
+            uint8_t g = rowGlyph[c];
+            if (g == GL_EMPTY) {
+                line.push_back(' ');
+            } else {
+                uint8_t col = rowColor[c];
+                if (col != prevColor) {
+                    line.append(colorEsc(col));
+                    prevColor = col;
+                }
+                line.append(glyphStr(g));
+            }
+        }
+        line.append("\x1b[0m");
+
+        sink(line);
     }
+}
 
-    return (screen);
-  }
-
-};
 } // namespace ascii
-#endif
+#endif // INCLUDE_ASCII_ASCII_H_

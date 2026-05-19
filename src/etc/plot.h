@@ -1,11 +1,19 @@
 #pragma once
 
-
-# define ASCII_PLOT_DISABLED 1
+#ifndef ASCII_PLOT_DISABLED
+#define ASCII_PLOT_DISABLED 0
+#endif
 
 #if !ASCII_PLOT_DISABLED
 #include "asciichart/ascii.h"
 #endif
+
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "logging.h"
 
@@ -52,8 +60,7 @@ struct Plot {
 
         std::vector<float> series;
 
-        int bins = 100; // 120 causes mem issue already, maybe reduce plot height
-        // nootice that sizeof(Text) = 96, so will alloc: alloc 19*123*96 = 224352
+        int bins = 100;
 
         auto minX = points.begin()->first, maxX = points.back().first;
         auto binW = (maxX - minX) / bins;
@@ -87,32 +94,11 @@ struct Plot {
 
         ser.clear();
 
-        std::vector<std::vector<ascii::Text> > screen{}; {
-            ascii::Asciichart asciichart(std::vector<std::vector<float> >{series});
-            decltype(series)().swap(series); // clear() & shrink_to_fit
-            screen = asciichart.height(16).Plot();
-        }
+        ascii::Asciichart(series).height(16).Plot([](const std::string &line) {
+            printf_mux("%s\r\n", line.c_str());
+        });
 
-        /* for(auto row = 0; row < screen.n0; ++row) {
-             std::stringstream ss;
-             for(auto col = 0; col < screen.n1; ++col) {
-                 ss << screen[row][col];
-             }
-             ss << ascii::Decoration::From(ascii::Decoration::RESET) << "\n";
-             UART_LOG(ss.str().c_str());
-         } */
-
-        for (auto &line: screen) {
-            std::stringstream ss;
-
-            for (auto &item: line) {
-                ss << item;
-            }
-            ss << ascii::Decoration::From(ascii::Decoration::RESET);
-            ss << "\r\n";
-
-            printf_mux(ss.str().c_str());
-        }
+        decltype(series)().swap(series); // clear() & shrink_to_fit
 
         std::stringbuf buffer;
         std::ostream os(&buffer);

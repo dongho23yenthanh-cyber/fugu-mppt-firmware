@@ -1,31 +1,39 @@
 #pragma once
 
+#include "freertos/FreeRTOS.h" // portMUX_TYPE (for the _pinMux below)
+
+#include "console.h"
+#include "etc/coulomb_counter.h"
+#include "etc/linear_glide.h"
+#include "etc/mean_accumulator_sync.h"
+#include "etc/portmux_guard.h"
 #include "tele/mqtt.h"
 #include "util.h"
-
-
-// [V] cell voltage when to start the CV-phase (absorption)
 
 struct BatChargerParams {
     float Vbat_max = NAN; // [V] max bat pack voltage = output voltage
     float Vbat_fallback = NAN; // [V] max bat pack voltage if bms data is n/a
     float Ibat_lim = NAN; // [A] Max bat charge current (Ibat = Iout - Iload)
-    float Cbat = NAN; // [C] Battery capacity
+    float Cbat = NAN; // [Ah] Effective pack capacity. For parallel packs use the summed Ah (e.g. 2P 280Ah → 560).
 
     float cv_min = NAN; // "float" where the termination line starts @Ibat=0 (LFP: 3.37V)
-    float cv_eoc = NAN; // termination line ending (LFP: 3.65V@Ibat=0.05C)
-
+    float cv_eoc = NAN; // termination line ending (LFP: 3.65V @ Ibat = tail_c_rate * Cbat)
+    float tail_c_rate = 0.05f; // [1/h] ratio of EOC tail current to capacity.
+    // ^ LFP: 0.05. NCR (Sanyo NCR18650GA, 67mA on 3500mAh): ~0.02. EVE INR18650: 0.033. Higher = safer (terminates later).
+    float recharge_dod = 0.20f; // DoD-since-EoC to release termination. LFP  ~0.20. See doc/Termination.md.
 
     void load(const ConfFile &chargerConf) {
-        Vbat_max = chargerConf.getFloat("vout_max", NAN);
+        Vbat_max = chargerConf.getFloat("vout_max", NAN, true);
         cv_eoc = chargerConf.getFloat("cv_eoc", 3.6f);
         cv_min = chargerConf.getFloat("cv_float", 3.37f);
         assert_throw(cv_eoc >= cv_min, "");
         float vout_fallback = floorf(Vbat_max / cv_eoc) * cv_min;
         Vbat_fallback = chargerConf.getFloat("vout_max_fallback", vout_fallback);
 
-        Ibat_lim = chargerConf.getFloat("ibat_max", 40.f); // note: iout = ibat + iload
-        Cbat = chargerConf.getFloat("bat_c", NAN);
+        Ibat_lim = chargerConf.getFloat("ibat_max", 20.f, true); // note: iout = ibat + iload
+        Cbat = chargerConf.getFloat("bat_c", NAN, true); // larger->"safer" value, doesn't overcharge small bats
+        tail_c_rate = chargerConf.getFloat("tail_c_rate", 0.05f);
+        recharge_dod = chargerConf.getFloat("recharge_dod", 0.20f);
     }
 };
 
@@ -36,8 +44,9 @@ struct BatteryState {
     volatile unsigned long vcell_high_t = 0; // timestamp of highest cell voltage
 
     EWMA<volatile float, float> vout_avg{60}; // time-averaged pack voltage
-    MeanAccumulator ibat_mean{}; // time-averaged battery current (from BMS)
-    MeanAccumulator iout_mean{}; // time-averaged out current (from this charger)
+    MeanAccumulatorSync ibat_mean{}; // time-averaged battery current (from BMS, MQTT thread → RT consumer)
+    MeanAccumulator iout_mean{}; // time-averaged out current (from this charger) TODO currently unused?
+    CoulombCounter coulombCounter{}; // Ah-since-last-full tracker, used for recharge hysteresis
 
     void setVcellHigh(const float &vcell_high_) {
         vcell_high = vcell_high_;
@@ -46,6 +55,11 @@ struct BatteryState {
 
     [[nodiscard]] bool haveValidCellVoltage() const {
         return vcell_high > 0 and wallClockUs() - vcell_high_t < (VCELL_EXPIRATION_TIME_SEC * 1000000);
+    }
+
+    void updateBatCurrent(const float &ibat) {
+        ibat_mean.add(ibat);
+        coulombCounter.updateBatCurrent(ibat);
     }
 
     void update(float vout, float iout) {
@@ -66,45 +80,72 @@ class Li_ChgTerminationCondition {
 
     const BatChargerParams &p;
     bool terminated = false;
+    float _v_term; // termination cell voltage; single writer (RT thread), atomic 32-bit float store/load
 
 public:
-    float v_term; // termination cell voltage
+    [[nodiscard]] float v_term() const { return _v_term; }
 
     explicit operator bool() const { return terminated; }
 
 
     explicit Li_ChgTerminationCondition(const BatChargerParams &params)
         : p(params),
-          v_term(params.cv_min) {
+          _v_term(params.cv_min) {
     }
 
-    bool update(const volatile float &vcell_high, const float &ibat) {
-        constexpr float k = 0.05f;
-        // k is the ratio of cut-off current and capacity at EOC voltage (LFP: 3.65V, NCR: 4.2V)
-        //  LFP:0.05
-        // NCR: 0.02? https://www.orbtronic.com/content/Datasheet-specs-Sanyo-Panasonic-NCR18650GA-3500mah.pdf 67mA
-        // EVE INR18650: k=0.033
-        // k: the higher, the safer, so for now just leave it at 0.05
-        float r = (p.cv_eoc - p.cv_min) / (k * p.Cbat); // some form of resistance (for 280Ah this is ~20mΩ)
+    void reset() {
+        terminated = false;
+        _v_term = p.cv_min;
+    }
+
+    bool update(const volatile float &vcell_high, const float &ibat, float ahSinceFull) {
+        // Termination line: at ibat = tail_c_rate * Cbat the cell sits at cv_eoc; at ibat = 0 it sits at cv_min.
+        // r models the apparent cell resistance implied by that line (for 280Ah / 0.05 → ~20mΩ).
+        // See doc/Termination.md.
+        float r = (p.cv_eoc - p.cv_min) / (p.tail_c_rate * p.Cbat);
         float vo = ibat * r;
-        v_term = fminf(p.cv_min + fmax(0, vo), p.cv_eoc); // dont go beyond cv_eoc to avoid BMS cut-offr
+        _v_term = fminf(p.cv_min + fmaxf(0.f, vo), p.cv_eoc); // don't go beyond cv_eoc to avoid BMS cut-off
         if (!terminated and ibat > 0 and vcell_high > p.cv_min + vo) {
             terminated = true;
-        } else if (terminated and vcell_high < p.cv_min) {
+        } else if (terminated and shouldRelease(vcell_high, ahSinceFull)) {
             terminated = false;
         }
-        ESP_LOGI("charger", "termination %hhu (iBat=%.2f, vcHigh=%.3f, vcTerm=%.3f, vcD=%.3f)", terminated, ibat,
-                 vcell_high, v_term, v_term - vcell_high
-
-                 // ", vhc*=%.3f", vcell_high - vo /* vhc* is the 'internal' cell voltage, I compensated */ useful?
-        );
+        ESP_LOGI("charger", "termination %hhu (iBat=%.2f, vcHigh=%.3f, vcTerm=%.3f, vcD=%.3f, ahSF=%.2f)",
+                 terminated, ibat, vcell_high, _v_term, _v_term - vcell_high, ahSinceFull);
         return terminated;
+    }
+
+private:
+    [[nodiscard]] bool shouldRelease(const volatile float &vcell_high, float ahSinceFull) const {
+        // in case sth is wrong with our coulomb counter we release based on voltage
+        constexpr float RECHARGE_VFLOOR_BAND = 0.05f;
+        if (vcell_high < p.cv_min - RECHARGE_VFLOOR_BAND) return true;
+        if (std::isfinite(p.Cbat) && p.recharge_dod > 0.f
+            && ahSinceFull > p.recharge_dod * p.Cbat)
+            return true;
+        return false;
     }
 };
 
 class BatteryCharger {
     float vpack_pin = NAN;
     float ioutLim = NAN;
+
+    // Smooths the OV-feedback pin against per-BMS-message noise. LFP's flat
+    // discharge curve means mV-level cell-voltage noise gets multiplied by
+    // OV_FEEDBACK_GAIN and would otherwise twitch the setpoint. Span chosen
+    // to filter a single outlier without adding more than a few BMS-cycles
+    // of latency.
+    EWMA_N<4> _vPinFilt{};
+
+    // 5 s linear glide of vpack_pin into Vbat_fallback when BMS data goes stale
+    // (avoids a ~1 V step on the converter setpoint).
+    LinearGlide _fallbackGlide{5'000'000};
+
+    // Serializes _updatePackVoltagePinning across the MQTT callback (line ~240)
+    // and the RT-side loopLF caller (via charger.update). Needed because the
+    // EWMA and glide-state mutations are read-modify-write, not atomic.
+    portMUX_TYPE _pinMux = portMUX_INITIALIZER_UNLOCKED;
 
 public:
     BatChargerParams params{};
@@ -116,73 +157,71 @@ public:
 
     void begin(const ConfFile &chargerConf) {
         params.load(chargerConf);
-        termCond.v_term = params.cv_min;
+        termCond.reset(); // propagate just-loaded cv_min into termCond's v_term (was NAN at ctor time)
     }
 
 
     void _updateTermination() {
         constexpr auto MEAN_NUM = 8;
 
-        // update termination and voltage regulation
-        if (batSt.ibat_mean.num >= MEAN_NUM and batSt.iout_mean.num >= MEAN_NUM) {
-            const float ibat = batSt.ibat_mean.pop(), iout = batSt.iout_mean.pop();
-            const float cv_float = (params.cv_min + params.cv_eoc) * .5f;
-            const bool rampOff = batSt.vcell_high >= cv_float;
+        // cheap gates first; ibat_mean is the cross-thread one so its
+        // gate+pop are folded into a single locked op via tryPop().
+        if (batSt.iout_mean.num < MEAN_NUM) return;
+        if (!batSt.haveValidCellVoltage()) return;
 
-            // only the highest cell triggers termination
-            if (termCond.update(batSt.vcell_high, ibat) or rampOff) {
-                // this branch is likely not very useful. once a cell reaches termination voltage
-                // we pin pack voltage so charger goes into CV mode. current will decrease, also decreasing termination
-                // voltage
-                /*
-                // ramp down current on voltage interval [(cv_min+cv_eoc)/2, cv_eoc] (s -> [1, 0])
-                auto s = min(max(0.f, (params.cv_eoc - batSt.vcell_high) / (params.cv_eoc - cv_float)), 1.f);
+        float ibat;
+        if (!batSt.ibat_mean.tryPop(MEAN_NUM, ibat)) return;
+        (void) batSt.iout_mean.pop(); // unused, still pop to keep the accumulator bounded
 
-                const float ioutLimTarget = fmax(
-                    .0f, termCond
-                             ? iout - ibat // we want ibat to be zero and only supply load current
-                             : params.Ibat_lim * s + (iout - ibat) * (1.f - s) // ramp-off
-                );
-
-                constexpr float alpha = .3; // fade-in the limit exponentially to stabilize in case of many chargers
-                ioutLim = iout * (1 - alpha) + ioutLimTarget * alpha;
-                ESP_LOGI("charger", "%s: iBat=%.2f iOut=%.2f iOutLim:=%.2f iOutLimTgt=%.2f s=%.2f iBatLim=%.2f",
-                         termCond ? "terminated" : "ramp-off", ibat, iout, ioutLim, ioutLimTarget, s,
-                         params.Ibat_lim);
-                         */
-                // no need to set current limit. once we reach termination voltage, we go into CV mode
-                // and current will fall off
-                ioutLim = NAN;
-            } else {
-                // unlimited
-                ioutLim = NAN;
-            }
+        bool wasTerm = bool(termCond);
+        termCond.update(batSt.vcell_high, ibat, batSt.coulombCounter.ahSinceFull());
+        if (!wasTerm && bool(termCond)) {
+            // Rising edge — pack is full, re-zero the coulomb counter so the
+            // recharge_dod hysteresis measures against this full point.
+            batSt.coulombCounter.markFull();
+            ESP_LOGI("charger", "Termination latched: ahSinceFull reset to 0");
         }
+        ioutLim = NAN;
     }
 
     void _updatePackVoltagePinning(float vbat = INFINITY) {
         // EOC voltage regulation "pack voltage pinning"
         // once a cell reaches termination voltage we capture pack voltage and set it as max output voltage
 
-        float v_eoc = fmin(params.cv_eoc, termCond.v_term);
+        PortMuxGuard _{_pinMux};
+
+        float v_eoc = fmin(params.cv_eoc, termCond.v_term());
         //  ^ v_eoc: we could go beyond cv_eoc if ibat is sufficiently high. however a "dumb" BMS will
         //  cut us off at max 3.65V (or whatever voltage it is configured to), possibly causing a voltage transient
         //  which we like to avoid. so never go beyond cv_eoc
 
-        bool vcell_valid = batSt.haveValidCellVoltage();
+        bool batDataOk = batSt.haveValidCellVoltage() and std::isfinite(params.Cbat);
 
-        if (vcell_valid and batSt.vcell_high >= v_eoc) {
+        if (batDataOk and batSt.vcell_high >= v_eoc) {
+            _fallbackGlide.reset();
             constexpr auto OV_FEEDBACK_GAIN = 2; // 4
-            // TODO run average filter on vPin (or vcell_high?)
-            float vPin = fmin(batSt.vout_avg.get(), vbat) - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN;
+            float vPin_raw = fmin(batSt.vout_avg.get(), vbat) - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN;
+            _vPinFilt.add(vPin_raw);
+            float vPin = _vPinFilt.get();
             if (isnan(vpack_pin) or vPin < vpack_pin - 0.01f)
-                ESP_LOGI("charger", "vpPin:=%.3fV (cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)", vPin, batSt.vcell_high,
-                     v_eoc, batSt.vout_avg.get());
+                ESP_LOGI("charger", "vpPin:=%.3fV (raw=%.3f cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)", vPin, vPin_raw,
+                     batSt.vcell_high, v_eoc, batSt.vout_avg.get());
             vpack_pin = vPin;
-        } else if (!vcell_valid && params.Vbat_fallback >= 0) {
-            ESP_LOGW("charger", "Cell Voltage n/a, fall back to VbatMax=%.3fV", params.Vbat_fallback);
-            vpack_pin = params.Vbat_fallback;
+        } else if (!batDataOk && params.Vbat_fallback >= 0) {
+            _vPinFilt.reset();
+            if (!_fallbackGlide.active()) {
+                // entering fallback — capture current pin as the glide origin
+                float from = std::isfinite(vpack_pin) ? vpack_pin : params.Vbat_fallback;
+                _fallbackGlide.start(from, params.Vbat_fallback, wallClockUs());
+                auto what = !batSt.haveValidCellVoltage() ? "Cell Voltage" : "Pack Capacity";
+                ESP_LOGW("charger", "%s n/a, gliding vpPin %.3fV -> %.3fV over %ums",
+                         what, from, params.Vbat_fallback,
+                         (unsigned)(_fallbackGlide.durationUs() / 1000));
+            }
+            vpack_pin = _fallbackGlide.value(wallClockUs());
         } else {
+            _vPinFilt.reset();
+            _fallbackGlide.reset();
             vpack_pin = params.Vbat_max;
         }
     }
@@ -198,7 +237,7 @@ public:
                 ESP_LOGD("charger",
                          "avg(vbat)=%.3fV cv_max(mqtt)=%.3fV cv_term=%.3fV vbat_lim=%.3fV vbat_max=%.3fV",
                          batSt.vout_avg.get(),
-                         batSt.vcell_high, termCond.v_term, Vout_max(), params.Vbat_max);
+                         batSt.vcell_high, termCond.v_term(), Vout_max(), params.Vbat_max);
                 _updatePackVoltagePinning();
             });
         }
@@ -206,58 +245,28 @@ public:
         topic = mqttConf.getString("ibat_topic", "");
         if (!topic.empty())
             MQTT.subscribeTopic(topic, [&](const char *dat, int len) {
-                batSt.ibat_mean.add(strntof(dat, len));
+                batSt.updateBatCurrent(strntof(dat, len));
             });
 
         topic = mqttConf.getString("ibat_lim_topic", "");
         if (!topic.empty())
             MQTT.subscribeTopic(topic, [&](const char *dat, int len) {
-                params.Ibat_lim = strntof(dat, len);
-                ESP_LOGI("charger", "Ibat_lim= %.3f A", params.Ibat_lim);
+                float v = strntof(dat, len);
+                if (!std::isfinite(v) || v < 0) {
+                    LOG_VALUE_IGNORED("charger", "Ibat_lim", len, dat);
+                    return;
+                }
+                auto prev = params.Ibat_lim;
+                params.Ibat_lim = v;
+                ESP_LOGI("charger", "Ibat_lim= %.3f A (was %.3f)", params.Ibat_lim, prev);
             });
     }
-
-    /*
-    float getToppingCurrent(float Vout) {
-        auto nowMs = millis();
-
-        // Topping-Mode reduces current with rising output-voltage
-        // https://www.toolfk.com/online-plotter-frame#W3sidHlwZSI6MCwiZXEiOiIyMC0oMjAtMikqbWluKDEsKHgtMjcpLygyOC0yNykpKiouNSIsImNvbG9yIjoiIzAwMDAwMCJ9LHsidHlwZSI6MTAwMCwid2luZG93IjpbIjI1IiwiMzAiLCIwIiwiMTAwIl19XQ--
-
-        float Iout_max = params.Iout_max;
-        if (Vout >= params.Vout_top()) {
-            if (!timeTopUntil)
-                ESP_LOGI("chg", "Begin topping mode Iout_max %.2f (start=%.2f V, release=%.2f V, Vbat_max=%.2f)", params.Iout_top,
-                         params.Vout_top(), params.Vout_top_release(), params.Vbat_max);
-            timeTopUntil = nowMs + 1000 * 60 * 5;
-        } else if (Vout <= params.Vout_top_release()) {
-            if (timeTopUntil) ESP_LOGI("chg", "End topping mode, Vout %.2f", Vout);
-            timeTopUntil = 0;
-        }
-
-        if (nowMs < timeTopUntil) {
-            auto v0 = params.Vout_top_release(), v1 = params.Vout_top();
-            auto i0 = params.Iout_max, i1 = params.Iout_top;
-            // ramp up topping current when we reach release voltage
-            if (Vout > v0)
-                Iout_max = std::min(Iout_max, i0 - (i0 - i1) * sqrtf(min((Vout - v0) / (v1 - v0), 1.f)));
-        }
-
-        return Iout_max;
-    }
-     */
-
 
     void update(float vout, float iout) {
         batSt.update(vout, iout);
         _updateTermination();
         _updatePackVoltagePinning();
     }
-
-    // TODO
-    //void reset() {
-    //    vpack_pin = NAN;
-    //}
 
     [[nodiscard]] float Vout_max() const {
         float v_max = params.Vbat_max;
@@ -271,13 +280,6 @@ public:
         // ibat != iout (generally)
 
         auto lim = params.Ibat_lim;
-
-        if (false) {
-            // float current regulation
-            const float cv_float = (params.cv_min + params.cv_eoc) * .5f;
-            auto s = min(max(0.f, (params.cv_eoc - batSt.vcell_high) / (params.cv_eoc - cv_float)), 1.f);
-            if (isfinite(s)) lim *= s;
-        }
 
         // termination mode limit (keep Ibat~0 and supply loads)
         if (isfinite(ioutLim)) lim = min(lim, ioutLim);

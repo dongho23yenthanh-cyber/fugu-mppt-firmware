@@ -19,7 +19,7 @@
 #include <SimpleFTPServer.h>
 #include <ESPTelnet.h>
 
-#include <../etc/readerwriterqueue.h>
+#include "../etc/readerwriterqueue.h"
 
 #include "scope.h"
 #include "../storage/key-value.h"

@@ -14,10 +14,13 @@
 #include <algorithm> // std::transform
 #include <esp_log.h>
 
+#include "console.h"
+
 
 #define TAG "conf"
 
-static std::string trim(const std::string &s) { // removes whitespace characters from beginnig and end of string s
+static std::string trim(const std::string &s) {
+    // removes whitespace characters from beginnig and end of string s
     const int l = (int) s.length();
     int a = 0, b = l - 1;
     char c;
@@ -29,9 +32,9 @@ static std::string trim(const std::string &s) { // removes whitespace characters
 }
 
 class ConfFile {
-
     std::unordered_map<std::string, std::string> _map;
     const char *path;
+
 public:
     explicit ConfFile(const char *path, bool no_warn_if_not_open = false) : path(path) {
         FILE *f = fopen(path, "r");
@@ -73,7 +76,7 @@ public:
             if (f == nullptr) {
                 ESP_LOGE("store", "Cannot write %s", path);
             }
-            assert (f != nullptr);
+            assert(f != nullptr);
         }
 
         //assert(!overwrite);
@@ -101,18 +104,18 @@ public:
         fclose(f);
 
 
-/*
-        std::ofstream file(path, std::ios_base::app);
-        if(!file.is_open()) file = std::ofstream (path, )
-        assert(file.is_open());
-        for (auto [key, val]: values) {
-            if (_map.find(key) != _map.end()) {
-                ESP_LOGE(TAG, "cannot add duplicate key %s", key.c_str());
-                assert(false);
-            }
-            file << std::endl << key << " = " << val;
-        }
-         */
+        /*
+                std::ofstream file(path, std::ios_base::app);
+                if(!file.is_open()) file = std::ofstream (path, )
+                assert(file.is_open());
+                for (auto [key, val]: values) {
+                    if (_map.find(key) != _map.end()) {
+                        ESP_LOGE(TAG, "cannot add duplicate key %s", key.c_str());
+                        assert(false);
+                    }
+                    file << std::endl << key << " = " << val;
+                }
+                 */
     }
 
     template<typename T>
@@ -194,8 +197,12 @@ public:
         return getX<long>(key, def, fn);
     }
 
-    float getFloat(const std::string &key, float def = std::numeric_limits<float>::max()) const {
-        return getX<float>(key, def, std::strtof);
+    float getFloat(const std::string &key, float def = std::numeric_limits<float>::max(),
+                   bool warnIfNan = false) const {
+        auto v = getX<float>(key, def, std::strtof);
+        if (warnIfNan and !std::isfinite(v))
+            LOG_VALUE_NOT_FINITE("conf", key.c_str(), path);
+        return v;
     }
 
     float f(const std::string &key, float def = std::numeric_limits<float>::max()) { return getFloat(key, def); }

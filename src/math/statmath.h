@@ -303,7 +303,11 @@ inline size_t pseudo_median_of_nine( const RandomAccessIterator &array, const qu
 
 
 
-#pragma pack(1)
+// Not packed: a packed layout would put the next field at offset 6, causing
+// any subsequent MeanAccumulator (or float member) in a containing struct to
+// be misaligned. On Xtensa this means unaligned-load traps / slow paths, and
+// it also breaks the single-instruction atomicity of float load/store that
+// cross-thread readers rely on (e.g. BatteryState::ibat_mean).
 struct MeanAccumulator {
     // TODO trapezoidal sum?
     float sum;
@@ -335,7 +339,6 @@ struct MeanAccumulator {
 
     MeanAccumulator() { clear(); }
 };
-#pragma pack()
 
 template<typename F=float, typename T=unsigned long, typename D=double>
 class TrapezoidalIntegrator {

@@ -92,6 +92,7 @@ struct Plot {
 
         ser.clear();
 
+        printf_mux("\r\n");
         ascii::Asciichart(series).height(16).Plot([](const std::string &line) {
             printf_mux("%s\r\n", line.c_str());
         });

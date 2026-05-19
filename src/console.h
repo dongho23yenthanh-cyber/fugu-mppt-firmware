@@ -37,3 +37,11 @@ static void consoleInit() {
 #endif
 
 }
+
+inline void LOG_VALUE_IGNORED(const char * tag, const char *name, size_t len, const char *str) {
+    ESP_LOGW(tag, "%s ignored, invalid value '%.*s'",  name, len, str);
+}
+
+inline void LOG_VALUE_NOT_FINITE(const char * tag, const char *name, const char *group) {
+    ESP_LOGW(tag, "%s in %s is not finite",  name, group);
+}

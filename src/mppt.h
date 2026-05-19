@@ -89,9 +89,9 @@ struct MpptParams : public BatChargerParams {
 enum class MpptControlMode : uint8_t {
     None = 0,
     CV,
-    CC,
+    CC, // = 2
     CP,
-    MPPT,
+    MPPT, // 4
     Sweep,
     Max,
 };

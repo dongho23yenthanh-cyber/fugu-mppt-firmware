@@ -20,7 +20,7 @@ extern QueueHandle_t uart_queue;
 
 
 
-static void consoleInit() {
+inline void consoleInit() {
     Serial.begin(115200);
     //ESP_ERROR_CHECK(esp_usb_console_init()); // using JTAG
 
@@ -49,3 +49,4 @@ inline void LOG_VALUE_IGNORED(const char * tag, const char *name, size_t len, co
 inline void LOG_VALUE_NOT_FINITE(const char * tag, const char *name, const char *group) {
     ESP_LOGW(tag, "%s in %s is not finite",  name, group);
 }
+

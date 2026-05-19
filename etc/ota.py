@@ -6,14 +6,14 @@ fallback_hosts = [
 
 """
 
-1. build
-2. start web server to server firmware binary
+1. build (idf.py build)
+2. start web server to serve firmware binary
+    python3 -m http.server 9000
 3. discover hosts
 4 iterate hosts
     > ota http://192.168.1.161:9000/build/fugu-firmware.bin 
 
 idf.py build
-#  python3 -m http.server 9000
 
 """""
 import asyncio

@@ -64,3 +64,4 @@ doc/dev-notes/tmp
 etc/plotest
 
 .cache/
+etc/config-tool/__pycache__/

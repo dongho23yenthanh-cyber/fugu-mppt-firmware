@@ -1,12 +1,9 @@
 #pragma once
 
-#include "freertos/FreeRTOS.h" // portMUX_TYPE (for the _pinMux below)
-
 #include "console.h"
 #include "etc/coulomb_counter.h"
 #include "etc/linear_glide.h"
 #include "etc/mean_accumulator_sync.h"
-#include "etc/portmux_guard.h"
 #include "tele/mqtt.h"
 #include "util.h"
 
@@ -142,11 +139,6 @@ class BatteryCharger {
     // (avoids a ~1 V step on the converter setpoint).
     LinearGlide _fallbackGlide{5'000'000};
 
-    // Serializes _updatePackVoltagePinning across the MQTT callback (line ~240)
-    // and the RT-side loopLF caller (via charger.update). Needed because the
-    // EWMA and glide-state mutations are read-modify-write, not atomic.
-    portMUX_TYPE _pinMux = portMUX_INITIALIZER_UNLOCKED;
-
 public:
     BatChargerParams params{};
     Li_ChgTerminationCondition termCond{params};
@@ -188,8 +180,6 @@ public:
         // EOC voltage regulation "pack voltage pinning"
         // once a cell reaches termination voltage we capture pack voltage and set it as max output voltage
 
-        PortMuxGuard _{_pinMux};
-
         float v_eoc = fmin(params.cv_eoc, termCond.v_term());
         //  ^ v_eoc: we could go beyond cv_eoc if ibat is sufficiently high. however a "dumb" BMS will
         //  cut us off at max 3.65V (or whatever voltage it is configured to), possibly causing a voltage transient
@@ -204,8 +194,8 @@ public:
             _vPinFilt.add(vPin_raw);
             float vPin = _vPinFilt.get();
             if (isnan(vpack_pin) or vPin < vpack_pin - 0.01f)
-                ESP_LOGI("charger", "vpPin:=%.3fV (raw=%.3f cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)", vPin, vPin_raw,
-                     batSt.vcell_high, v_eoc, batSt.vout_avg.get());
+                ESP_LOGI("charger", "vpPin:=%.3fV (raw=%.3f cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)",
+                         vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
             vpack_pin = vPin;
         } else if (!batDataOk && params.Vbat_fallback >= 0) {
             _vPinFilt.reset();
@@ -238,7 +228,6 @@ public:
                          "avg(vbat)=%.3fV cv_max(mqtt)=%.3fV cv_term=%.3fV vbat_lim=%.3fV vbat_max=%.3fV",
                          batSt.vout_avg.get(),
                          batSt.vcell_high, termCond.v_term(), Vout_max(), params.Vbat_max);
-                _updatePackVoltagePinning();
             });
         }
 

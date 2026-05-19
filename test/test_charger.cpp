@@ -220,6 +220,11 @@ void test_mqtt_vcell_message_updates_state() {
     TEST_ASSERT_TRUE(charger.batSt.haveValidCellVoltage());
 }
 
+// Test/main.cpp owns this variable in the test build. The MQTT-driven ibat path
+// uses wallClockUs() (which reads loopWallClockUs_) for integration timestamps,
+// so we must advance it ourselves — nothing else does during tests.
+extern unsigned long loopWallClockUs_;
+
 void test_mqtt_ibat_message_drives_coulomb_counter() {
     BatteryCharger charger;
     charger.params = makeLfpParams();
@@ -229,10 +234,13 @@ void test_mqtt_ibat_message_drives_coulomb_counter() {
     }};
     charger.beginMqtt(mqttConf);
 
-    // Two discharge samples spaced by a real ~20ms wall-clock gap. Exact accumulation
-    // depends on the real clock; we only verify that some discharge accumulated.
+    // Two discharge samples spaced by a real ~20ms wall-clock gap. We advance
+    // loopWallClockUs_ ourselves before each delivery so the integrator sees
+    // a non-zero dt.
+    loopWallClockUs_ = micros();
     MQTT._invokeForTest("test/ibat", "-5", 2);
     delay(20);
+    loopWallClockUs_ = micros();
     MQTT._invokeForTest("test/ibat", "-5", 2);
 
     TEST_ASSERT_TRUE(charger.batSt.coulombCounter.ahSinceFull() > 0.0f);

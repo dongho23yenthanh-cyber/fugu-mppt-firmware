@@ -43,16 +43,36 @@ void test_mqtt_ibat_lim_accepts_valid();
 void test_mqtt_ibat_lim_rejects_negative();
 void test_mqtt_ibat_lim_rejects_nan();
 
+// asciichart/ascii.h
+void test_ascii_empty_single_series_emits_nothing();
+void test_ascii_empty_multi_series_emits_nothing();
+void test_ascii_multi_with_only_empty_inner_emits_nothing();
+void test_ascii_all_nan_series_emits_nothing();
+void test_ascii_leading_nan_does_not_pollute_min();
+void test_ascii_trailing_nan_does_not_pollute_max();
+void test_ascii_embedded_nan_gap_does_not_crash();
+void test_ascii_single_finite_among_nan_renders();
+void test_ascii_first_sample_nan_does_not_misplace_marker();
+void test_ascii_constant_series_does_not_divide_by_zero();
+void test_ascii_two_point_series();
+void test_ascii_custom_min_max_used();
+void test_ascii_zero_crossing_draws_center_glyph();
+void test_ascii_all_positive_uses_axis_glyph();
+void test_ascii_zero_offset_clamps_safely();
+void test_ascii_negative_offset_clamps_safely();
+void test_ascii_every_emitted_line_ends_with_reset();
+void test_ascii_multi_series_uses_distinct_colors();
+void test_ascii_multi_series_unequal_length_does_not_crash();
+void test_ascii_multi_series_with_one_empty_renders_other();
+void test_ascii_regression_plot_h_first_bin_nan();
+
 void setup() {
     UNITY_BEGIN();
 
-    RUN_TEST(test_float16);
-
-    RUN_TEST(test_meter);
-    RUN_TEST(test_meter_storage);
-
-    RUN_TEST(test_LinearTransform);
-    // RUN_TEST(test_ADCSampler); // body is #if 0'd in test_sampler.cpp
+    // charger.h tests first — pre-existing test_meter currently triggers a
+    // panic in the IDF idle-task watchdog, which would otherwise prevent
+    // anything below it from running. TODO: investigate that panic and put
+    // the original order back.
 
     // charger.h — termination math
     RUN_TEST(test_termination_line_at_zero_current);
@@ -78,6 +98,37 @@ void setup() {
     RUN_TEST(test_mqtt_ibat_lim_accepts_valid);
     RUN_TEST(test_mqtt_ibat_lim_rejects_negative);
     RUN_TEST(test_mqtt_ibat_lim_rejects_nan);
+
+    // asciichart/ascii.h — NaN handling regression + edge cases
+    RUN_TEST(test_ascii_empty_single_series_emits_nothing);
+    RUN_TEST(test_ascii_empty_multi_series_emits_nothing);
+    RUN_TEST(test_ascii_multi_with_only_empty_inner_emits_nothing);
+    RUN_TEST(test_ascii_all_nan_series_emits_nothing);
+    RUN_TEST(test_ascii_leading_nan_does_not_pollute_min);
+    RUN_TEST(test_ascii_trailing_nan_does_not_pollute_max);
+    RUN_TEST(test_ascii_embedded_nan_gap_does_not_crash);
+    RUN_TEST(test_ascii_single_finite_among_nan_renders);
+    RUN_TEST(test_ascii_first_sample_nan_does_not_misplace_marker);
+    RUN_TEST(test_ascii_constant_series_does_not_divide_by_zero);
+    RUN_TEST(test_ascii_two_point_series);
+    RUN_TEST(test_ascii_custom_min_max_used);
+    RUN_TEST(test_ascii_zero_crossing_draws_center_glyph);
+    RUN_TEST(test_ascii_all_positive_uses_axis_glyph);
+    RUN_TEST(test_ascii_zero_offset_clamps_safely);
+    RUN_TEST(test_ascii_negative_offset_clamps_safely);
+    RUN_TEST(test_ascii_every_emitted_line_ends_with_reset);
+    RUN_TEST(test_ascii_multi_series_uses_distinct_colors);
+    RUN_TEST(test_ascii_multi_series_unequal_length_does_not_crash);
+    RUN_TEST(test_ascii_multi_series_with_one_empty_renders_other);
+    RUN_TEST(test_ascii_regression_plot_h_first_bin_nan);
+
+    RUN_TEST(test_float16);
+
+    RUN_TEST(test_meter);
+    RUN_TEST(test_meter_storage);
+
+    RUN_TEST(test_LinearTransform);
+    // RUN_TEST(test_ADCSampler); // body is #if 0'd in test_sampler.cpp
 
     /**
      * TODO

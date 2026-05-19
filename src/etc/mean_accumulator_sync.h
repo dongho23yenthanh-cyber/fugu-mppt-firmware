@@ -1,6 +1,7 @@
 #pragma once
 
 #include "freertos/FreeRTOS.h" // portMUX_TYPE
+#include "portmux_guard.h"
 
 #include <cassert>
 #include <cstdint>
@@ -20,18 +21,16 @@ private:
 
 public:
     void add(float x) {
-        portENTER_CRITICAL(&mux);
+        PortMuxGuard _{mux};
         assert(num < std::numeric_limits<decltype(num)>::max());
         sum += x;
         ++num;
-        portEXIT_CRITICAL(&mux);
     }
 
     void clear() {
-        portENTER_CRITICAL(&mux);
+        PortMuxGuard _{mux};
         sum = 0.f;
         num = 0;
-        portEXIT_CRITICAL(&mux);
     }
 
     // Atomic check-and-pop: if at least `minSamples` are accumulated, write
@@ -39,14 +38,11 @@ public:
     // unchanged and return false. Folding the gate into the pop avoids the
     // check/pop race the plain MeanAccumulator has across threads.
     bool tryPop(uint16_t minSamples, float &out) {
-        portENTER_CRITICAL(&mux);
-        bool ready = num >= minSamples;
-        if (ready) {
-            out = sum / num;
-            sum = 0.f;
-            num = 0;
-        }
-        portEXIT_CRITICAL(&mux);
-        return ready;
+        PortMuxGuard _{mux};
+        if (num < minSamples) return false;
+        out = sum / num;
+        sum = 0.f;
+        num = 0;
+        return true;
     }
 };

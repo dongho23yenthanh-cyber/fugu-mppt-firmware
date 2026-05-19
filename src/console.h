@@ -1,5 +1,9 @@
 #pragma once
 
+#include <Arduino.h>          // Serial (used by consoleInit below)
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>   // QueueHandle_t
+
 void uartInit(int port_num);
 
 int console_write_usb(const char *buf, unsigned int len);

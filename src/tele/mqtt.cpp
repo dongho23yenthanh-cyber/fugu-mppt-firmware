@@ -155,6 +155,12 @@ void MqttService::close() {
     }
 }
 
+void MqttService::_invokeForTest(const std::string &topic, const char *data, int len) {
+    auto h = mqttMsgHandlers.find(topic);
+    assert(h != mqttMsgHandlers.end());
+    h->second(data, len);
+}
+
 MqttService MQTT;
 
 

@@ -28,6 +28,11 @@ public:
     void close();
 
     void _handleEvent(esp_event_base_t base, int32_t event_id, void *event_data);
+
+    // Test-only: deliver a synthetic message to the registered handler for `topic`,
+    // bypassing the esp_mqtt event loop. Used by test/test_charger.cpp. Asserts the
+    // topic has been subscribed.
+    void _invokeForTest(const std::string &topic, const char *data, int len);
 };
 
 extern MqttService MQTT;

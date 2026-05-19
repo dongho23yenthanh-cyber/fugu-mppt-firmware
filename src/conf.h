@@ -10,6 +10,7 @@
 #include <functional>
 #include <vector>
 #include <limits>
+#include <cmath> // std::isfinite (getFloat warnIfNan branch)
 #include <cstring>
 #include <algorithm> // std::transform
 #include <esp_log.h>
@@ -36,6 +37,9 @@ class ConfFile {
     const char *path;
 
 public:
+    // In-memory ConfFile, primarily for tests. Skips the file read.
+    explicit ConfFile(std::unordered_map<std::string, std::string> map) : _map(std::move(map)), path("<in-mem>") {}
+
     explicit ConfFile(const char *path, bool no_warn_if_not_open = false) : path(path) {
         FILE *f = fopen(path, "r");
         if (!f) {

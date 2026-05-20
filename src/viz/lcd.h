@@ -20,7 +20,9 @@ class LCD {
 
     unsigned long lastInit = 0;
 public:
-    bool init();
+    // configuredAddr (if nonzero) is probed first; init falls back to the standard PCF8574 backpack
+    // addresses {0x27, 0x3F} when it's zero or doesn't ACK on the bus.
+    bool init(uint8_t configuredAddr = 0);
     void periodicInit();
 
     void displayMessage(const std::string &msg, uint16_t timeoutMs);

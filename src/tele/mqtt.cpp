@@ -8,9 +8,9 @@
 
 #define TAG "mqtt"
 
-void mqttLogCallback(const char *str, uint16_t len);
+static void mqttLogCallback(const char *str, uint16_t len);
 
-void log_error_if_nonzero(const char *message, int error_code) {
+static void log_error_if_nonzero(const char *message, int error_code) {
     if (error_code != 0) {
         ESP_LOGE(TAG, "Last error %s: 0x%x", message, error_code);
     }
@@ -26,7 +26,7 @@ void MqttService::subscribeTopic(const std::string &topic, MqttMsgCallback fn) {
     }
 }
 
-void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
+static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     auto svc = (MqttService *) handler_args;
     svc->_handleEvent(base, event_id, event_data);
 }
@@ -56,7 +56,7 @@ void MqttService::_handleEvent(esp_event_base_t base, int32_t event_id, void *ev
 
         case MQTT_EVENT_DISCONNECTED:
             mqttConnected = false;
-            addLogCallback(nullptr);
+            removeLogCallback(mqttLogCallback);
             ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
             break;
 
@@ -99,7 +99,7 @@ void MqttService::_handleEvent(esp_event_base_t base, int32_t event_id, void *ev
     }
 }
 
-void mqttLogCallback(const char *str, uint16_t len) {
+static void mqttLogCallback(const char *str, uint16_t len) {
     static char *topic = nullptr;
     if (!MQTT.isConnected()) return;
     if (strnstr(str, ") mqtt:", len) != nullptr) return; // don't publish mqtt messages
@@ -153,6 +153,21 @@ void MqttService::close() {
         esp_mqtt_client_unregister_event(client, MQTT_EVENT_ANY, mqtt_event_handler);
         esp_mqtt_client_destroy(client);
     }
+}
+
+bool MqttService::onStart() {
+    ConfFile conf{_confPath, /*no_warn_if_not_open*/ true};
+    if (!conf) {
+        ESP_LOGI(TAG, "no mqtt.conf - mqtt idle");
+        return true; // nothing configured: idle is OK, not Failed
+    }
+    if (preStart) preStart(conf); // charger BMS subscriptions + onConnected (wired by main.cpp)
+    init(conf);                   // connection is async; client task runs on its own
+    return true;
+}
+
+void MqttService::onStop() {
+    close();
 }
 
 void MqttService::_invokeForTest(const std::string &topic, const char *data, int len) {

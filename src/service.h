@@ -1,0 +1,204 @@
+#pragma once
+
+// A small service architecture (systemd-lite). A Service wraps one building block (MQTT, FTP,
+// telnet, telemetry, LCD, scope, ...) and exposes start()/stop()/reload() plus a status
+// (Running/Stopped/Failed). Each service has its own ESP_LOG tag (== name()) and a runtime
+// log level, and an optional periodic tick() driven from the network loop (core 0).
+// Per-service state (enabled flag + log level) persists in the service's own conf file.
+
+#include <esp_log.h>
+
+#include <vector>
+#include <string>
+#include <cstring>
+#include <exception>
+
+#include "conf.h"
+
+enum class ServiceState { Stopped, Running, Failed };
+
+// --- level <-> string helpers (only ERROR/WARN/INFO are usable; DEBUG/VERBOSE are compiled out) ---
+
+inline const char *levelToStr(esp_log_level_t lvl) {
+    switch (lvl) {
+        case ESP_LOG_ERROR: return "error";
+        case ESP_LOG_WARN: return "warn";
+        case ESP_LOG_INFO: return "info";
+        default: return "info";
+    }
+}
+
+inline esp_log_level_t strToLevel(const std::string &s) {
+    if (s == "error" || s == "err" || s == "e") return ESP_LOG_ERROR;
+    if (s == "warn" || s == "warning" || s == "w") return ESP_LOG_WARN;
+    if (s == "info" || s == "i") return ESP_LOG_INFO;
+    ESP_LOGW("service", "unknown log level '%s', defaulting to info", s.c_str());
+    return ESP_LOG_INFO;
+}
+
+inline const char *stateStr(ServiceState st) {
+    switch (st) {
+        case ServiceState::Running: return "Running";
+        case ServiceState::Stopped: return "Stopped";
+        case ServiceState::Failed: return "Failed";
+        default: return "?";
+    }
+}
+
+class Service {
+public:
+    // confPath e.g. "/littlefs/conf/mqtt.conf". `name` is also the ESP_LOG tag.
+    Service(const char *name, const char *confPath, bool requiresNetwork = false, bool enabledDefault = true)
+        : _name(name), _confPath(confPath), _requiresNetwork(requiresNetwork), _enabled(enabledDefault) {}
+
+    virtual ~Service() = default;
+
+    const char *name() const { return _name; }
+
+    ServiceState state() const { return liveState(); }
+
+    esp_log_level_t logLevel() const { return _logLevel; }
+
+    bool enabled() const { return _enabled; }
+
+    bool requiresNetwork() const { return _requiresNetwork; }
+
+    // Start the service. No-op (returns true) if already Running. On exception or onStart()==false
+    // the service transitions to Failed. Exceptions never escape (the network loop must not throw).
+    bool start() {
+        if (_state == ServiceState::Running) return true;
+        esp_log_level_set(_name, _logLevel); // apply level before onStart logs
+        try {
+            if (onStart()) {
+                _state = ServiceState::Running;
+                ESP_LOGI("service", "started '%s'", _name);
+                return true;
+            }
+            fail("onStart returned false");
+        } catch (const std::exception &e) {
+            fail(e.what());
+        } catch (...) {
+            fail("unknown exception");
+        }
+        return false;
+    }
+
+    // Stop the service. No-op if already Stopped. Stopping a Failed service clears it to Stopped.
+    void stop() {
+        if (_state == ServiceState::Stopped) return;
+        try {
+            onStop();
+        } catch (const std::exception &e) {
+            ESP_LOGE("service", "'%s' onStop error: %s", _name, e.what());
+        } catch (...) {
+            ESP_LOGE("service", "'%s' onStop unknown error", _name);
+        }
+        _state = ServiceState::Stopped;
+        ESP_LOGI("service", "stopped '%s'", _name);
+    }
+
+    bool reload() {
+        stop();
+        return start();
+    }
+
+    // Periodic tick from the network loop. Only ticks while Running; failures move to Failed.
+    void tick() {
+        if (_state != ServiceState::Running) return;
+        try {
+            onTick();
+        } catch (const std::exception &e) {
+            fail(e.what());
+        } catch (...) {
+            fail("unknown exception in tick");
+        }
+    }
+
+    // Set the runtime log level (applies via esp_log_level_set, optionally persists to conf).
+    void setLogLevel(esp_log_level_t lvl, bool persist = true) {
+        _logLevel = lvl;
+        esp_log_level_set(_name, lvl);
+        if (persist) {
+            ConfFile c{_confPath, true};
+            c.add({{"log_level", levelToStr(lvl)}}, true);
+        }
+        ESP_LOGI("service", "'%s' log level -> %s", _name, levelToStr(lvl));
+    }
+
+    // Persist the desired enabled state to the conf file (does not start/stop).
+    void setEnabledPersist(bool en) {
+        _enabled = en;
+        ConfFile c{_confPath, true};
+        c.add({{"enabled", en ? "1" : "0"}}, true);
+    }
+
+    // Read enabled + log_level from the conf file. Called once at registration.
+    void loadConf() {
+        ConfFile c{_confPath, /*no_warn_if_not_open*/ true};
+        _enabled = c.getByte("enabled", _enabled ? 1 : 0) != 0;
+        _logLevel = strToLevel(c.getString("log_level", "info"));
+        esp_log_level_set(_name, _logLevel);
+    }
+
+protected:
+    // Hooks implemented by concrete services. Return false (or throw) => Failed.
+    virtual bool onStart() = 0;
+
+    virtual void onStop() = 0;
+
+    virtual void onTick() {}
+
+    // Override for services whose "Running" depends on a live condition (e.g. MQTT connected).
+    virtual ServiceState liveState() const { return _state; }
+
+    void fail(const char *why) {
+        _state = ServiceState::Failed;
+        ESP_LOGE("service", "'%s' failed: %s", _name, why ? why : "?");
+    }
+
+    const char *_name;
+    const char *_confPath;
+    bool _requiresNetwork;
+    ServiceState _state = ServiceState::Stopped;
+    esp_log_level_t _logLevel = ESP_LOG_INFO;
+    bool _enabled;
+};
+
+class ServiceManager {
+    std::vector<Service *> _services;
+
+public:
+    void registerService(Service *s) {
+        _services.push_back(s);
+        s->loadConf();
+    }
+
+    Service *findByName(const char *n) const {
+        for (auto *s: _services)
+            if (strcasecmp(s->name(), n) == 0) return s;
+        return nullptr;
+    }
+
+    const std::vector<Service *> &all() const { return _services; }
+
+    // Start every service whose persisted enabled flag is set. Network services may fail here if
+    // WiFi isn't up yet; they self-heal via startEnabledNetworkServices() on the WiFi-up edge.
+    void startEnabledAtBoot() {
+        for (auto *s: _services)
+            if (s->enabled()) s->start();
+    }
+
+    // Self-heal: (re)start enabled network services that aren't Running. Called when WiFi connects.
+    void startEnabledNetworkServices() {
+        for (auto *s: _services)
+            if (s->requiresNetwork() && s->enabled() && s->state() != ServiceState::Running)
+                s->start();
+    }
+
+    void tickAll() {
+        for (auto *s: _services)
+            s->tick();
+    }
+};
+
+inline ServiceManager g_services;

@@ -9,10 +9,6 @@
 
 extern bool timeSynced;
 
-void setupTelnet();
-
-void telnetEnd();
-
 
 const char *getChipId();
 
@@ -29,10 +25,6 @@ void connect_wifi_async();
 bool wait_for_wifi();
 
 void wifiLoop(bool connect = false);
-
-void ftpBegin();
-
-void ftpUpdate();
 
 
 class Point;
@@ -51,6 +43,4 @@ void dcdcDataChanged(const ADC_Sampler &dcdc, const Sensor &sensor);
 //void onTelnetDisconnect(String ip);
 
 bool handleCommand(const String &inp);
-
-void setupTelnet();
 

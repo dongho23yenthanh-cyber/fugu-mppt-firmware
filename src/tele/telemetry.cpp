@@ -16,21 +16,13 @@
 
 #include <Arduino.h>
 
-#include <SimpleFTPServer.h>
-#include <ESPTelnet.h>
-
 #include "../etc/readerwriterqueue.h"
 
-#include "scope.h"
 #include "../storage/key-value.h"
 
 WiFiMulti wifiMulti;
 //WiFiUDP udp;
 AsyncUDP asyncUdp;
-
-FtpServer ftpSrv;
-
-ESPTelnet telnet;
 
 bool noSsid = true;
 bool timeSynced = false;
@@ -38,76 +30,6 @@ bool timeSynced = false;
 IPAddress ha_host{};
 
 extern KeyValueStorage nvs;
-
-void set_logging_telnet(ESPTelnet *telnet);
-
-void ftpUpdate() {
-    ftpSrv.handleFTP(); // poor perfNetworkServer::accept() (NetworkServer.cpp) / lwip_accept (sockets.c)
-    telnet.loop();
-    if (scope) scope->update();
-    //MDNS.update();
-}
-
-void _callback(FtpOperation ftpOperation, uint32_t freeSpace, uint32_t totalSpace) {
-    switch (ftpOperation) {
-        case FTP_CONNECT:
-            Serial.println(F("FTP: Connected!"));
-            break;
-        case FTP_DISCONNECT:
-            Serial.println(F("FTP: Disconnected!"));
-            break;
-        case FTP_FREE_SPACE_CHANGE:
-            Serial.printf("FTP: Free space change, free %lu of %lu!\n", freeSpace, totalSpace);
-            break;
-        default:
-            break;
-    }
-};
-
-void _transferCallback(FtpTransferOperation ftpOperation, const char *name, uint32_t transferredSize) {
-    switch (ftpOperation) {
-        case FTP_UPLOAD_START:
-            Serial.println(F("FTP: Upload start!"));
-            break;
-        case FTP_UPLOAD:
-            Serial.printf("FTP: Upload of file %s byte %lu\n", name, transferredSize);
-            break;
-        case FTP_TRANSFER_STOP:
-            Serial.println(F("FTP: Finish transfer!"));
-            break;
-        case FTP_TRANSFER_ERROR:
-            Serial.println(F("FTP: Transfer error!"));
-            break;
-        default:
-            break;
-    }
-
-    /* FTP_UPLOAD_START = 0,
-     * FTP_UPLOAD = 1,
-     *
-     * FTP_DOWNLOAD_START = 2,
-     * FTP_DOWNLOAD = 3,
-     *
-     * FTP_TRANSFER_STOP = 4,
-     * FTP_DOWNLOAD_STOP = 4,
-     * FTP_UPLOAD_STOP = 4,
-     *
-     * FTP_TRANSFER_ERROR = 5,
-     * FTP_DOWNLOAD_ERROR = 5,
-     * FTP_UPLOAD_ERROR = 5
-     */
-};
-
-void ftpBegin() {
-    ftpSrv.setCallback(_callback);
-    ftpSrv.setTransferCallback(_transferCallback);
-
-    ftpSrv.end();
-    ftpSrv.begin("user", "password"); //username, password for ftp.   (default 21, 50009 for PASV)
-
-    Serial.println("FTP server started!");
-}
-
 
 void wifi_load_conf() {
     ConfFile wifiConf{"/littlefs/conf/wifi.conf"};
@@ -176,7 +98,7 @@ void connect_wifi_async() {
 }
 
 
-bool timeSyncAsync(const char *tzInfo, const char *ntpServer1, const char *ntpServer2 = nullptr,
+static bool timeSyncAsync(const char *tzInfo, const char *ntpServer1, const char *ntpServer2 = nullptr,
                    const char *ntpServer3 = nullptr) {
     static unsigned long tSyncStarted = 0;
 
@@ -199,7 +121,7 @@ bool timeSyncAsync(const char *tzInfo, const char *ntpServer1, const char *ntpSe
 }
 
 
-void _wifiConnected() {
+static void _wifiConnected() {
     if (!WiFi.isConnected()) return;
 
     String hostname = String(getHostname().c_str());
@@ -217,22 +139,8 @@ void _wifiConnected() {
     ha_host = MDNS.queryHost("homeassistant.local");
     ESP_LOGI("tele", "%s resolved to %s", "homeassistant.local", ha_host.toString().c_str());
 
-    setupTelnet();
-    ftpBegin();
-
-    //webserver_begin();
-
-    if (scope == nullptr)
-        scope = new Scope();
-    scope->end();
-    if (!scope->begin(24)) {
-        ESP_LOGE("tele", "scope setup failed");
-    } else {
-        if (!MDNS.addService("_scope", "_tcp", 24)) {
-            ESP_LOGE("tele", "scope setup failed");
-        }
-        ESP_LOGI("tele", "Scope server listening on port 24");
-    }
+    // telnet / ftp / scope are now started by the ServiceManager (self-heals on the WiFi-up edge,
+    // see loopNetwork_task). Their onStart() relies on the MDNS setup above being done first.
 }
 
 void wifiLoop(bool connect) {
@@ -279,7 +187,7 @@ bool wait_for_wifi() {
     return true;
 }
 
-void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
+static void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
     if (msg.length() > CONFIG_TCP_MSS) {
         ESP_LOGW("tele", "Payload len %d > TCP_MSS: %s", msg.length(), msg.substring(0, 200).c_str());
         msg.clear();
@@ -296,7 +204,7 @@ void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
 }
 
 
-void influxWritePointsUDP(const IPAddress &dst, moodycamel::ReaderWriterQueue<Point> &q) {
+static void influxWritePointsUDP(const IPAddress &dst, moodycamel::ReaderWriterQueue<Point> &q) {
     constexpr int MTU = CONFIG_TCP_MSS;
     // notice that MTU is not the UDP max message size (which is >64k?), here we use MTU from ip4 as a "safe" value
 
@@ -361,62 +269,3 @@ void dcdcDataChanged(const ADC_Sampler &dcdc, const Sensor &sensor) {
     }
 }
 
-extern unsigned long lastTimeOutUs;
-extern const char* VER_STRING;
-
-void onTelnetConnect(String ip) {
-    ESP_LOGI("telnet", "Client %s connected", ip.c_str());
-    telnet.println("\nWelcome to " + String(getHostname().c_str()) + " (" + WiFi.localIP().toString().c_str() + ")");
-    telnet.println(VER_STRING);
-    telnet.println("(Use ^] + q  to disconnect.)");
-
-    set_logging_telnet(&telnet);
-    lastTimeOutUs = 0; // trigger output
-}
-
-void onTelnetDisconnect(String ip) {
-    set_logging_telnet(nullptr);
-    ESP_LOGI("telnet", "Client %s disconnected", ip.c_str());
-}
-
-bool handleCommand(const String &inp);
-
-void setupTelnet() {
-    // passing on functions for various telnet events
-    telnet.onConnect(onTelnetConnect);
-    //telnet.onConnectionAttempt(onTelnetConnectionAttempt);
-    //telnet.onReconnect(onTelnetReconnect);
-    telnet.onDisconnect(onTelnetDisconnect);
-
-    // passing a lambda function
-    telnet.onInputReceived([](String str) {
-        // checks for a certain command
-        if (str == "ping") {
-            telnet.println("> pong");
-            Serial.println("- Telnet: pong");
-        } else if (str == "exit") {
-            telnet.println("goodbye!");
-            telnet.flush();
-            telnet.disconnectClient();
-        } else {
-            handleCommand(str);
-        }
-    });
-
-    Serial.print("- Telnet: ");
-    telnet.stop();
-    if (telnet.begin(23)) {
-        MDNS.addService("telnet", "tcp", 23);
-        ESP_LOGI("tele", "Telnet server running.");
-    } else {
-        ESP_LOGE("tele", "Telnet server start error");
-    }
-}
-
-
-void telnetEnd() {
-    if (telnet.isConnected()) {
-        telnet.flush();
-        telnet.disconnectClient();
-    }
-}

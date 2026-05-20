@@ -595,6 +595,7 @@ public:
         );
 
         enqueue_task([&] {
+            // TODO replace displayMessageF with a general message callback call
             lcd.displayMessageF("MPP Scan done\n%.1fW @ %.1fV", 6000, maxPowerPoint.power, maxPowerPoint.voltage);
             sweepPlot.plot();
         });

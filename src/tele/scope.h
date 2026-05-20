@@ -3,6 +3,8 @@
 //#include <sstream>
 #include <cassert>
 
+#include "../etc/rt.h"   // TaskNotification
+
 static uint64_t bytesSent = 0;
 
 #ifdef ARDUINO

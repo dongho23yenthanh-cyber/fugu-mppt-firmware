@@ -49,8 +49,6 @@ void scan_i2c() {
         ESP_LOGI(TAG, "No I2C devices found");
     else
         ESP_LOGI(TAG, "I2C scan done, %d devices found", nDevices);
-
-    delay(5000);
 }
 
 float strntof(const char *dat, int len) {

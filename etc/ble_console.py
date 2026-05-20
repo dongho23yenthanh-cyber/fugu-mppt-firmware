@@ -63,12 +63,17 @@ class BleConsole:
             await self.client.write_gatt_char(NUS_RX, data[off:off + 20], response=True)
 
     async def command(self, cmd: str, timeout: float = 4.0) -> list[str]:
-        """Send a command and collect reply lines until 'OK: <cmd>' / rejection or timeout."""
+        """Send a command and collect reply lines until the device's completion marker or timeout.
+
+        The firmware console emits 'OK: <cmd>' (or 'ERR: <cmd>' on a rejected command) after each
+        command, so we break the instant it arrives instead of waiting out the timeout amid the
+        periodic status lines the device keeps streaming.
+        """
         # drain anything buffered (status lines etc.)
         while not self._lines.empty():
             self._lines.get_nowait()
         await self.write(cmd + "\r\n")
-        out, ok_marker = [], "OK: " + cmd
+        out, ok_marker, err_marker = [], "OK: " + cmd, "ERR: " + cmd
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
         while True:
@@ -79,9 +84,9 @@ class BleConsole:
                 line = await asyncio.wait_for(self._lines.get(), remaining)
             except asyncio.TimeoutError:
                 break
+            if ok_marker in line or err_marker in line:
+                break  # completion marker — don't append it to the reply
             out.append(line)
-            if ok_marker in line or "unknown or unexpected command" in line:
-                break
         return out
 
 

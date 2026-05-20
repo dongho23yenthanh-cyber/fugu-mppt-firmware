@@ -87,8 +87,12 @@ inline bool mountLFS(const char *part_label = "littlefs", bool format = false) {
     // mount the requested partition at /<part_label> (default "littlefs" -> "/littlefs",
     // matching the hardcoded conf paths). Earlier this ignored part_label and always
     // mounted "littlefs", so a formatted test partition was never the one actually used.
-    char basePath[24];
-    snprintf(basePath, sizeof(basePath), "/%s", part_label);
+    // arduino-esp32's FSImpl::mountpoint() stores the basePath *pointer*, not a copy, so it must
+    // outlive the mount. A local buffer would dangle once this function returns, corrupting every
+    // later LittleFS.open() (empty dirs / "file not found") while raw POSIX on /littlefs still works.
+    char tmp[24];
+    snprintf(tmp, sizeof(tmp), "/%s", part_label);
+    const char *basePath = strdup(tmp);
     assert(LittleFS.begin(true, basePath, 10, part_label));
 
     /*

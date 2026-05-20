@@ -26,7 +26,7 @@ def _upload_ftp_file(ftp_handle:ftplib.FTP, name, src, overwrite=True):
 
     # ftp_handle.sendcmd('MLST')
     assert overwrite, "not implemented"
-    if overwrite is True or not os.path.exists(dest):
+    if overwrite is True or not os.path.exists(src):
         try:
             with open(src, 'rb') as f:
                 ftp_handle.storbinary('STOR %s' % name, f)
@@ -43,8 +43,10 @@ def _file_name_match_pattern(pattern, name):
 
 def _dl_recurse(ftp_handle:ftplib.FTP, name, overwrite, guess_by_extension, pattern):
     """ replicates a directory on an ftp server recursively """
-    ftp_handle.cwd(name)
-    for item, attr in ftp_handle.mlsd(name):
+    # the server requires a pathname for MLSD/LIST (RFC-optional, but it returns 501 on a bare
+    # command), so list "/" explicitly at the root instead of sending an empty path.
+    ftp_handle.cwd(name or "/")
+    for item, attr in ftp_handle.mlsd(name or "/"):
         m, n = item.split('\t')
         if list(attr.keys())[0][0] == 'd':  # _is_ftp_dir(ftp_handle, n, guess_by_extension):
             _dl_recurse(ftp_handle, n, overwrite, guess_by_extension, pattern)
@@ -93,8 +95,12 @@ if __name__ == "__main__":
 
     for addr,_,name in hosts:
         print(addr, name)
-        username = "user"
-        password = "password"
+        username = "usr" # get-config ftp.conf ftp_user
+        pw = {'flat.local.': '0ffgrid'} # get-config ftp.conf ftp_pass
+        password = pw.get(name, '')
+        if not password:
+            print('no pw for', name)
+            continue
         remote_dir = ""
         local_dir = "dl/"+name+addr
         pattern = r".*"  # .*\.jpg$"

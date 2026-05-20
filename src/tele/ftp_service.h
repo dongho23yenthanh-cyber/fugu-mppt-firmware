@@ -27,6 +27,9 @@ protected:
     void onTick() override;
 
 private:
+    // SimpleFTPServer's begin() stores the user/pass *pointers* (const char*), not copies, so the
+    // backing strings must outlive ftpSrv — keep them here, not as onStart() locals.
+    std::string _user, _pass;
     FtpServer ftpSrv;
 };
 

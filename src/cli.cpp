@@ -272,8 +272,8 @@ static void cmdIset(cmd *c) {
     else CMD_FAIL("iset: out of range [0,999]");
 }
 
-// service [list]                       service start|stop|restart <name>
-// service log <name> <error|warn|info>
+// svc [list]                       svc start|stop|restart <name>
+// svc log <name> <error|warn|info>
 static void cmdService(cmd *c) {
     Command cc(c);
     int n = cc.countArgs();
@@ -283,16 +283,22 @@ static void cmdService(cmd *c) {
         UART_LOG("%-10s %-8s %-6s %-8s %s", "NAME", "STATE", "LOG", "ENABLED", "DETAIL");
         for (auto *s: g_services.all()) {
             auto detail = s->statusDetail();
-            UART_LOG("%-10s %-8s %-6s %-8s %s", s->name(), stateStr(s->state()),
+            auto st = s->state();
+            const char *color = st == ServiceState::Running ? "\x1b[32m"   // green
+                              : st == ServiceState::Failed  ? "\x1b[31m"   // red
+                                                            : "\x1b[90m";  // gray
+            char state[24];
+            snprintf(state, sizeof(state), "%s%-8s\x1b[0m", color, stateStr(st));
+            UART_LOG("%-10s %s %-6s %-8s %s", s->name(), state,
                      levelToStr(s->logLevel()), s->enabled() ? "yes" : "no", detail.c_str());
         }
         return;
     }
 
-    if (n < 2) CMD_FAIL("service: expected <name>");
+    if (n < 2) CMD_FAIL("svc: expected <name>");
     auto name = cc.getArg(1).getValue();
     auto *s = g_services.findByName(name.c_str());
-    if (!s) CMD_FAIL("service: unknown '%s'", name.c_str());
+    if (!s) CMD_FAIL("svc: unknown '%s'", name.c_str());
 
     if (sub == "start") {
         s->setEnabledPersist(true);
@@ -303,10 +309,10 @@ static void cmdService(cmd *c) {
     } else if (sub == "restart") {
         s->restart();
     } else if (sub == "log") {
-        if (n < 3) CMD_FAIL("service log: expected <error|warn|info>");
+        if (n < 3) CMD_FAIL("svc log: expected <error|warn|info>");
         s->setLogLevel(strToLevel(cc.getArg(2).getValue().c_str()), /*persist*/ true);
     } else {
-        CMD_FAIL("service: unknown subcommand '%s'", sub.c_str());
+        CMD_FAIL("svc: unknown subcommand '%s'", sub.c_str());
     }
 }
 
@@ -343,7 +349,7 @@ void setupCli() {
 
     cli.addBoundlessCmd("set-config", cmdSetConfig);
     cli.addBoundlessCmd("get-config", cmdGetConfig);
-    cli.addBoundlessCmd("service", cmdService);
+    cli.addBoundlessCmd("svc", cmdService);
 }
 
 bool handleCommand(const String &inp) {

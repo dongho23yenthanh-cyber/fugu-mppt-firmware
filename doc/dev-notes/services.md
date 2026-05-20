@@ -114,7 +114,7 @@ conf: mqtt.conf
 onStart: MQTT.init(conf) + onConnected=haMqttSendDiscovery + mppt.charger.beginMqtt(conf)
 onStop: MQTT.close()
 onTick: throttled haMqttUpdate(...) (moves main.cpp:837-843)
-status note: liveState: Running once started; service list appends (conn) when isConnected()
+status note: liveState: Running once started; svc list appends (conn) when isConnected()
 ────────────────────────────────────────
 Service: telemetry
 conf: tele.conf
@@ -178,11 +178,11 @@ After mountLFS() (:297), WiFi connect attempt (:384-399), and scope channel setu
 Step 5 — service console commands (handleCommand, before final else at :1073)
 
 Match existing startsWith/substring style; reachable from UART/USB/telnet/MQTT automatically:
-- service / service list → table: NAME, STATE (stateStr), LOG (levelToStr), (conn) for mqtt.
-- service start <name> → setEnabledPersist(true) + start().
-- service stop <name> → setEnabledPersist(false) + stop().
-- service restart <name> → restart().
-- service log <name> <error|warn|info> → setLogLevel(strToLevel(...), true).
+- svc / svc list → table: NAME, STATE (stateStr), LOG (levelToStr), (conn) for mqtt.
+- svc start <name> → setEnabledPersist(true) + start().
+- svc stop <name> → setEnabledPersist(false) + stop().
+- svc restart <name> → restart().
+- svc log <name> <error|warn|info> → setLogLevel(strToLevel(...), true).
   Unknown name → return false.
 
 Step 6 — Config convention & provisioning
@@ -199,10 +199,10 @@ Verification
    (the LcdValues{...} aggregate keeps all 5 fields — unchanged) and any <sstream> link error
    (design introduces none). No new TU required (header-only + edits to existing files).
 2. On-target (idf.py -p $ESPPORT flash monitor), in the console:
-- service list → table renders; mqtt shows (conn) once connected.
-- service stop mqtt → publishes stop; mqtt.conf gains enabled=0. service start mqtt →
+- svc list → table renders; mqtt shows (conn) once connected.
+- svc stop mqtt → publishes stop; mqtt.conf gains enabled=0. svc start mqtt →
   reconnects and charger BMS topics re-subscribe.
-- service log telnet warn → telnet.conf log_level=warn; INFO logs from the telnet tag
+- svc log telnet warn → telnet.conf log_level=warn; INFO logs from the telnet tag
   stop. get-config telnet.conf log_level → warn.
 - restart → telnet stays warn, mqtt stays stopped (persistence confirmed).
 - Stop telnet from a telnet session → client drops cleanly, device stays alive (log-sink
@@ -217,6 +217,6 @@ Risks (carry into implementation)
 - MQTT/charger coupling: beginMqtt() inside onStart() so restart re-subscribes; charger
   outlives MQTT (safe).
 - WiFi precondition: without the self-heal edge, network services stay Failed until a manual
-  service start.
+  svc start.
 - Static-init order: wrapper objects are file-scope globals, registered in setup() after
   mountLFS().

@@ -128,8 +128,8 @@ and an optional `onTick()` driven from `loopNetwork_task` (core 0 only — RT-cr
 `enabled`/`log_level` persist in the service's own conf file. Wi-Fi stays a precondition (not a service): network
 services fail-to-start until Wi-Fi is up, then self-heal on the Wi-Fi-up edge in `loopNetwork_task`. Concrete wrappers
 live in `src/main.cpp` (they touch `mppt`/`lcd`/`sensors`); `MqttService` *is* the service (`src/tele/mqtt.*`), with a
-`preStart` hook wired in `setup()` for the charger/HA coupling. Console: `service [list]`,
-`service start|stop|restart <name>`, `service log <name> <error|warn|info>`.
+`preStart` hook wired in `setup()` for the charger/HA coupling. Console: `svc [list]`,
+`svc start|stop|restart <name>`, `svc log <name> <error|warn|info>`.
 
 ### Console & debugging surfaces
 
@@ -174,7 +174,7 @@ for noise debugging.
 # Important
 
 - whenever you create a mark-down (.md) or other documentation file, put
-  "*this document is an LLM generated and not reviewed by a human yet*" in the first line
+  "*this document is an LLM generated placeholder*" in the first line
 - no `#include <>` hints
 - when describing a function, interface or class, describe it with a local scope, not how it is used in the application
 - when writing code, focus on low memory usage and small code size. re-use data that is available and when in non-

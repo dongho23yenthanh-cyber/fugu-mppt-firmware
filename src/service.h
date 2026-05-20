@@ -157,7 +157,7 @@ protected:
     virtual ServiceState liveState() const { return _state; }
 
 public:
-    // Optional one-line, human-readable live detail shown after the service in `service list`
+    // Optional one-line, human-readable live detail shown after the service in `svc list`
     // (e.g. "connected", client count). Empty by default.
     virtual std::string statusDetail() const { return {}; }
 

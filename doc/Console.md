@@ -99,11 +99,11 @@ services. Each has its own state, log level, and `enabled` flag persisted in its
 
 | Command | Description |
 | --- | --- |
-| `service` / `service list` | List all services with state, log level and enabled flag. |
-| `service start <name>` | Enable (persist) and start a service. |
-| `service stop <name>` | Disable (persist) and stop a service. |
-| `service restart <name>` | Restart a service (stop then start); re-reads its conf. |
-| `service log <name> <error\|warn\|info>` | Set and persist a service's log level. |
+| `svc` / `svc list` | List all services with state, log level and enabled flag. |
+| `svc start <name>` | Enable (persist) and start a service. |
+| `svc stop <name>` | Disable (persist) and stop a service. |
+| `svc restart <name>` | Restart a service (stop then start); re-reads its conf. |
+| `svc log <name> <error\|warn\|info>` | Set and persist a service's log level. |
 
 # Telnet
 

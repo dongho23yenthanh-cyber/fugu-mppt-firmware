@@ -31,26 +31,43 @@ void loopConsole(int read(char *buf, size_t len), int write(const char *buf, siz
     static char buf[bufSiz];
     static uint8_t buf_pos = 0;
 
-    int length = read(&buf[buf_pos], 128 - buf_pos);
-    if (length > 0) {
-        if (buf_pos == 0) write("> ", 2);
-        if (length + buf_pos >= bufSiz - 1)
-            length = bufSiz - 1 - buf_pos;
-        write(&buf[buf_pos], length); // echo
-        lastTimeOutUs = wallClockUs(); // stop logging during user input
-        buf_pos += length;
-        while (buf_pos > 0 && buf[buf_pos - 1] == '\b') {
-            --buf_pos;
-            buf[buf_pos] = 0;
+    char chunk[bufSiz];
+    int length = read(chunk, sizeof(chunk));
+    if (length <= 0) return;
+
+    lastTimeOutUs = wallClockUs(); // stop logging during user input
+
+    // Process byte-by-byte: the raw stream interleaves printable chars, edits and line ends, and a
+    // backspace may arrive in a different read() than the char it deletes, so we can't post-process
+    // the whole chunk in one pass.
+    for (int i = 0; i < length; ++i) {
+        char c = chunk[i];
+
+        if (c == '\b' || c == 0x7f) { // backspace (^H) or DEL (terminals/macOS send 0x7f)
+            if (buf_pos > 0) {
+                --buf_pos;
+                write("\b \b", 3); // move back, overwrite with space, move back again
+            }
+            continue;
         }
-        if (buf[buf_pos - 1] == '\r' or buf[buf_pos - 1] == '\n') {
+
+        if (c == '\r' || c == '\n') {
+            write("\r\n", 2);
             buf[buf_pos] = 0;
             String inp(buf);
             inp.trim();
             if (inp.length() > 0)
                 handleCommand(inp);
             buf_pos = 0;
-        } else if (buf_pos == bufSiz - 1) {
+            continue;
+        }
+
+        if (buf_pos == 0) write("> ", 2); // prompt at the start of each line
+
+        if (buf_pos < bufSiz - 1) {
+            buf[buf_pos++] = c;
+            write(&c, 1); // echo
+        } else {
             buf[buf_pos] = 0;
             ESP_LOGW("main", "discarding command buffer %s", buf);
             buf_pos = 0;

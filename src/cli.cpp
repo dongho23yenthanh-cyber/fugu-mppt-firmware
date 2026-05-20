@@ -290,7 +290,7 @@ static void cmdIset(cmd *c) {
     else CMD_FAIL("iset: out of range [0,999]");
 }
 
-// svc [list]                       svc start|stop|restart <name>
+// svc [list]                       svc on|off|restart|rs <name>
 // svc log <name> <error|warn|info>
 static void cmdService(cmd *c) {
     Command cc(c);
@@ -318,13 +318,13 @@ static void cmdService(cmd *c) {
     auto *s = g_services.findByName(name.c_str());
     if (!s) CMD_FAIL("svc: unknown '%s'", name.c_str());
 
-    if (sub == "start") {
+    if (sub == "on") {
         s->setEnabledPersist(true);
         if (!s->start()) UART_LOG("start failed (state=%s)", stateStr(s->state()));
-    } else if (sub == "stop") {
+    } else if (sub == "off") {
         s->setEnabledPersist(false);
         s->stop();
-    } else if (sub == "restart") {
+    } else if (sub == "restart" || sub == "rs") {
         s->restart();
     } else if (sub == "log") {
         if (n < 3) CMD_FAIL("svc log: expected <error|warn|info>");

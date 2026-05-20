@@ -176,7 +176,7 @@ Dispatched from `handleCommand()` (shared by UART, USB-CDC, telnet, and MQTT):
 
 - `svc` or `svc list` — table of name, state, log level, and enabled flag (the `mqtt` row
   also indicates a live connection).
-- `svc start <name>` — persist `enabled = 1` and start.
-- `svc stop <name>` — persist `enabled = 0` and stop.
-- `svc restart <name>` — stop then start.
+- `svc on <name>` — persist `enabled = 1` and start.
+- `svc off <name>` — persist `enabled = 0` and stop.
+- `svc restart <name>` (alias `svc rs <name>`) — stop then start.
 - `svc log <name> <error|warn|info>` — set and persist the log level.

@@ -129,7 +129,7 @@ and an optional `onTick()` driven from `loopNetwork_task` (core 0 only — RT-cr
 services fail-to-start until Wi-Fi is up, then self-heal on the Wi-Fi-up edge in `loopNetwork_task`. Concrete wrappers
 live in `src/main.cpp` (they touch `mppt`/`lcd`/`sensors`); `MqttService` *is* the service (`src/tele/mqtt.*`), with a
 `preStart` hook wired in `setup()` for the charger/HA coupling. Console: `svc [list]`,
-`svc start|stop|restart <name>`, `svc log <name> <error|warn|info>`.
+`svc on|off|restart|rs <name>`, `svc log <name> <error|warn|info>`.
 
 ### Console & debugging surfaces
 

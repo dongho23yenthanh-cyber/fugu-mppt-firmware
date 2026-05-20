@@ -280,6 +280,7 @@ void setup() {
     };
     // Periodic HA power publish, throttled inside MqttService::onTick (only ticks while Running).
     MQTT.tickHook = [] {
+        if (!mppt.sensorPhysicalI || !mppt.sensorPhysicalU) return; // sensor setup failed, mppt.begin() skipped
         float pow = mppt.sensorPhysicalI->ewm.avg.get() * mppt.sensorPhysicalU->ewm.avg.get();
         haMqttUpdate({.power = mppt.isSweeping() ? NAN : pow});
     };

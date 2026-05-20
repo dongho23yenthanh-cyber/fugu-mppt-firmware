@@ -13,13 +13,13 @@ Context
 
 Today the firmware's optional non-RT subsystems (MQTT, FTP, telnet, telemetry/InfluxDB,
 LCD, scope) are constructed ad-hoc in setup() and ticked from scattered direct calls in
-loopNetwork_task (src/main.cpp:813-861). There is no uniform way to start/stop/reload one
+loopNetwork_task (src/main.cpp:813-861). There is no uniform way to start/stop/restart one
 at runtime, no status reporting, and no per-module log control — esp_log_level_set() is
 never called even though CONFIG_LOG_DYNAMIC_LEVEL_CONTROL=y makes runtime per-tag levels
 possible.
 
 This change introduces a small service abstraction: each service wraps one building block
-and exposes start() / stop() / reload(), reports a status (Running / Stopped / Failed),
+and exposes start() / stop() / restart(), reports a status (Running / Stopped / Failed),
 has its own runtime-adjustable log level, and an optional periodic tick(). State persists:
 each service owns a config file on littlefs (enabled + log_level keys), read at boot and
 written on runtime changes. There is already an empty class Service {} at src/tele/mqtt.h:9
@@ -68,7 +68,7 @@ virtual ~Service() = default;
 
      bool start();   // no-op if Running; sets Failed on throw / onStart()==false
      void stop();    // no-op if Stopped; clears Failed -> Stopped
-     bool reload();  // default: stop(); return start();
+     bool restart(); // default: stop(); return start();
      void tick();    // if Running: try{ onTick(); } catch{ fail(); }
 
      void setLogLevel(esp_log_level_t, bool persist = true); // esp_log_level_set + write conf
@@ -179,7 +179,7 @@ Match existing startsWith/substring style; reachable from UART/USB/telnet/MQTT a
 - service / service list → table: NAME, STATE (stateStr), LOG (levelToStr), (conn) for mqtt.
 - service start <name> → setEnabledPersist(true) + start().
 - service stop <name> → setEnabledPersist(false) + stop().
-- service reload <name> → reload().
+- service restart <name> → restart().
 - service log <name> <error|warn|info> → setLogLevel(strToLevel(...), true).
   Unknown name → return false.
 
@@ -212,7 +212,7 @@ Risks (carry into implementation)
   ESPTelnet.
 - Scope: remove duplicate creation in _wifiConnected(); netLoop() blocks → keep the
   vTaskDelay(1) yield fallback.
-- MQTT/charger coupling: beginMqtt() inside onStart() so reload re-subscribes; charger
+- MQTT/charger coupling: beginMqtt() inside onStart() so restart re-subscribes; charger
   outlives MQTT (safe).
 - WiFi precondition: without the self-heal edge, network services stay Failed until a manual
   service start.

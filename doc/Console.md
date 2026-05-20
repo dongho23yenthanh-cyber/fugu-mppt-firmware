@@ -12,8 +12,9 @@ A successfully handled command is confirmed with:
 OK: <cmd>
 ```
 
-An unknown, malformed, or out-of-context command is rejected and logged as
-`unknown or unexpected command`.
+An unknown, malformed, or out-of-context command is confirmed with `ERR: <cmd>`
+and a logged reason: a parser error for an unknown command, or the specific
+rejection message for invalid arguments / wrong context.
 
 # System Commands
 
@@ -101,7 +102,7 @@ services. Each has its own state, log level, and `enabled` flag persisted in its
 | `service` / `service list` | List all services with state, log level and enabled flag. |
 | `service start <name>` | Enable (persist) and start a service. |
 | `service stop <name>` | Disable (persist) and stop a service. |
-| `service reload <name>` | Reload a service's configuration. |
+| `service restart <name>` | Restart a service (stop then start); re-reads its conf. |
 | `service log <name> <error\|warn\|info>` | Set and persist a service's log level. |
 
 # Telnet

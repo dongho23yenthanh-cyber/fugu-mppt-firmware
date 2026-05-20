@@ -1,7 +1,7 @@
 #pragma once
 
 // A small service architecture (systemd-lite). A Service wraps one building block (MQTT, FTP,
-// telnet, telemetry, LCD, scope, ...) and exposes start()/stop()/reload() plus a status
+// telnet, telemetry, LCD, scope, ...) and exposes start()/stop()/restart() plus a status
 // (Running/Stopped/Failed). Each service has its own ESP_LOG tag (== name()) and a runtime
 // log level, and an optional periodic tick() driven from the network loop (core 0).
 // Per-service state (enabled flag + log level) persists in the service's own conf file.

@@ -253,7 +253,7 @@ static void cmdGetConfig(cmd *c) {
     if (cc.countArgs() >= 2) {
         auto key = cc.getArg(1).getValue();
         auto val = conf.getString(key.c_str(), "");
-        printf("Conf '%s:%s' = '%s'\n", fn.c_str(), key.c_str(), val.c_str());
+        UART_LOG("Conf '%s:%s' = '%s'", fn.c_str(), key.c_str(), val.c_str());
     } else {
         for (const auto &key: conf.keys())
             ESP_LOGI("main", "Conf '%s:%s' = '%s'", fn.c_str(), key.c_str(), conf.getString(key).c_str());
@@ -272,7 +272,7 @@ static void cmdIset(cmd *c) {
     else CMD_FAIL("iset: out of range [0,999]");
 }
 
-// service [list]                       service start|stop|restart|reload <name>
+// service [list]                       service start|stop|restart <name>
 // service log <name> <error|warn|info>
 static void cmdService(cmd *c) {
     Command cc(c);

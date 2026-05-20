@@ -29,7 +29,7 @@ transport that reuses the existing `loopConsole()` input pipeline and the existi
 - **Wrapped as a `Service`** (`src/service.h`) — *blocked on the in-progress service architecture;
   continue once it lands.* The NUS console is a `BleConsoleService`: `start()` initializes the
   NimBLE stack + advertises, `stop()` tears it down, `onTick()` (core 0) drains RX → `loopConsole`,
-  `reload()` re-reads conf. Registered in `ServiceManager g_services` in `setup()`. This **replaces**
+  `restart()` re-reads conf. Registered in `ServiceManager g_services` in `setup()`. This **replaces**
   the earlier direct `setup()` + `loopNetwork_task` wiring described below — see "Service wrapping".
 - **Runtime gate** via the service's own `ble.conf` (`enabled`/`log_level`), consistent with the
   other services (mqtt/tele/ftp/telnet/lcd/scope). The `board.conf` `ble=1` idea is superseded.
@@ -116,7 +116,7 @@ Confirm the final `Service` interface before writing this.* The concrete wrapper
   MQTT topic `pv/log/{hostname}`). Set `ServiceState` Running/Failed accordingly.
 - `stop()` → tear down advertising + NimBLE; deregister the log sink.
 - `onTick()` (core 0) → `bleConsoleLoop(nowMs)` (drains RX queue → `loopConsole`). No-op when stopped.
-- `reload()` → re-read `ble.conf`, restart if security/name changed.
+- `restart()` → re-read `ble.conf`, restart if security/name changed.
 - Registered + started in `setup()` via `ServiceManager g_services`. Unlike the network services,
   BLE has **no Wi-Fi precondition** — it can run with Wi-Fi down (that's its main use case).
 - Note: `loopConsole`'s line buffer is `static` (`console.cpp:31`), shared across transports;

@@ -45,7 +45,7 @@ enable state when the conf file (or its `enabled` key) is absent.
 |---|---|
 | `bool start()` | No-op (returns true) if already `Running`. Applies the log level, then calls `onStart()`. A false return or a thrown exception transitions to `Failed`. Never propagates an exception. |
 | `void stop()` | No-op if already `Stopped`. Calls `onStop()` and sets `Stopped` (also clearing `Failed`). |
-| `bool reload()` | `stop()` then `start()`. |
+| `bool restart()` | `stop()` then `start()`. |
 | `void tick()` | Calls `onTick()` only while `Running`; a thrown exception transitions to `Failed`. |
 | `void setLogLevel(esp_log_level_t, bool persist = true)` | Applies the level to the ESP log tag and, if `persist`, writes `log_level` to the conf file. |
 | `void setEnabledPersist(bool)` | Writes `enabled` to the conf file. Does not itself start/stop. |
@@ -139,7 +139,7 @@ definitions.
 
 `MqttService` is the MQTT module itself rather than a separate wrapper; a `preStart`
 `std::function<void(const ConfFile&)>` set in `setup()` keeps the charger / Home-Assistant coupling
-out of the MQTT translation unit and re-runs on every start (so `service reload mqtt` re-subscribes
+out of the MQTT translation unit and re-runs on every start (so `service restart mqtt` re-subscribes
 the BMS topics).
 
 Notes specific to two services:
@@ -178,5 +178,5 @@ Dispatched from `handleCommand()` (shared by UART, USB-CDC, telnet, and MQTT):
   also indicates a live connection).
 - `service start <name>` — persist `enabled = 1` and start.
 - `service stop <name>` — persist `enabled = 0` and stop.
-- `service reload <name>` — stop then start.
+- `service restart <name>` — stop then start.
 - `service log <name> <error|warn|info>` — set and persist the log level.

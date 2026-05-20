@@ -46,7 +46,10 @@ void TelnetService::setupTelnet() {
             t.flush();
             t.disconnectClient();
         } else {
-            handleCommand(str);
+            // Telnet feeds whole lines straight to handleCommand (not via loopConsole), so emit the
+            // OK/ERR confirmation here the way loopConsole does for UART/USB/BLE.
+            bool ok = handleCommand(str);
+            t.println(String(ok ? "OK: " : "ERR: ") + str);
         }
     });
 

@@ -121,7 +121,7 @@ voltage; the charger uses that instead of pack voltage / N_cells. If BMS data is
 ### Service architecture
 
 The optional non-RT subsystems (MQTT, telemetry/InfluxDB, FTP, telnet, LCD, scope) are wrapped as **services** (
-`src/service.h`). A `Service` exposes `start()`/`stop()`/`reload()`, reports a `ServiceState` (Running/Stopped/Failed),
+`src/service.h`). A `Service` exposes `start()`/`stop()`/`restart()`, reports a `ServiceState` (Running/Stopped/Failed),
 has its own log level (its `name()` is the ESP_LOG tag; `setLogLevel()` → `esp_log_level_set`, ERROR/WARN/INFO only),
 and an optional `onTick()` driven from `loopNetwork_task` (core 0 only — RT-critical ADC/MPPT/converter on core 1 are *
 *not** services). `ServiceManager g_services` holds them; they're registered + started in `setup()`. Per-service
@@ -129,7 +129,7 @@ and an optional `onTick()` driven from `loopNetwork_task` (core 0 only — RT-cr
 services fail-to-start until Wi-Fi is up, then self-heal on the Wi-Fi-up edge in `loopNetwork_task`. Concrete wrappers
 live in `src/main.cpp` (they touch `mppt`/`lcd`/`sensors`); `MqttService` *is* the service (`src/tele/mqtt.*`), with a
 `preStart` hook wired in `setup()` for the charger/HA coupling. Console: `service [list]`,
-`service start|stop|restart|reload <name>`, `service log <name> <error|warn|info>`.
+`service start|stop|restart <name>`, `service log <name> <error|warn|info>`.
 
 ### Console & debugging surfaces
 

@@ -16,7 +16,7 @@ public:
 
     // Wired by main.cpp before start(): does the charger BMS subscriptions + sets onConnected,
     // keeping mppt/home-assistant dependencies out of this translation unit. Called inside
-    // onStart() with the loaded conf, so `service reload mqtt` re-subscribes.
+    // onStart() with the loaded conf, so `service restart mqtt` re-subscribes.
     std::function<void(const ConfFile &)> preStart{nullptr};
 
     // Wired by main.cpp: the throttled periodic publish (HA power, etc.). Kept here as a hook so

@@ -178,3 +178,4 @@ for noise debugging.
 - no `#include <>` hints
 - when describing a function, interface or class, describe it with a local scope, not how it is used in the application
 - when writing code, focus on low memory usage and small code size. re-use data that is available and when in non-  time-critical code write a transformation or cast if necessary. think twice before creating a new member variable.
+- keep code comments at a minimum and short

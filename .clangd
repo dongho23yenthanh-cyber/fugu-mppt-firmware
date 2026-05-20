@@ -1,0 +1,22 @@
+# clangd config for the xtensa-esp32s3-elf toolchain.
+# compile_commands.json is generated in build/ by idf.py (CMAKE_EXPORT_COMPILE_COMMANDS).
+CompileFlags:
+  CompilationDatabase: build
+  # xtensa-gcc-only flags that clangd's bundled clang frontend rejects
+  Remove:
+    - -mlongcalls
+    - -fno-tree-switch-conversion
+    - -fstrict-volatile-bitfields
+    - -fno-shrink-wrap
+    - -mtext-section-literals
+    - --param=*
+  Add:
+    - -D__XTENSA__
+    - -Wno-unknown-attributes
+    - -Wno-unknown-warning-option
+
+Diagnostics:
+  # don't flag the stripped driver flags or GCC-only attributes
+  Suppress:
+    - drv_unknown_argument
+    - unknown_attribute

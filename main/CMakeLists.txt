@@ -10,7 +10,8 @@ if ($ENV{RUN_TESTS})
 elseif ($ENV{MAIN_SRC})
     set(MAIN_SRC $ENV{MAIN_SRC})
 else ()
-    set(MAIN_SRC "../src/main.cpp")
+    # cli.cpp externs main.cpp's globals, so it's only built alongside the real main (not test mains).
+    set(MAIN_SRC "../src/main.cpp" "../src/cli.cpp")
 endif ()
 
 idf_component_register(SRCS

@@ -4,20 +4,22 @@ set -e
 FOLDER="config"
 BOARD="$1"
 
-if [[ -d "$BOARD" ]] && [[ "${BOARD:0:7}" = config/ ]]; then
-  BOARD="${BOARD:7}"
-fi
-
-
-echo "BOARD=$BOARD"
-
-if [[ ! -d "$FOLDER/$BOARD" ]] || [[ "" == "$BOARD" ]]; then
+# Resolve the source config directory ($SRC). Accept either a board name under
+# config/ (e.g. "fmetal") or an arbitrary path to a config dir holding conf/
+# (e.g. "./etc/config-tool/dl/fry.local.192.168.4.2").
+if [[ -d "$BOARD/conf" ]]; then
+  SRC="${BOARD%/}"
+elif [[ -d "$FOLDER/$BOARD" ]] && [[ -n "$BOARD" ]]; then
+  SRC="$FOLDER/$BOARD"
+else
   echo "invalid board '$BOARD', choose from"
   ls $FOLDER/
   exit 1
 fi
 
-PINS_CONF="$FOLDER/$BOARD/conf/pins.conf"
+echo "SRC=$SRC"
+
+PINS_CONF="$SRC/conf/pins.conf"
 if [[ -f "$PINS_CONF" ]]; then
   MCU=$(grep -E '^mcu=' "$PINS_CONF" | head -n1 | cut -d= -f2)
   if [[ -n "$MCU" ]] && [[ -n "$IDF_TARGET" ]] && [[ "$MCU" != "$IDF_TARGET" ]]; then
@@ -30,8 +32,9 @@ if [[ -z "$ESPPORT" ]]; then
   echo "ERROR: ESPPORT is not set"
   exit 1
 fi
-littlefs-python create $FOLDER/"$BOARD" $FOLDER/"$BOARD".bin -v --fs-size=0x20000 --name-max=64 --block-size=4096
-littlefs-python  list $FOLDER/"$BOARD".bin --block-size=4096
+BIN="$SRC.bin"
+littlefs-python create "$SRC" "$BIN" -v --fs-size=0x20000 --name-max=64 --block-size=4096
+littlefs-python  list "$BIN" --block-size=4096
 
-echo parttool.py --port $ESPPORT write_partition --partition-name littlefs --input $FOLDER/"$BOARD".bin
-parttool.py --port $ESPPORT write_partition --partition-name littlefs --input $FOLDER/"$BOARD".bin
+echo parttool.py --port $ESPPORT write_partition --partition-name littlefs --input "$BIN"
+parttool.py --port $ESPPORT write_partition --partition-name littlefs --input "$BIN"

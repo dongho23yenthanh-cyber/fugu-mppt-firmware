@@ -64,9 +64,16 @@ static bool lastNotifyOk = true;             // set by TxCallbacks::onStatus, re
 
 // Right after connect the central is still on its default (slow) connection interval and the param
 // update we request hasn't applied yet, so pushing the queued log backlog into the link overflows the
-// controller's ACL buffers (the rc=6 burst). Hold the drain for a short settle window; by then the
-// faster interval is live and the backlog flushes cleanly. Re-armed on every connect.
+// controller's ACL buffers (the rc=6 burst). Hold the drain for a short settle window; the backlog
+// then flushes cleanly. Re-armed on every connect.
+// The settle window also defers our connection-parameter request: issuing a device-initiated LL
+// connection update synchronously from the host connect callback — while justworks pairing/feature
+// exchange is still in flight and Wi-Fi coex is active — races the peer's procedures and trips the
+// controller assert lld_con.c:3275 (r_lld_con_param_update). We instead request it once from the
+// network-loop drain after the window, off the host callback. Backpressure tolerates the brief
+// slow-interval drain before the faster interval applies.
 static volatile bool txArmSettle = false;
+static volatile bool connParamsPending = false;
 static unsigned long txConnectMs = 0;
 static constexpr unsigned long TX_SETTLE_MS = 500;
 
@@ -85,7 +92,13 @@ static void bleTxDrain(unsigned long nowMs) {
     if (!deviceConnected || !txChar || !bleServer) return;
     std::lock_guard<std::recursive_mutex> lk(txMutex);
     if (txArmSettle) { txConnectMs = nowMs; txArmSettle = false; }
-    if (nowMs - txConnectMs < TX_SETTLE_MS) return; // let the connection params settle first
+    if (nowMs - txConnectMs < TX_SETTLE_MS) return; // let pairing settle before touching the link
+    if (connParamsPending) {
+        // Deferred off the host connect callback — see the txArmSettle note for why.
+        // 6..12 = 7.5..15ms interval, latency 0, supervision timeout 400 = 4s.
+        connParamsPending = false;
+        bleServer->requestConnParams(bleServer->getConnId(), 6, 12, 0, 400);
+    }
 
     // Chunk at the negotiated ATT MTU minus the 3-byte notify header (falls back to the 20-byte
     // default before MTU exchange). A larger MTU means a multi-line reply is a few notifications
@@ -129,10 +142,9 @@ class ServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer *s) override {
         deviceConnected = true;
         addLogCallback(bleLogWrite);
-        // Ask the central for a fast connection interval (6..12 = 7.5..15ms; default is often ~30ms+).
-        // Every notification is gated by this interval, so it directly sets console round-trip latency.
-        // latency=0 (no skipped events), supervision timeout 400 = 4s.
-        s->requestConnParams(s->getConnId(), 6, 12, 0, 400);
+        // Defer the fast-interval connection-param request to the network-loop drain (see TX_SETTLE_MS
+        // note): requesting it here, in the host connect callback, trips controller assert lld_con.c:3275.
+        connParamsPending = true;
         txArmSettle = true; // hold the TX drain until the link speeds up (see TX_SETTLE_MS)
         ESP_LOGI(TAG, "client connected");
     }

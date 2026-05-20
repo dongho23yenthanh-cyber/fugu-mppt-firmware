@@ -219,9 +219,14 @@ static void cmdAdcRestart(cmd *) { adcSampler.reInitADCs(); }
 
 static void cmdAdcReset(cmd *) { adcSampler.resetPeripherals(); }
 
+// hostname [name]  — no arg prints the current hostname; an arg sets it.
 static void cmdHostname(cmd *c) {
-    auto hn = Command(c).getArg(0).getValue();
-    if (hn.length() == 0) CMD_FAIL("hostname: expected name");
+    Command cc(c);
+    if (cc.countArgs() < 1 || cc.getArg(0).getValue().length() == 0) {
+        UART_LOG("Hostname: %s", getHostname().c_str());
+        return;
+    }
+    auto hn = cc.getArg(0).getValue();
     nvs.open();
     nvs.writeString("hostname", hn.c_str());
     nvs.close();
@@ -356,10 +361,10 @@ void setupCli() {
     cli.addSingleArgCmd("wifi", cmdWifi);
     cli.addSingleArgCmd("wifi-add", cmdWifiAdd);
     cli.addSingleArgCmd("ota", cmdOta);
-    cli.addSingleArgCmd("hostname", cmdHostname);
     cli.addSingleArgCmd("vset", cmdVset);
     cli.addSingleArgCmd("iset", cmdIset);
 
+    cli.addBoundlessCmd("hostname", cmdHostname);
     cli.addBoundlessCmd("set-config", cmdSetConfig);
     cli.addBoundlessCmd("del-config", cmdDelConfig);
     cli.addBoundlessCmd("get-config", cmdGetConfig);

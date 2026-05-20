@@ -241,7 +241,7 @@ void MpptController::update() {
 
         if (controlValue < -80 and fp < -0.01 and converter.getCtrlOnPwmCnt() > converter.getCtrlOnPwmMin()) {
             UART_LOG_ASYNC(
-                "Limiting! Control value %.2f => perturbation %.2f (to %hu), mode=%s, idx=%i (act=%.3f, tgt=%.3f)",
+                "Limiting! ctrl %.2f => pert %.2f (to %hu) mode=%s idx=%i (act=%.3f tgt=%.3f)",
                 controlValue, fp, converter.getCtrlOnPwmCnt(),
                 MpptState2String[(int) controlMode], ctrlState.limIdx, limitingControl->actual,
                 limitingControl->target);

@@ -30,7 +30,9 @@
 #include "etc/version.h"
 
 #include "etc/perf.h"
+#ifdef WITH_SPROFILER
 #include <sprofiler.h>
+#endif
 
 #if CONFIG_SOC_USB_SERIAL_JTAG_SUPPORTED
 
@@ -95,6 +97,11 @@ static void loopRTNewData(unsigned long nowMs);
 
 const char* VER_STRING = "*** Fugu Firmware Version " FIRMWARE_VERSION " (" __DATE__ " " __TIME__ ")";
 
+// Single reused log literal for the repeated "failed to read <conf>.conf" catch blocks in setup().
+static void logConfErr(const char *name, const std::exception &e) {
+    ESP_LOGE("main", "conf %s: %s", name, e.what());
+}
+
 void setup() {
     consoleInit();
     setupCli();
@@ -110,6 +117,7 @@ void setup() {
     }
 
 
+#ifdef WITH_SPROFILER
     try {
         ConfFile pprofConf{"/littlefs/conf/pprof.conf", true};
 
@@ -125,6 +133,7 @@ void setup() {
         // a malformed pprof.conf must not brick the device — the profiler is purely diagnostic
         ESP_LOGE("main", "error reading pprof.conf, skipping profiler: %s", e.what());
     }
+#endif // WITH_SPROFILER
 
 
     // A malformed board.conf must not abort setup() (which would reboot and re-read the same bad
@@ -133,7 +142,7 @@ void setup() {
     try {
         boardConf = ConfFile{"/littlefs/conf/board.conf"};
     } catch (const std::exception &e) {
-        ESP_LOGE("main", "error reading board.conf: %s", e.what());
+        logConfErr("board.conf", e);
         setupErr = true;
     }
 
@@ -213,7 +222,7 @@ void setup() {
             teleConf = ConfFile{"/littlefs/conf/tele.conf"};
         } catch (const std::exception &e) {
             // telemetry host is optional — a malformed tele.conf must not brick the device
-            ESP_LOGE("main", "error reading tele.conf: %s", e.what());
+            logConfErr("tele.conf", e);
         }
     }
 
@@ -221,7 +230,7 @@ void setup() {
     try {
         lim = Limits{ConfFile{"/littlefs/conf/limits.conf"}};
     } catch (const std::runtime_error &er) {
-        ESP_LOGE("main", "error reading limits.conf: %s", er.what());
+        logConfErr("limits.conf", er);
         setupErr = true;
     }
 
@@ -416,7 +425,7 @@ CONFIG_ARDUINO_UDP_RUNNING_CORE == RT_CORE or CONFIG_ARDUINO_SERIAL_EVENT_TASK_R
             if (timeLastSampler && nowUs - timeLastSampler > 200000) {
                 if (!converter.disabled()) {
                     stopAndBackoff(4);
-                    ESP_LOGE("main", "Timeout waiting for new ADC sample, shutdown! numSamples=%lu dt=%lu ms",
+                    ESP_LOGE("main", "Timeout new ADC sample, shutdown! nSamples=%lu dt=%lu ms",
                              lastMpptUpdateNumSamples, (nowUs - timeLastSampler) / 1000);
                     if (adcSampler.resetPeripherals()) {
                         ESP_LOGI("main", "ADC peripherals reset");
@@ -490,7 +499,7 @@ void loopLF(const unsigned long &nowUs) {
         nSamples > max(loopRateMin * 5, 200) &&
         !manualPwm && lastTimeOutUs && (nowUs - adcSampler.getTimeLastCalibrationUs()) > 2000000) {
         auto loopRunTime = (nowUs - adcSampler.getTimeLastCalibrationUs());
-        ESP_LOGE("main", "Loop latency too high (%lu < %hu Hz), shutdown! (nSamples=%lu, D=%u, loopRunTime=%.1fs )",
+        ESP_LOGE("main", "Loop latency high (%lu<%hu Hz), shutdown! (nSamples=%lu D=%u rt=%.1fs)",
                  sps, loopRateMin, nSamples, converter.getCtrlOnPwmCnt(), loopRunTime * 1e-6f);
         stopAndBackoff(4);
     }

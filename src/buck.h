@@ -182,7 +182,7 @@ public:
         // note that mosfets have different Vg(th) and switching times worst case is Vi/o=80/12
         // ^ set pwmMinHS a bit lower than pwmMinLS (might cause no-load output over-voltage otherwise)
 
-        ESP_LOGI("converter", "f=%lu, boost=%d, pwmDriver.pwmMax=%hu, pwmMinLS=%hu, pwmMinHS=%hu, pwmMaxHS=%hu",
+        ESP_LOGI("converter", "f=%lu boost=%d pwmMax=%hu minLS=%hu minHS=%hu maxHS=%hu",
                  pwmFrequency, isBoost, pwmDriver.pwmMax, pwmRectMin, pwmCtrlMin, pwmCtrlMax);
     }
 
@@ -403,7 +403,7 @@ public:
             if (il < 0.01f || vl < 1.0f) // TODO get rid of magic constants
             {
                 if (pwmRectRatioDCM > 0.2f && pwmRect > pwmRectMin)
-                    ESP_LOGI("converter", "Disable sync rect, low coil current (%.2f) or low volt (%.2f) pwm=%hu|%hu", il,
+                    ESP_LOGI("converter", "Disable sync rect, low I(%.2f)/V(%.2f) pwm=%hu|%hu", il,
                          vl, pwmCtrl, pwmRect);
                 pwmRectRatioDCM = 0.0f;
             } else {

@@ -384,9 +384,9 @@ public:
         // input over current
         if (sensors.Iin->last > limits.Iin_max * 1.3f && !converter.disabled()) {
             shutdownDcdc();
-            ESP_LOGW("mppt", "Input current %.1f > 1.5x limit (Iout=%.1f, Vin=%.2f, Iin=%.2f), shutdown",
+            ESP_LOGW("mppt", "Iin %.1f >1.3x lim (Iout=%.1f Vin=%.2f), shutdown",
                      sensors.Iin->last,
-                     sensors.Iout->last, sensors.Vin->last, sensors.Iin->last);
+                     sensors.Iout->last, sensors.Vin->last);
             return false;
         }
 
@@ -396,7 +396,7 @@ public:
              or sensors.Iout->ewm.avg.get() > limits.Iout_max * 1.15f
             ) and not converter.disabled()) {
             shutdownDcdc();
-            ESP_LOGW("mppt", "Output Current %.2f (med %.2f, avg %.2f) above limit %.2f, shutdown", sensors.Iout->last,
+            ESP_LOGW("mppt", "Iout %.2f (med %.2f avg %.2f) >lim %.2f, shutdown", sensors.Iout->last,
                      sensors.Iout->med3.get(), sensors.Iout->ewm.avg.get(), limits.Iout_max);
             return false;
         }
@@ -405,10 +405,10 @@ public:
             if (sensors.Iout->ewm.avg.get() > 10) {
                 //buck.halfDutyCycle();
                 shutdownDcdc();
-                ESP_LOGE("MPPT", "Reverse current %.2f A, noise? High avg current, shutdown", sensorPhysicalI->last);
+                ESP_LOGE("MPPT", "Reverse I %.2fA, noise? high avg, shutdown", sensorPhysicalI->last);
             } else {
                 if (bflow.state() || converter.getRectOnPwmCnt() > converter.getRectOnPwmMin())
-                    ESP_LOGE("MPPT", "Reverse current %.2f A, noise? disable BFC and low-side FET (pwm=%hu)",
+                    ESP_LOGE("MPPT", "Reverse I %.2fA, noise? disable BFC+LS FET (pwm=%hu)",
                          sensorPhysicalI->last, converter.getCtrlOnPwmCnt());
                 bflow.enable(false); // reverse current
                 converter.syncRectMinDuty();
@@ -442,7 +442,7 @@ public:
             if (currentFilt < -0.05f && limits.reverse_current_paranoia) {
                 if (converter.getRectOnPwmCnt() > converter.getRectOnPwmMax() / 2 &&
                     converter.getRectOnPwmCnt() > (converter.pwmRectMin + converter.pwmCtrlMax / 20)) {
-                    ESP_LOGW("MPPT", "Low current, set low-side min duty (ewm(%s)=%.2f, max(i[0],i[-1])=%.2f)",
+                    ESP_LOGW("MPPT", "Low I, set LS min duty (ewm(%s)=%.2f, max=%.2f)",
                              sensorPhysicalI->params.teleName.c_str(),
                              sensorPhysicalI->ewm.avg.get(),
                              std::max(sensorPhysicalI->last, sensorPhysicalI->previous));
@@ -514,7 +514,7 @@ public:
             and limits.reverse_current_paranoia) {
             if (!converter.disabled())
                 ESP_LOGE("MPPT",
-                     "Buck running at D=%d %% but Vout (%.2f, vr=%.2f) and Iout (%.2f, last=%.2f) low! Sensor or half-bridge failure.",
+                     "Buck D=%d%% but Vout(%.2f,vr=%.2f) Iout(%.2f,last=%.2f) low! sensor/HB fail",
                      100 * converter.getCtrlOnPwmCnt() / converter.pwmCtrlMax, vOut, vr,
                      sensors.Iout->ewm.avg.get(),
                      sensors.Iout->last
@@ -588,7 +588,7 @@ public:
         targetDutyCycle = maxPowerPoint.dutyCycle;
 
         ESP_LOGI("mppt",
-                 "Stop sweep after %.2fs at controlMode=%s (limIdx=%i, tgt=%.2f, act=%.2f) PWM=%hu, MPP=(%.1fW,PWM=%hu,%.1fV)",
+                 "Stop sweep %.2fs mode=%s (lim=%i tgt=%.2f act=%.2f) PWM=%hu MPP=(%.1fW,%hu,%.1fV)",
                  (wallClockUs() - sampler.getTimeLastCalibrationUs()) * 1e-6f,
                  MpptState2String[(uint8_t) controlMode], limIdx,
                  limCtrl ? limCtrl->target : NAN, limCtrl ? limCtrl->actual : NAN,

@@ -73,7 +73,94 @@ public:
     }
 
 
+    // Update keys in place and rewrite the whole file, so repeated writes never grow it with
+    // duplicate lines. Existing keys keep their position; their inline comment (`# ...` after the
+    // value) is preserved. Comment-only lines and blank lines are kept verbatim. Pre-existing
+    // duplicate lines of a key being written are collapsed to one. Genuinely new keys are appended.
     void add(const std::unordered_map<std::string, std::string> &values, bool overwrite = false) {
+        // read current file into lines (stripping the trailing newline)
+        std::vector<std::string> lines;
+        if (FILE *fr = fopen(path, "r")) {
+            char buf[256];
+            while (fgets(buf, sizeof(buf), fr)) {
+                std::string line(buf);
+                while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+                    line.pop_back();
+                lines.push_back(line);
+            }
+            fclose(fr);
+        }
+
+        std::unordered_map<std::string, bool> written;
+        for (auto &[key, val]: values) written[key] = false;
+
+        std::vector<std::string> out;
+        out.reserve(lines.size() + values.size());
+
+        for (auto &line: lines) {
+            auto ic = line.find_first_of('#');
+            std::string code = (ic == std::string::npos) ? line : line.substr(0, ic);
+            std::string comment = (ic == std::string::npos) ? std::string{} : line.substr(ic);
+
+            auto ie = code.find_first_of('=');
+            if (ie == std::string::npos) {
+                out.push_back(line); // comment-only or blank line
+                continue;
+            }
+
+            auto key = trim(code.substr(0, ie));
+            auto it = values.find(key);
+            if (it == values.end()) {
+                out.push_back(line); // a key we're not touching
+                continue;
+            }
+
+            if (!overwrite)
+                throw std::runtime_error("duplicate key: " + key);
+
+            if (written[key]) {
+                ESP_LOGW(TAG, "collapsing duplicate key %s in %s", key.c_str(), path);
+                continue; // drop redundant duplicate line
+            }
+
+            std::string nl = key + "=" + it->second;
+            if (!comment.empty()) nl += "  " + comment; // keep the inline comment
+            out.push_back(nl);
+            written[key] = true;
+        }
+
+        for (auto &[key, val]: values)
+            if (!written[key]) out.push_back(key + "=" + val);
+
+        FILE *f = fopen(path, "w");
+        if (f == nullptr) {
+            ESP_LOGE("store", "Cannot write %s", path);
+            assert(f != nullptr);
+        }
+        for (auto &line: out) {
+            if (!line.empty())
+                assert(fwrite(line.c_str(), line.length(), 1, f) == 1);
+            fputc('\n', f);
+        }
+
+#ifndef CONFIG_LITTLEFS_FLUSH_FILE_EVERY_WRITE
+        if (fsync(fileno(f)) != 0) {
+            fclose(f);
+            assert(false);
+        }
+#endif
+
+        fclose(f);
+
+        for (auto &[key, val]: values) _map[key] = val; // keep in-memory view consistent
+    }
+
+    // Append-only insert: just tacks `key=val` onto the end without reading/rewriting the file.
+    // Faster than add() (one open + sequential write, no parse), but it does NOT update existing
+    // keys in place, so re-writing the same key GROWS the file with duplicate lines (last one wins
+    // on read). Use only for one-shot writes / append-heavy paths where file growth is acceptable;
+    // prefer add() for keys that get rewritten repeatedly (e.g. service enabled/log_level).
+    void addFast(const std::unordered_map<std::string, std::string> &values, bool overwrite = false) {
         FILE *f = fopen(path, "a");
         if (f == nullptr) {
             f = fopen(path, "w");
@@ -83,14 +170,11 @@ public:
             assert(f != nullptr);
         }
 
-        //assert(!overwrite);
-
         for (auto &[key, val]: values) {
             if (_map.find(key) != _map.end()) {
                 if (!overwrite)
                     throw std::runtime_error("duplicate key: " + key);
-                ESP_LOGW(TAG, "add duplicate key %s", key.c_str());
-                //assert(false);
+                ESP_LOGW(TAG, "addFast duplicate key %s (file grows)", key.c_str());
             }
             fputc('\n', f);
             assert(fwrite(key.c_str(), key.length(), 1, f) == 1);
@@ -107,19 +191,7 @@ public:
 
         fclose(f);
 
-
-        /*
-                std::ofstream file(path, std::ios_base::app);
-                if(!file.is_open()) file = std::ofstream (path, )
-                assert(file.is_open());
-                for (auto [key, val]: values) {
-                    if (_map.find(key) != _map.end()) {
-                        ESP_LOGE(TAG, "cannot add duplicate key %s", key.c_str());
-                        assert(false);
-                    }
-                    file << std::endl << key << " = " << val;
-                }
-                 */
+        for (auto &[key, val]: values) _map[key] = val; // keep in-memory view consistent
     }
 
     template<typename T>

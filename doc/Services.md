@@ -139,7 +139,7 @@ definitions.
 
 `MqttService` is the MQTT module itself rather than a separate wrapper; a `preStart`
 `std::function<void(const ConfFile&)>` set in `setup()` keeps the charger / Home-Assistant coupling
-out of the MQTT translation unit and re-runs on every start (so `service restart mqtt` re-subscribes
+out of the MQTT translation unit and re-runs on every start (so `svc restart mqtt` re-subscribes
 the BMS topics).
 
 Notes specific to two services:
@@ -174,9 +174,9 @@ firmware's littlefs partition.
 
 Dispatched from `handleCommand()` (shared by UART, USB-CDC, telnet, and MQTT):
 
-- `service` or `service list` — table of name, state, log level, and enabled flag (the `mqtt` row
+- `svc` or `svc list` — table of name, state, log level, and enabled flag (the `mqtt` row
   also indicates a live connection).
-- `service start <name>` — persist `enabled = 1` and start.
-- `service stop <name>` — persist `enabled = 0` and stop.
-- `service restart <name>` — stop then start.
-- `service log <name> <error|warn|info>` — set and persist the log level.
+- `svc start <name>` — persist `enabled = 1` and start.
+- `svc stop <name>` — persist `enabled = 0` and stop.
+- `svc restart <name>` — stop then start.
+- `svc log <name> <error|warn|info>` — set and persist the log level.

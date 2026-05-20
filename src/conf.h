@@ -164,6 +164,63 @@ public:
         return true;
     }
 
+    // Remove a key by rewriting the file without its line(s). The whole line is dropped, including
+    // any trailing inline comment. Comment-only and blank lines are kept verbatim. Returns true if
+    // the key was present and the file was rewritten; false if absent or on any I/O failure.
+    bool remove(const std::string &key) {
+        std::vector<std::string> lines;
+        if (FILE *fr = fopen(path, "r")) {
+            char buf[256];
+            while (fgets(buf, sizeof(buf), fr)) {
+                std::string line(buf);
+                while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+                    line.pop_back();
+                lines.push_back(line);
+            }
+            fclose(fr);
+        }
+
+        std::vector<std::string> out;
+        out.reserve(lines.size());
+        bool removed = false;
+        for (auto &line: lines) {
+            auto ic = line.find_first_of('#');
+            std::string code = (ic == std::string::npos) ? line : line.substr(0, ic);
+            auto ie = code.find_first_of('=');
+            if (ie != std::string::npos && trim(code.substr(0, ie)) == key) {
+                removed = true;
+                continue; // drop this line entirely (incl. inline comment)
+            }
+            out.push_back(line);
+        }
+
+        _map.erase(key); // keep in-memory view consistent regardless of file state
+        if (!removed) return false;
+
+        FILE *f = fopen(path, "w");
+        if (f == nullptr) {
+            ESP_LOGE("store", "Cannot write %s", path);
+            return false;
+        }
+        for (auto &line: out) {
+            if (!line.empty() && fwrite(line.c_str(), line.length(), 1, f) != 1) {
+                ESP_LOGE("store", "short write to %s", path);
+                fclose(f);
+                return false;
+            }
+            fputc('\n', f);
+        }
+#ifndef CONFIG_LITTLEFS_FLUSH_FILE_EVERY_WRITE
+        if (fsync(fileno(f)) != 0) {
+            ESP_LOGE("store", "fsync failed for %s", path);
+            fclose(f);
+            return false;
+        }
+#endif
+        fclose(f);
+        return true;
+    }
+
     // Append-only insert: just tacks `key=val` onto the end without reading/rewriting the file.
     // Faster than add() (one open + sequential write, no parse), but it does NOT update existing
     // keys in place, so re-writing the same key GROWS the file with duplicate lines (last one wins

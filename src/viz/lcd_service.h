@@ -20,8 +20,9 @@ public:
 
     bool initLcd() {
         if (lcd) return true;
+        // addr=0 (unset) is fine: LCD::init() auto-probes the standard 0x27/0x3F addresses and
+        // returns false if nothing answers on the bus.
         uint8_t addr = ConfFile{_confPath, /*no_warn_if_not_open*/ true}.getByte("addr", 0);
-        if (!addr) return false;
         return lcd.init(addr);
     }
 

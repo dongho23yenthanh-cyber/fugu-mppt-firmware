@@ -49,6 +49,7 @@ Hardware and runtime parameters live in `.conf` files on the device's littlefs p
 | Command | Description |
 | --- | --- |
 | `set-config <file> <key> <value>` | Set a key in a config file and persist it to flash. |
+| `del-config <file> <key>` | Remove a key; the whole line, including any inline comment, is deleted. |
 | `get-config <file> [<key>]` | Print a single key, or dump every key if `<key>` is omitted. |
 
 Examples:
@@ -60,6 +61,8 @@ set-config converter.conf vout_max 28.5
 set-config mqtt.conf broker_uri mqtt://192.168.1.134:1882
 set-config charger.conf cell_voltage_eoc 3.53
 set-config sensor.conf vout_filt_len 10
+
+del-config sensor.conf vout_filt_len
 
 get-config mqtt.conf broker_uri
 get-config converter.conf
@@ -99,11 +102,11 @@ services. Each has its own state, log level, and `enabled` flag persisted in its
 
 | Command | Description |
 | --- | --- |
-| `service` / `service list` | List all services with state, log level and enabled flag. |
-| `service start <name>` | Enable (persist) and start a service. |
-| `service stop <name>` | Disable (persist) and stop a service. |
-| `service restart <name>` | Restart a service (stop then start); re-reads its conf. |
-| `service log <name> <error\|warn\|info>` | Set and persist a service's log level. |
+| `svc` / `svc list` | List all services with state, log level and enabled flag. |
+| `svc start <name>` | Enable (persist) and start a service. |
+| `svc stop <name>` | Disable (persist) and stop a service. |
+| `svc restart <name>` | Restart a service (stop then start); re-reads its conf. |
+| `svc log <name> <error\|warn\|info>` | Set and persist a service's log level. |
 
 # Telnet
 

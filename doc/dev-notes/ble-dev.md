@@ -1,9 +1,11 @@
+*this document is an LLM generated placeholder*
+
 # Plan: Bluetooth (BLE) Serial Console
 
 ## Implementation status (2026-05-20)
 **Implemented and verified on hardware** (esp32s3, mock board config). `WITH_BLE=1` build compiles,
 links, and fits the OTA slot (1,803,360 B / ~4% free). On device: boots with BLE in, auto-starts when
-`ble.conf enabled=1`, `service start/stop ble` advertise/teardown cleanly (justworks security), RT
+`ble.conf enabled=1`, `svc start/stop ble` advertise/teardown cleanly (justworks security), RT
 loop unaffected (steady ~1.1 ms max lag; one-time ~16 ms `BLEDevice::init` transient on the core-0
 network loop at start). **Still untested:** actual BLE client connection (pairing + NUS round-trip
 from a phone / WebBLE) — needs a central. Build with `WITH_BLE=1 idf.py build`.
@@ -160,8 +162,8 @@ globally if it fits. Decide based on the measured size in Verification.
 ### 6. Config images: add `ble.conf` to relevant `config/*/conf/`
 Add a `ble.conf` with `enabled=0`, `log_level=info`, `ble_security=justworks` (and a commented
 `# ble_passkey=123456`) to the configs that should expose it (e.g. `config/fmetal`, lab mocks).
-Disabled by default. Runtime control via the existing console: `service start ble` /
-`service stop ble` / `service log ble info`.
+Disabled by default. Runtime control via the existing console: `svc start ble` /
+`svc stop ble` / `svc log ble info`.
 
 ### 7. WebBLE client: `etc/config-tool/conf-editor.html` (first-class target)
 The editor already has a Web Serial transport (`connectSerial`/`serialReadLoop`/`serialWrite`/

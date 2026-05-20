@@ -84,7 +84,16 @@ inline bool mountLFS(const char *part_label = "littlefs", bool format = false) {
     }
 
 
-    assert(LittleFS.begin(true, "/littlefs", 10, "littlefs"));
+    // mount the requested partition at /<part_label> (default "littlefs" -> "/littlefs",
+    // matching the hardcoded conf paths). Earlier this ignored part_label and always
+    // mounted "littlefs", so a formatted test partition was never the one actually used.
+    // arduino-esp32's FSImpl::mountpoint() stores the basePath *pointer*, not a copy, so it must
+    // outlive the mount. A local buffer would dangle once this function returns, corrupting every
+    // later LittleFS.open() (empty dirs / "file not found") while raw POSIX on /littlefs still works.
+    char tmp[24];
+    snprintf(tmp, sizeof(tmp), "/%s", part_label);
+    const char *basePath = strdup(tmp);
+    assert(LittleFS.begin(true, basePath, 10, part_label));
 
     /*
     esp_vfs_littlefs_conf_t conf = {
@@ -148,7 +157,7 @@ public:
     }
 
 
-    bool update(T val) {
+    bool update(const T &val) {
 
         // a power-loss safe way of updating a file
         // can't use fopen(..."a"), see https://stackoverflow.com/questions/5532371/does-fseek-move-the-file-pointer-to-the-beginning-of-the-file-if-it-was-opened/5532426#5532426
@@ -227,7 +236,7 @@ public:
 
     const T &getFlashValue() { return valueFlash; }
 
-    bool update(T val) {
+    bool update(const T &val) {
         auto now = millis();
         if (_lastWrite && (now - _lastWrite < _minWriteIntervalMs)) {
             return false;

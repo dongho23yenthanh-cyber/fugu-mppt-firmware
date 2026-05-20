@@ -145,7 +145,8 @@ public:
             } else {
                 ESP_LOGI("mppt", "Store yesterday energy %.2f (last power %ld s ago)", todayEnergy_,
                          (long) (now - timeLastPower));
-                //store.add(today); // TODO panic
+                store.add(today); // was "// TODO panic": the panic was the by-value ~14k
+                                  // copy in FlashValueFile::update, now passed by const ref
                 today.reset();
             }
         } else {

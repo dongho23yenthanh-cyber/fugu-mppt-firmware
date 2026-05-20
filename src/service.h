@@ -132,11 +132,16 @@ public:
         c.add({{"enabled", en ? "1" : "0"}}, true);
     }
 
-    // Read enabled + log_level from the conf file. Called once at registration.
+    // Read enabled + log_level from the conf file. Called once at registration (in setup(), outside
+    // any try/catch), so a malformed value must not throw out -> reboot loop; fall back to defaults.
     void loadConf() {
         ConfFile c{_confPath, /*no_warn_if_not_open*/ true};
-        _enabled = c.getByte("enabled", _enabled ? 1 : 0) != 0;
-        _logLevel = strToLevel(c.getString("log_level", "info"));
+        try {
+            _enabled = c.getByte("enabled", _enabled ? 1 : 0) != 0;
+            _logLevel = strToLevel(c.getString("log_level", "info"));
+        } catch (const std::exception &e) {
+            ESP_LOGW("service", "'%s' conf parse error (%s); using defaults", _name, e.what());
+        }
         esp_log_level_set(_name, _logLevel);
     }
 
@@ -152,7 +157,7 @@ protected:
     virtual ServiceState liveState() const { return _state; }
 
 public:
-    // Optional one-line, human-readable live detail shown after the service in `service list`
+    // Optional one-line, human-readable live detail shown after the service in `svc list`
     // (e.g. "connected", client count). Empty by default.
     virtual std::string statusDetail() const { return {}; }
 

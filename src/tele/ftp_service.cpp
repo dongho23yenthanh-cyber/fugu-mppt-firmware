@@ -56,27 +56,28 @@ bool FtpService::onStart() {
     // secrets) read-write over the LAN, so the credentials must not be hard-coded. Prefer nvs,
     // fall back to ftp.conf, and warn loudly if neither is provisioned.
     nvs.open();
-    std::string ftpUser = nvs.readString("ftp_user", "");
-    std::string ftpPass = nvs.readString("ftp_pass", "");
+    _user = nvs.readString("ftp_user", "");
+    _pass = nvs.readString("ftp_pass", "");
     nvs.close();
 
-    if (ftpUser.empty() || ftpPass.empty()) {
+    if (_user.empty() || _pass.empty()) {
         ConfFile ftpConf{"/littlefs/conf/ftp.conf", true};
-        if (ftpUser.empty()) ftpUser = ftpConf.getString("ftp_user", ftpUser);
-        if (ftpPass.empty()) ftpPass = ftpConf.getString("ftp_pass", ftpPass);
+        if (_user.empty()) _user = ftpConf.getString("ftp_user", _user);
+        if (_pass.empty()) _pass = ftpConf.getString("ftp_pass", _pass);
     }
 
-    if (ftpUser.empty() || ftpPass.empty()) {
-        ftpUser = "user";
-        ftpPass = getChipId();
-        ESP_LOGW("ftp", "no ftp credentials set, using usr=%s pw=%s", ftpUser.c_str(), ftpPass.c_str()); // TODO dont send on mqtt
+    if (_user.empty() || _pass.empty()) {
+        _user = "user";
+        _pass = getChipId();
+        ESP_LOGW("ftp", "no ftp credentials set, using usr=%s pw=%s", _user.c_str(), _pass.c_str()); // TODO dont send on mqtt
     }
 
     ftpSrv.setCallback(_callback);
     ftpSrv.setTransferCallback(_transferCallback);
     ftpSrv.end();
-    ftpSrv.begin(ftpUser.c_str(), ftpPass.c_str()); // default ports 21, 50009 for PASV
-    ESP_LOGI("ftp", "FTP server started");
+    // begin() keeps the pointers, so _user/_pass (members) must stay alive past this call.
+    ftpSrv.begin(_user.c_str(), _pass.c_str()); // default ports 21, 50009 for PASV
+    ESP_LOGI("ftp", "FTP server started, user=%s", _user.c_str());
     return true;
 }
 

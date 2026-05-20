@@ -111,14 +111,12 @@ void test_conf_getstring();
 void test_conf_required_missing_long_throws();
 void test_conf_required_missing_string_throws();
 void test_conf_operator_bool();
+void test_conf_remove_drops_line_and_keeps_rest();
+void test_conf_remove_strips_inline_comment_too();
+void test_conf_remove_missing_key_returns_false();
 
 void setup() {
     UNITY_BEGIN();
-
-    // charger.h tests first — pre-existing test_meter currently triggers a
-    // panic in the IDF idle-task watchdog, which would otherwise prevent
-    // anything below it from running. TODO: investigate that panic and put
-    // the original order back.
 
     // charger.h — termination math
     RUN_TEST(test_termination_line_at_zero_current);
@@ -168,14 +166,6 @@ void setup() {
     RUN_TEST(test_ascii_multi_series_with_one_empty_renders_other);
     RUN_TEST(test_ascii_regression_plot_h_first_bin_nan);
 
-    RUN_TEST(test_float16);
-
-    RUN_TEST(test_meter);
-    RUN_TEST(test_meter_storage);
-
-    RUN_TEST(test_LinearTransform);
-    // RUN_TEST(test_ADCSampler); // body is #if 0'd in test_sampler.cpp
-
     // math/statmath.h — EWMA, median, mean, EWM, integrator
     RUN_TEST(test_ewma_seeds_on_first_finite);
     RUN_TEST(test_ewma_ignores_nan);
@@ -215,6 +205,17 @@ void setup() {
     RUN_TEST(test_conf_required_missing_long_throws);
     RUN_TEST(test_conf_required_missing_string_throws);
     RUN_TEST(test_conf_operator_bool);
+    RUN_TEST(test_conf_remove_drops_line_and_keeps_rest);
+    RUN_TEST(test_conf_remove_strips_inline_comment_too);
+    RUN_TEST(test_conf_remove_missing_key_returns_false);
+
+    RUN_TEST(test_float16);
+
+    RUN_TEST(test_meter);
+    RUN_TEST(test_meter_storage);
+
+    RUN_TEST(test_LinearTransform);
+    // RUN_TEST(test_ADCSampler); // body is #if 0'd in test_sampler.cpp
 
     UNITY_END();
 }

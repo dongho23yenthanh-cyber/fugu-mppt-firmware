@@ -111,6 +111,9 @@ void test_conf_getstring();
 void test_conf_required_missing_long_throws();
 void test_conf_required_missing_string_throws();
 void test_conf_operator_bool();
+void test_conf_remove_drops_line_and_keeps_rest();
+void test_conf_remove_strips_inline_comment_too();
+void test_conf_remove_missing_key_returns_false();
 
 void setup() {
     UNITY_BEGIN();
@@ -202,6 +205,9 @@ void setup() {
     RUN_TEST(test_conf_required_missing_long_throws);
     RUN_TEST(test_conf_required_missing_string_throws);
     RUN_TEST(test_conf_operator_bool);
+    RUN_TEST(test_conf_remove_drops_line_and_keeps_rest);
+    RUN_TEST(test_conf_remove_strips_inline_comment_too);
+    RUN_TEST(test_conf_remove_missing_key_returns_false);
 
     RUN_TEST(test_float16);
 

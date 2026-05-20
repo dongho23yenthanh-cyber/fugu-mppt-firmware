@@ -244,6 +244,19 @@ static void cmdSetConfig(cmd *c) {
         conf.add({{key.c_str(), val.c_str()}}, true);
 }
 
+// del-config <file> <key>  — remove a key; the whole line (incl. inline comment) is deleted.
+static void cmdDelConfig(cmd *c) {
+    Command cc(c);
+    if (cc.countArgs() < 2) CMD_FAIL("del-config: expected <file> <key>");
+    auto fn = "/littlefs/conf/" + cc.getArg(0).getValue();
+    auto key = cc.getArg(1).getValue();
+    ConfFile conf{fn.c_str()};
+    if (conf.remove(key.c_str()))
+        ESP_LOGI("main", "Deleted conf '%s:%s'", fn.c_str(), key.c_str());
+    else
+        CMD_FAIL("del-config: key '%s' not found in %s", key.c_str(), fn.c_str());
+}
+
 // get-config <file> [key]  — print one key, or dump the whole file.
 static void cmdGetConfig(cmd *c) {
     Command cc(c);
@@ -348,6 +361,7 @@ void setupCli() {
     cli.addSingleArgCmd("iset", cmdIset);
 
     cli.addBoundlessCmd("set-config", cmdSetConfig);
+    cli.addBoundlessCmd("del-config", cmdDelConfig);
     cli.addBoundlessCmd("get-config", cmdGetConfig);
     cli.addBoundlessCmd("svc", cmdService);
 }

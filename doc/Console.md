@@ -49,6 +49,7 @@ Hardware and runtime parameters live in `.conf` files on the device's littlefs p
 | Command | Description |
 | --- | --- |
 | `set-config <file> <key> <value>` | Set a key in a config file and persist it to flash. |
+| `del-config <file> <key>` | Remove a key; the whole line, including any inline comment, is deleted. |
 | `get-config <file> [<key>]` | Print a single key, or dump every key if `<key>` is omitted. |
 
 Examples:
@@ -60,6 +61,8 @@ set-config converter.conf vout_max 28.5
 set-config mqtt.conf broker_uri mqtt://192.168.1.134:1882
 set-config charger.conf cell_voltage_eoc 3.53
 set-config sensor.conf vout_filt_len 10
+
+del-config sensor.conf vout_filt_len
 
 get-config mqtt.conf broker_uri
 get-config converter.conf

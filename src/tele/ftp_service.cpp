@@ -67,7 +67,7 @@ bool FtpService::onStart() {
     if (ftpUser.empty() || ftpPass.empty()) {
         ftpUser = "user";
         ftpPass = getChipId();
-        ESP_LOGW("ftp", "no ftp credentials set, using %s/%s", ftpUser.c_str(), ftpPass.c_str()); // TODO dont send on mqtt
+        ESP_LOGW("ftp", "no ftp credentials set, using usr=%s pw=%s", ftpUser.c_str(), ftpPass.c_str()); // TODO dont send on mqtt
     }
 
     ftpSrv.setCallback(_callback);

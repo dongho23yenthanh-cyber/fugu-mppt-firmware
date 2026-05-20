@@ -135,6 +135,7 @@ void MqttService::init(const ConfFile &conf) {
 
     esp_mqtt_client_config_t mqtt_cfg{};
     mqtt_cfg.broker.address.uri = brokerUri.c_str();
+    mqtt_cfg.task.stack_size = 8192; // default ~6 KB overflows during the transport-error storm on WiFi teardown
     //mqtt_cfg.broker.verification.
     if (!username.empty())mqtt_cfg.credentials.username = username.c_str();
     if (!password.empty())mqtt_cfg.credentials.authentication.password = password.c_str();

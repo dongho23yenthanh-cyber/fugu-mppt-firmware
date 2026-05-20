@@ -1,4 +1,5 @@
 #include <unity.h>
+#include <memory>
 #include "metering.h"
 
 void test_integrator() {
@@ -47,15 +48,19 @@ void test_meter() {
     TEST_ASSERT_TRUE(ring.ringPtr == 1);
     TEST_ASSERT_TRUE(ring.ringBuf[0].hasEnergy());
 
-    //ring.add(DailyEnergyMeterState<float>(2.f));
+    DailyEnergyMeterState<float16> day2{};
+    day2.energyYield = 2.f;
+    ring.add(day2);
     TEST_ASSERT_TRUE(ring.totalDays == 2);
-    TEST_ASSERT_TRUE(ring.ringPtr == 0);
+    TEST_ASSERT_TRUE(ring.ringPtr == 0); // (1+1) % 2 wraps
     TEST_ASSERT_FLOAT_WITHIN(1e-6f, 2.f, ring.ringBuf[1].energyYield.toFloat());
 
-    //ring.add({3.f});
+    DailyEnergyMeterState<float16> day3{};
+    day3.energyYield = 3.f;
+    ring.add(day3);
     TEST_ASSERT_TRUE(ring.totalDays == 3);
     TEST_ASSERT_TRUE(ring.ringPtr == 1);
-    TEST_ASSERT_TRUE(ring.ringBuf[0].energyYield == 3);
+    TEST_ASSERT_TRUE(ring.ringBuf[0].energyYield == 3); // ringBuf[0] overwritten
 
     ring.clear();
     TEST_ASSERT_TRUE(ring.totalDays == 0);
@@ -66,31 +71,32 @@ void test_meter() {
 }
 
 void test_meter_storage() {
-    // always start with a fresh test partition
+    // format + mount the dedicated test partition (64k) at /littlefs_test, isolated from
+    // the production /littlefs. format=true gives a clean slate every run.
     TEST_ASSERT_TRUE(mountLFS("littlefs_test", true));
 
+    // DailyRingStorage embeds DailyRingStorageState<1000> (~14 KB). The Arduino loop
+    // task that runs the tests has only an 8 KB stack (CONFIG_ARDUINO_LOOP_STACK_SIZE),
+    // so the object must live on the heap or it overflows the stack and corrupts memory.
     {
-        DailyRingStorage store{"/littlefs/test_daily"};
-        TEST_ASSERT_FALSE(store.load());
-        TEST_ASSERT_EQUAL(0, store.getNumTotalDays());
+        auto store = std::make_unique<DailyRingStorage>("/littlefs_test/test_daily");
+        TEST_ASSERT_FALSE(store->load());
+        TEST_ASSERT_EQUAL(0, store->getNumTotalDays());
 
         DailyEnergyMeterState day{};
         day.energyYield = 2.5f;
-        store.add(day);
-        ESP_LOGI("dbg", "added %f", store.state.ringBuf[0].energyYield.toFloat());
+        store->add(day);
+        ESP_LOGI("dbg", "added %f", store->state.ringBuf[0].energyYield.toFloat());
 
-        TEST_ASSERT_EQUAL(1, store.getNumTotalDays());
-        TEST_ASSERT_EQUAL(1, store.getAllDays().size());
-        //TEST_ASSERT_EQUAL(2.5f, store.state.getAllDays()[0].energyDay.toFloat());
+        TEST_ASSERT_EQUAL(1, store->getNumTotalDays());
+        TEST_ASSERT_EQUAL(1, store->getAllDays().size());
         TEST_ASSERT_FLOAT_WITHIN(1e-3f, 2.5f, day.energyYield.toFloat());
-        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 2.5f, store.getAllDays().back().energyYield);
+        TEST_ASSERT_FLOAT_WITHIN(1e-3f, 2.5f, store->getAllDays().back().energyYield);
     }
 
-
-    DailyRingStorage store2{"/littlefs/test_daily"};
-    TEST_ASSERT_TRUE(store2.load());
-    TEST_ASSERT_EQUAL(1, store2.getNumTotalDays());
-    TEST_ASSERT_EQUAL(1, store2.getAllDays().size());
-    TEST_ASSERT_EQUAL(2.5f, store2.getAllDays()[0].energyYield);
-
+    auto store2 = std::make_unique<DailyRingStorage>("/littlefs_test/test_daily");
+    TEST_ASSERT_TRUE(store2->load());
+    TEST_ASSERT_EQUAL(1, store2->getNumTotalDays());
+    TEST_ASSERT_EQUAL(1, store2->getAllDays().size());
+    TEST_ASSERT_EQUAL(2.5f, store2->getAllDays()[0].energyYield);
 }

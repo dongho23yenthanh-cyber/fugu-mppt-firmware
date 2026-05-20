@@ -6,6 +6,10 @@ if ($ENV{RUN_TESTS})
             "../test/test_math.cpp"
             "../test/test_charger.cpp"
             "../test/test_ascii.cpp"
+            "../test/test_statmath.cpp"
+            "../test/test_pd_control.cpp"
+            "../test/test_buck.cpp"
+            "../test/test_conf.cpp"
     )
 elseif ($ENV{MAIN_SRC})
     set(MAIN_SRC $ENV{MAIN_SRC})

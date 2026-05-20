@@ -116,9 +116,12 @@ private:
     [[nodiscard]] bool shouldRelease(float vcell_high, float ahSinceFull) const {
         // in case sth is wrong with our coulomb counter we release based on voltage
         constexpr float RECHARGE_VFLOOR_BAND = 0.05f;
-        if (vcell_high < p.cv_min - RECHARGE_VFLOOR_BAND) return true;
-        if (std::isfinite(p.Cbat) && p.recharge_dod > 0.f
-            && ahSinceFull > p.recharge_dod * p.Cbat)
+        if (vcell_high < p.cv_min - RECHARGE_VFLOOR_BAND) {
+            ESP_LOGW("charger", "Termination release due to vcell_high(%.3f)<%.3f - %.3f", vcell_high, p.cv_min,
+                     RECHARGE_VFLOOR_BAND);
+            return true;
+        }
+        if (std::isfinite(p.Cbat) && p.recharge_dod > 0.f && ahSinceFull > p.recharge_dod * p.Cbat)
             return true;
         return false;
     }
@@ -195,7 +198,7 @@ public:
             float vPin = _vPinFilt.get();
             if (isnan(vpack_pin) or vPin < vpack_pin - 0.01f)
                 ESP_LOGI("charger", "vpPin:=%.3fV (raw=%.3f cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)",
-                         vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
+                     vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
             vpack_pin = vPin;
         } else if (!batDataOk && params.Vbat_fallback >= 0) {
             _vPinFilt.reset();

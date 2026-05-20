@@ -72,3 +72,5 @@ etc/config-tool2
 etc/bat-resistance/out.csv
 
 etc/bat-resistance/result.png
+
+build_ble/

@@ -1,53 +1,114 @@
 # Serial Console
 
-You can send text commands on the UART (or telnet) to interact with the charger while it is running.
-It is also suitable to implement automated tests. Input and output are multiplexed across UART, USB serial JTAG and
+Send text commands over UART (or telnet, USB serial-JTAG, or MQTT) to interact with the charger
+while it is running. The same string protocol is used on every transport, which also makes it
+suitable for automated tests. Input and output are multiplexed across UART, USB serial-JTAG and
 telnet.
 
-Default baud rate for serial UART is 115200. Terminate command with `\n` or `\r` (new line).
-The charger confirms a successful command with:
+Default UART baud rate is 115200. Terminate each command with `\n` or `\r` (new line).
+A successfully handled command is confirmed with:
 
 ```
 OK: <cmd>
 ```
 
-# General Commands
+An unknown, malformed, or out-of-context command is rejected and logged as
+`unknown or unexpected command`.
 
-* `wifi on`, `wifi off` disable wifi and telemetry. disabled wifi usually increases the control loop rate.
-* `wifi-add <ssid>:<password>`
-* `ip` show IP address
-* `restart`: reset the MCU
-* `speed <float>` set tracking speed (default 1.0)
-* `fan <float>` set fan speed 0-100
-* `led <RRGGBB>`, `led <RGB>` set the LED rgb color in hex or short hex (e.g. `led 33ff33` or `led 3f3`)
-* `sweep`: starts a global MPP scan / search
-* `+<int>`, `-<int>` manual perturb the converter duty cycle (for testing)
-* `reset-lag`: resets max lag statistic and displays [rtcount](Real-time%20Counter.md) statistics
-* `scan-i2c`: run a i2c bus scan
-* `sensor`: display sensor data
-* `mem`: display heap and PSRAM sizes
-* `ota <url>`: download and flash a new app image from a HTTP(S) URL
-* `hostname <hostname>` set device's hostname
-* `set-config <file> <key> <value>` set a config file and write it to flash
+# System Commands
+
+| Command | Description |
+| --- | --- |
+| `wifi on`, `wifi off` | Enable / disable Wi-Fi (and with it all network services). Disabling Wi-Fi usually increases the control-loop rate. `wifi off` also clears the stored SSID in NVS. |
+| `wifi add <ssid>:<password>` | Store a new Wi-Fi network. |
+| `ip` | Show the local IP address. |
+| `hostname <hostname>` | Set the device hostname (persisted in NVS, applied on next boot). |
+| `ota <url>` | Download and flash a new app image from an HTTP(S) URL. Halts the converter and ADC during the update. |
+| `restart` (aliases `reset`, `reboot`) | Reset the MCU. |
+
+# Control & Diagnostics
+
+| Command | Description |
+| --- | --- |
+| `fan <float>` | Set fan speed, 0–100. |
+| `led <RRGGBB>`, `led <RGB>` | Set the LED color in hex or short hex (e.g. `led 33ff33` or `led 3f3`). |
+| `sensor` | Dump per-sensor state (last/raw value, EWM average and std, adaptive notch filter stats). |
+| `mem` | Display heap and PSRAM size (total and free). |
+| `rt-stats` | Print FreeRTOS per-task runtime statistics (sampled over 1 s). |
+| `reset-lag` | Reset the max-lag statistic and print [rtcount](Real-time%20Counter.md) timings. |
+| `scan-i2c` | Run an I²C bus scan. |
+| `adc-restart` | Re-initialize the ADC backends. |
+| `adc-reset` | Reset the ADC peripherals. |
+
+# Config Commands
+
+Hardware and runtime parameters live in `.conf` files on the device's littlefs partition under
+`/littlefs/conf/`. These commands edit them in place without re-flashing.
+
+| Command | Description |
+| --- | --- |
+| `set-config <file> <key> <value>` | Set a key in a config file and persist it to flash. |
+| `get-config <file> [<key>]` | Print a single key, or dump every key if `<key>` is omitted. |
+
+Examples:
+
+```
+set-config coil.conf L0 50
+set-config limits.conf iout_max 35
+set-config converter.conf vout_max 28.5
+set-config mqtt.conf broker_uri mqtt://192.168.1.134:1882
+set-config charger.conf cell_voltage_eoc 3.53
+set-config sensor.conf vout_filt_len 10
+
+get-config mqtt.conf broker_uri
+get-config converter.conf
+```
+
+# Charger Commands
+
+| Command | Description |
+| --- | --- |
+| `vset <float>` | Set the battery max voltage (`Vbat_max`), range 0–999. |
+| `iset <float>` | Set the battery current limit (`Ibat_lim`), range 0–999. |
+
+These override the running charger parameters only; use `set-config charger.conf …` to persist.
 
 # Manual PWM Commands
 
-* `dc <int>` set the converter duty cycle and put the charger in manual PWM mode. No tracking, protection only.
-* `+<int>`, `-<int>` relative converter duty cycle perturbation step. be careful with large positive jumps, this can cause
-  extreme
-  current transients destroying the switches. also availble in tracking mode to test tracker recovery.
-* `sync [0, 1, forced]`:  disable/enable low-side switch (i.e. diode emulation, sync rectification). `forced` puts converter into forced PWM mode and disables various reverse current checks
-* `bf-enable`, `bf-disable`: enable/disable the backflow switch. An enabled back-flow switch will allow current flow
-  from the output to the input (bat to solar).
-* `mppt` switches back to MPP tracking mode
-* `short-ls`
+| Command | Description |
+| --- | --- |
+| `dc <int>` | Set the converter duty cycle directly and switch the charger to manual PWM mode (no tracking, protection still active). A non-zero duty enables sync rectification and the backflow switch unless `reverse_current_paranoia` is set. |
+| `+<int>`, `-<int>` | Relative duty-cycle perturbation step. Available both in manual and tracking mode (to test tracker recovery). **Be careful with large positive jumps** — they can cause extreme current transients that destroy the switches. |
+| `mppt` | Switch back to MPP tracking mode (only valid while in manual PWM mode). |
+| `sweep` | Start a global MPP scan / search. |
+| `speed <float>` | Set tracking speed scale, range 0–10 (default 1.0). |
+
+The following commands require manual PWM mode:
+
+| Command | Description |
+| --- | --- |
+| `sync [on\|1\|off\|0\|forced]` | Disable/enable the low-side switch (diode emulation / synchronous rectification). `forced` puts the converter into forced-PWM mode and disables the various reverse-current checks. |
+| `bf <0\|1>`, `panel <0\|1>` | Disable/enable the backflow (panel) switch. When enabled it allows current to flow from output to input (battery to solar). Requires a configured backflow switch. |
+| `short-ls` | Short the low-side switch. Only valid in boost topology with `Vin` near zero (e.g. for a controlled output discharge). |
+
+# Service Commands
+
+The optional non-RT subsystems (`mqtt`, telemetry, `ftp`, `telnet`, `lcd`, `scope`) are managed as
+services. Each has its own state, log level, and `enabled` flag persisted in its conf file.
+
+| Command | Description |
+| --- | --- |
+| `service` / `service list` | List all services with state, log level and enabled flag. |
+| `service start <name>` | Enable (persist) and start a service. |
+| `service stop <name>` | Disable (persist) and stop a service. |
+| `service reload <name>` | Reload a service's configuration. |
+| `service log <name> <error\|warn\|info>` | Set and persist a service's log level. |
 
 # Telnet
 
 Use any telnet client to connect on port 23. No password is required. Only one connection at a time.
 
-
 Connect from Home Assistant:
 
-* install "Terminal & SSH" add-on
-* in add-on Configuration add `busybox-extras` to Packages
+* install the "Terminal & SSH" add-on
+* in the add-on Configuration, add `busybox-extras` to Packages

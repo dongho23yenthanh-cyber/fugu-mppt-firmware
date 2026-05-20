@@ -19,6 +19,8 @@
 
 #import context  # Ensures paho is in PYTHONPATH
 
+import os
+
 import paho.mqtt.client as mqtt
 from paho.mqtt.enums import CallbackAPIVersion
 
@@ -49,7 +51,7 @@ mqttc.on_connect = on_connect
 mqttc.on_subscribe = on_subscribe
 # Uncomment to enable debug messages
 # mqttc.on_log = on_log
-mqttc.username_pw_set("pv", "0ffgrid")
+mqttc.username_pw_set(os.environ.get("MQTT_USER", "pv"), os.environ["MQTT_PASS"])
 mqttc.connect("homeassistant.local", 1882, 60)
 mqttc.subscribe("bat_caravan/cell_voltages/max")
 

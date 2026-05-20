@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import os
 import sys
 
 import paho.mqtt.client as mqtt
@@ -54,7 +55,7 @@ mqttc.on_subscribe = on_subscribe
 
 topic = "pv/log/+"
 
-mqttc.username_pw_set("pv", "0ffgrid")
+mqttc.username_pw_set(os.environ.get("MQTT_USER", "pv"), os.environ["MQTT_PASS"])
 logger.info('connecting broker..')
 mqttc.connect("havan.local", 1882, 60)
 # pv/log/fugu-esp32s3-100100C40A24

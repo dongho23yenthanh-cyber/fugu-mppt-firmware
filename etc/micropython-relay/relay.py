@@ -12,6 +12,8 @@ import machine
 import network
 import urequests
 
+from secrets import INFLUX_TOKEN  # local secrets.py, gitignored
+
 wlan = network.WLAN()
 wlan.active(True)
 
@@ -48,7 +50,7 @@ while True:
         buf += data
         if len(buf) >= 20000:
             print('sending', len(buf), 'bytes')
-            influxdb_write("influx.fabi.me", "open_pe", "openpe", "0ffgrid", buf)
+            influxdb_write("influx.fabi.me", "open_pe", "openpe", INFLUX_TOKEN, buf)
             buf = b''
 
 import mip

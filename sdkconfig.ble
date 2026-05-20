@@ -1,0 +1,47 @@
+# NimBLE config for the BLE NUS console. Layered on top of sdkconfig.defaults only for
+# `WITH_BLE=1` builds (see top-level CMakeLists.txt) so non-BLE firmware keeps its flash budget.
+#
+# Build:  WITH_BLE=1 idf.py build
+# Verify: build/fugu-firmware.bin must stay < 1,871,872 B (the OTA slot in partitions.csv).
+
+CONFIG_BT_ENABLED=y
+
+# Use the NimBLE host (smaller than Bluedroid); this deselects Bluedroid via the Kconfig choice.
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# Keep Bluetooth entirely off the RT core. Core 1 is reserved for loopRT (ADC/MPPT/PWM); the
+# controller ISR/task and the NimBLE host task must live on core 0 like the rest of networking.
+CONFIG_BT_CTRL_PINNED_TO_CORE_0=y
+CONFIG_BT_NIMBLE_PINNED_TO_CORE_0=y
+
+# Peripheral/broadcaster only (we advertise + serve GATT; we never scan or connect out). Dropping
+# the central/observer roles and capping connections trims flash and RAM.
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+# CONFIG_BT_NIMBLE_ROLE_CENTRAL is not set
+# CONFIG_BT_NIMBLE_ROLE_OBSERVER is not set
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+
+# Persist bonding keys (LTK/IRK) in NVS so a paired central reconnects after a device
+# reboot without re-pairing. Default is 'n', which wipes bonds every boot — the central
+# then keeps a stale bond and reconnect fails with "Connection attempt failed". The Arduino
+# BLE wrapper already calls ble_store_config_init() in BLEDevice::init(), so this is all that
+# is needed. Stored in the default NVS partition's "nimble_bond" namespace; up to MAX_BONDS (3).
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+
+# --- Radio power / thermals ---
+# Without modem sleep the BLE RF front-end and radio PLL stay powered continuously (they never
+# power down between advertising/connection events), adding a steady ~tens-of-mA load that runs the
+# S3 ~20 C hotter whenever BT is up. Mode 1 (the only mode the S3 controller supports) lets the
+# controller idle the radio between events. LPCLK = main 40 MHz XTAL is the safe default (no 32.768
+# kHz crystal required); if the board has an external 32k crystal, CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL
+# saves more by letting the main XTAL sleep too. The _EFF symbols are derived by confgen, don't set them.
+CONFIG_BT_CTRL_MODEM_SLEEP=y
+CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y
+CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y
+
+# The NUS console is near-field provisioning/diagnostics; +9 dBm (the default) is overkill. 0 dBm
+# cuts TX burst current with ample range for a phone/laptop in the same room. Bump back up if you
+# need range in the field.
+# CONFIG_BT_CTRL_DFT_TX_POWER_LEVEL_P9 is not set
+CONFIG_BT_CTRL_DFT_TX_POWER_LEVEL_N0=y

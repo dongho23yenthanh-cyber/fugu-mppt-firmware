@@ -151,6 +151,13 @@ protected:
     // Override for services whose "Running" depends on a live condition (e.g. MQTT connected).
     virtual ServiceState liveState() const { return _state; }
 
+public:
+    // Optional one-line, human-readable live detail shown after the service in `service list`
+    // (e.g. "connected", client count). Empty by default.
+    virtual std::string statusDetail() const { return {}; }
+
+protected:
+
     void fail(const char *why) {
         _state = ServiceState::Failed;
         ESP_LOGE("service", "'%s' failed: %s", _name, why ? why : "?");
@@ -198,6 +205,14 @@ public:
     void tickAll() {
         for (auto *s: _services)
             s->tick();
+    }
+
+    // Cleanly stop every running service (e.g. before a reboot) so their tasks tear down while the
+    // network is still up. Stopping MQTT here ends mqtt_task before WiFi drops, avoiding the
+    // transport-error storm that otherwise overflows its stack on the way down.
+    void stopAll() {
+        for (auto *s: _services)
+            if (s->state() != ServiceState::Stopped) s->stop();
     }
 };
 

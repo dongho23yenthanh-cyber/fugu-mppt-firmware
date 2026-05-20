@@ -30,6 +30,8 @@ private:
 
 public:
     bool isConnected()const  { return mqttConnected; }
+
+    std::string statusDetail() const override { return isConnected() ? "connected" : ""; }
     void (*onConnected)() = nullptr;
 
     void subscribeTopic(const std::string &topic, MqttMsgCallback fn);

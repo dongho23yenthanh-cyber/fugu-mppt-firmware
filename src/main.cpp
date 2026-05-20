@@ -687,7 +687,7 @@ void loopCore0_LF(void *arg) {
 void systemRestart() {
     converter.disable();
     UART_LOG("Rebooting in 200ms");
-    telnetService.stop();
+    g_services.stopAll(); // tear down MQTT/telnet/etc. while WiFi is still up (see mqtt_task overflow)
     delay(200);
     ESP.restart();
 }

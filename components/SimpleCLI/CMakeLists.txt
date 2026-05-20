@@ -1,0 +1,19 @@
+idf_component_register(
+        SRCS
+        SimpleCLI/src/SimpleCLI.cpp
+        SimpleCLI/src/Command.cpp
+        SimpleCLI/src/Argument.cpp
+        SimpleCLI/src/CommandError.cpp
+        SimpleCLI/src/c/arg.c
+        SimpleCLI/src/c/cmd.c
+        SimpleCLI/src/c/cmd_error.c
+        SimpleCLI/src/c/comparator.c
+        SimpleCLI/src/c/parser.c
+        INCLUDE_DIRS
+            SimpleCLI/src
+            SimpleCLI/src/c
+        REQUIRES
+            arduino-esp32
+)
+
+project(SimpleCLI)

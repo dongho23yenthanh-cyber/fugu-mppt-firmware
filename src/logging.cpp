@@ -227,7 +227,10 @@ static int vprintf_mux(const char *fmt, va_list argptr) {
     int r = old_vprintf(fmt, argptr);
 
     if (log_telnet or logCallbackCount) {
-        int l = vsnprintf(loc_buf, sizeof(loc_buf), fmt, argptr);
+        va_list ap2;            // argptr is spent by old_vprintf; the mirror needs its own copy
+        va_copy(ap2, argptr);
+        int l = vsnprintf(loc_buf, sizeof(loc_buf), fmt, ap2);
+        va_end(ap2);
         if (l > 0) {
             //enqueue_telnet_log(loc_buf, l);
             if (log_telnet) log_telnet->write((uint8_t *) loc_buf, l);

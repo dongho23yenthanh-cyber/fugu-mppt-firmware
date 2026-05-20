@@ -2,12 +2,18 @@
 //#include <task.h>
 #include <Arduino.h>
 
+#include "storage/key-value.h"
+
 //#warning "Test main"
 
 // src/main.cpp defines this in the normal build; with RUN_TESTS=1 the entry point
 // is swapped to this file, so we provide our own definition. wallClockUs() reads it,
 // but nothing in tests writes — that's fine, time-based tests pass explicit timestamps.
 unsigned long loopWallClockUs_ = 0;
+
+// Same swap: src/main.cpp owns the real nvs; telemetry.cpp (linked into the test
+// build) references it, so define it here too.
+KeyValueStorage nvs{};
 
 void test_meter();
 
@@ -65,6 +71,46 @@ void test_ascii_multi_series_uses_distinct_colors();
 void test_ascii_multi_series_unequal_length_does_not_crash();
 void test_ascii_multi_series_with_one_empty_renders_other();
 void test_ascii_regression_plot_h_first_bin_nan();
+
+// math/statmath.h
+void test_ewma_seeds_on_first_finite();
+void test_ewma_ignores_nan();
+void test_ewma_converges_to_constant();
+void test_ewma_reset_and_span();
+void test_ewma_npass_converges_to_constant();
+void test_median3_first_sample_passthrough();
+void test_median3_rejects_spike();
+void test_median3_picks_middle();
+void test_median5_picks_middle();
+void test_median5_rejects_spike();
+void test_mean_accumulator_pop_resets();
+void test_ewm_mean_tracks_and_var_zero_for_constant();
+void test_integrator_constant_rate();
+void test_integrator_drops_gap_over_maxdt();
+void test_integrator_reset_and_restore();
+
+// pd_control.h
+void test_pd_proportional_only();
+void test_pd_first_tick_has_zero_derivative();
+void test_pd_derivative_on_step();
+void test_pd_normalize_relative_error();
+void test_pd_reset_clears_derivative();
+void test_pd_smooth_setpoint_lags_step();
+
+// buck.h
+void test_buck_ripple_current();
+void test_buck_dcm_ccm_transition_and_hysteresis();
+void test_buck_rect_ctrl_ratio();
+void test_buck_current_sweep_no_crash();
+
+// conf.h
+void test_conf_getlong_bases();
+void test_conf_getlong_default_when_missing();
+void test_conf_getfloat();
+void test_conf_getstring();
+void test_conf_required_missing_long_throws();
+void test_conf_required_missing_string_throws();
+void test_conf_operator_bool();
 
 void setup() {
     UNITY_BEGIN();
@@ -130,11 +176,45 @@ void setup() {
     RUN_TEST(test_LinearTransform);
     // RUN_TEST(test_ADCSampler); // body is #if 0'd in test_sampler.cpp
 
-    /**
-     * TODO
-     *  math/statmath stuff (EWM, med3)
-     *  float16
-     */
+    // math/statmath.h — EWMA, median, mean, EWM, integrator
+    RUN_TEST(test_ewma_seeds_on_first_finite);
+    RUN_TEST(test_ewma_ignores_nan);
+    RUN_TEST(test_ewma_converges_to_constant);
+    RUN_TEST(test_ewma_reset_and_span);
+    RUN_TEST(test_ewma_npass_converges_to_constant);
+    RUN_TEST(test_median3_first_sample_passthrough);
+    RUN_TEST(test_median3_rejects_spike);
+    RUN_TEST(test_median3_picks_middle);
+    RUN_TEST(test_median5_picks_middle);
+    RUN_TEST(test_median5_rejects_spike);
+    RUN_TEST(test_mean_accumulator_pop_resets);
+    RUN_TEST(test_ewm_mean_tracks_and_var_zero_for_constant);
+    RUN_TEST(test_integrator_constant_rate);
+    RUN_TEST(test_integrator_drops_gap_over_maxdt);
+    RUN_TEST(test_integrator_reset_and_restore);
+
+    // pd_control.h
+    RUN_TEST(test_pd_proportional_only);
+    RUN_TEST(test_pd_first_tick_has_zero_derivative);
+    RUN_TEST(test_pd_derivative_on_step);
+    RUN_TEST(test_pd_normalize_relative_error);
+    RUN_TEST(test_pd_reset_clears_derivative);
+    RUN_TEST(test_pd_smooth_setpoint_lags_step);
+
+    // buck.h — diode-emulation / sync-rect math
+    RUN_TEST(test_buck_ripple_current);
+    RUN_TEST(test_buck_dcm_ccm_transition_and_hysteresis);
+    RUN_TEST(test_buck_rect_ctrl_ratio);
+    RUN_TEST(test_buck_current_sweep_no_crash);
+
+    // conf.h — ConfFile getters
+    RUN_TEST(test_conf_getlong_bases);
+    RUN_TEST(test_conf_getlong_default_when_missing);
+    RUN_TEST(test_conf_getfloat);
+    RUN_TEST(test_conf_getstring);
+    RUN_TEST(test_conf_required_missing_long_throws);
+    RUN_TEST(test_conf_required_missing_string_throws);
+    RUN_TEST(test_conf_operator_bool);
 
     UNITY_END();
 }

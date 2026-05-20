@@ -18,5 +18,8 @@ dependencies:
   #   # `public` flag doesn't have an effect dependencies of the `main` component.
   #   # All dependencies of `main` are public by default.
   #   public: true
-  espressif/arduino-esp32: ^3.3.2
+  # 3.3.8 added BLEDevice::getLocalIRK() which calls ble_gap_read_local_irk(), a NimBLE GAP API not
+  # present in ESP-IDF 5.5.1's bundled NimBLE -> build break for WITH_BLE. Cap below 3.3.8 until the
+  # IDF NimBLE catches up. 3.3.7 is the last compatible release.
+  espressif/arduino-esp32: '>=3.3.2,<3.3.8'
   joltwallet/littlefs: ^1.20.2

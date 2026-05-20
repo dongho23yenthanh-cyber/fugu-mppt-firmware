@@ -15,11 +15,14 @@
 #include "console.h"   // loopConsole
 #include "logging.h"   // addLogCallback / removeLogCallback, ESP_LOG*
 #include "etc/readerwriterqueue.h"
+#include "etc/ota_ble.h" // OTA-over-BLE firmware push (FW characteristic data sink)
 
 // Nordic UART Service. RX = client->device (write commands), TX = device->client (notify output).
+// FW = client->device write-no-response firmware bytes (OTA push, bypasses the console line parser).
 #define NUS_SERVICE_UUID "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 #define NUS_RX_CHAR_UUID "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 #define NUS_TX_CHAR_UUID "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+#define NUS_FW_CHAR_UUID "6E400004-B5A3-F393-E0A9-E50E24DCCA9E"
 
 static const char *TAG = "ble";
 
@@ -138,6 +141,15 @@ class RxCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
+// Firmware-data sink for OTA push. Runs on the NimBLE host task: only copies bytes into the OTA ring
+// (otaBleStageBytes never touches flash); the network-loop tick drains them to the partition.
+class FwRxCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *c) override {
+        String v = c->getValue();
+        otaBleStageBytes((const uint8_t *) v.c_str(), v.length());
+    }
+};
+
 class ServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer *s) override {
         deviceConnected = true;
@@ -151,6 +163,7 @@ class ServerCallbacks : public BLEServerCallbacks {
 
     void onDisconnect(BLEServer *s) override {
         deviceConnected = false;
+        if (otaBleActive()) otaBleRequestAbort(); // net-loop tick aborts; never free OTA state on the host task
         removeLogCallback(bleLogWrite);
         { std::lock_guard<std::recursive_mutex> lk(txMutex); txBuf.clear(); txHead = 0; }
         ESP_LOGI(TAG, "client disconnected, re-advertising");
@@ -167,6 +180,7 @@ class TxCallbacks : public BLECharacteristicCallbacks {
 };
 
 static RxCallbacks rxCallbacks;
+static FwRxCallbacks fwRxCallbacks;
 static ServerCallbacks serverCallbacks;
 static TxCallbacks txCallbacks;
 
@@ -222,6 +236,12 @@ void bleConsoleBegin(const std::string &deviceName, const std::string &security,
     BLECharacteristic *rxChar = svc->createCharacteristic(NUS_RX_CHAR_UUID, writeProps);
     rxChar->setCallbacks(&rxCallbacks);
 
+    // OTA firmware push: write-no-response only (high-throughput), same pairing requirement as RX.
+    uint32_t fwProps = (writeProps & ~(uint32_t) BLECharacteristic::PROPERTY_WRITE)
+                       | BLECharacteristic::PROPERTY_WRITE_NR;
+    BLECharacteristic *fwChar = svc->createCharacteristic(NUS_FW_CHAR_UUID, fwProps);
+    fwChar->setCallbacks(&fwRxCallbacks);
+
     svc->start();
 
     BLEAdvertising *adv = BLEDevice::getAdvertising();
@@ -251,6 +271,7 @@ void bleConsoleLoop(unsigned long nowMs) {
     if (!bleStarted) return;
     loopConsole(bleRead, bleWrite, nowMs);
     bleTxDrain(nowMs); // flush queued console/log output, paced by NimBLE buffer availability
+    otaBleTick(nowMs); // drain any staged OTA firmware bytes to flash (no-op when not updating)
 }
 
 bool bleConsoleConnected() { return deviceConnected; }

@@ -16,6 +16,7 @@
 #include "storage/key-value.h"  // KeyValueStorage
 #include "tele/telemetry.h"     // connect_wifi_async, add_ap
 #include "etc/ota.h"            // doOta
+#include "etc/ota_ble.h"        // otaBleBegin/End/Abort (OTA push over BLE)
 
 // Defined in main.cpp's TU via etc/perf.h (which defines, not just declares, it — so we can't
 // include that header here without a duplicate definition). Forward-declare and let the linker
@@ -183,6 +184,27 @@ static void cmdOta(cmd *c) {
     adcSampler.halted = true; // disable ADC reading
     doOta(url.c_str());
     adcSampler.halted = false;
+}
+
+// otab begin <size> <sha256hex> | end | abort  — OTA firmware push over BLE (no WiFi). `begin` arms the
+// receiver (halts the converter, erases the passive partition); the host then streams the image to the
+// NUS FW characteristic; `end` verifies the SHA-256 and reboots. ADC halt/restore lives inside otaBle*.
+static void cmdOtaBle(cmd *c) {
+    Command cc(c);
+    auto sub = cc.getArg(0).getValue();
+    if (sub == "begin") {
+        if (cc.countArgs() < 3) CMD_FAIL("otab: begin <size> <sha256hex>");
+        long size = cc.getArg(1).getValue().toInt();
+        auto sha = cc.getArg(2).getValue();
+        if (size <= 0 || sha.length() != 64) CMD_FAIL("otab: bad size/sha");
+        if (!otaBleBegin((uint32_t) size, sha.c_str())) CMD_FAIL("otab: begin rejected");
+    } else if (sub == "end") {
+        if (!otaBleEnd()) CMD_FAIL("otab: end failed"); // on success this reboots and never returns
+    } else if (sub == "abort") {
+        otaBleAbort();
+    } else {
+        CMD_FAIL("otab: expected begin|end|abort");
+    }
 }
 
 static void cmdRtStats(cmd *) {
@@ -369,6 +391,7 @@ void setupCli() {
     cli.addBoundlessCmd("del-config", cmdDelConfig);
     cli.addBoundlessCmd("get-config", cmdGetConfig);
     cli.addBoundlessCmd("svc", cmdService);
+    cli.addBoundlessCmd("otab", cmdOtaBle);
 }
 
 bool handleCommand(const String &inp) {

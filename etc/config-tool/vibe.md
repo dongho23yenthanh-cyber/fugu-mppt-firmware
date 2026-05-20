@@ -70,3 +70,10 @@ Then headlessly test it with the Web Serial API. If you can't test, stop and rep
 If you cannot automate the native serial port-chooser dialog and there is no way to grant a physical serial port,
 drive it with a mock navigator.serial whose port replays the real device's exact captured output.
 
+
+
+# bluetooth
+
+an additional way to read (and write) config files is a BLE GATT Nordic UART Service (NUS) console.
+It uses the same protocol as the wird serial console described earlier.
+Put another button next to the Serial Connect button to scan for a BLE device, connect to the NUS console and fetch the files.

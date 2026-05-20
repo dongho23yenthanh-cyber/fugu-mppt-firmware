@@ -1,5 +1,14 @@
 # todo
 
+- write a python script that interacts with the device over the serial console
+  - test all possible console commands in a meaningful order
+  - accept a cli parameter that informs if the device is using a mock setup (fake ADC readings, not driving any PWM)
+  
+- dod counter not working properly
+- fix ConfFile.add (no append)
+- add ConfFile.addFast()
+- update console documentation
+- bluetooth
 - questdb binary wire protocol
 - hardware tests https://github.com/fl4p/fugu-mppt-firmware/issues/44
     - backflow switch
@@ -123,6 +132,12 @@ add named components (mqtt, adc, etc)
     * status
     * setLogLevel()
     * config namespace?
+
+Add a small service architecture (similar to systemd services, but way simpler).
+A services wraps / abstracts a building block / module (such as BLE server, the pwm driver or another software component)
+Services have start(), stop(), reload(), loop() functions, and report a status (running, stopped, failed).
+Each service has its own log level, which can be adjusted at run-time.
+
 * user has access over console (e.g. restart, query stats, enable debug log, change config)
 
 

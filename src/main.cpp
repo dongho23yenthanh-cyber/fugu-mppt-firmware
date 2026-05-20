@@ -10,6 +10,7 @@
 
 #include "console.h"
 #include "console_ble.h"
+#include <SimpleCLI.h>
 #include "buck.h"
 #include "mppt.h"
 #include "service.h"
@@ -85,6 +86,11 @@ KeyValueStorage nvs{};
 
 void systemRestart();
 
+// Console command table (SimpleCLI). Built once by setupCli(); handleCommand() feeds it whole
+// command lines from every transport (UART/USB/telnet/BLE). See doc/Console.md.
+static SimpleCLI cli;
+void setupCli();
+
 static void loopNetwork_task(void *arg);
 
 static void loopRT(void *arg); // this is the critical one
@@ -96,6 +102,7 @@ const char* VER_STRING = "*** Fugu Firmware Version " FIRMWARE_VERSION " (" __DA
 
 void setup() {
     consoleInit();
+    setupCli();
     ESP_LOGI("main", "%s", VER_STRING);
 
     rtcount_test_cycle_counter();
@@ -174,7 +181,7 @@ void setup() {
                 if (!lcdService.initLcd()) {
                     ESP_LOGE("main", "Failed to init LCD");
                 } else {
-                    lcdService.lcd.displayMessage("Fugu FW v" FIRMWARE_VERSION "\n" __DATE__ " " __TIME__, 2000);
+                    lcdService.displayMessage("Fugu FW v" FIRMWARE_VERSION "\n" __DATE__ " " __TIME__, 2000);
                 }
             }
         } catch (const std::exception &ex) {
@@ -692,233 +699,321 @@ void systemRestart() {
     ESP.restart();
 }
 
-bool handleCommand(const String &inp) {
-    ESP_LOGI("main", "received serial command: '%s'", inp.c_str());
+// --- Console command callbacks ---------------------------------------------------------------
+// One handler per command, registered in setupCli(). SimpleCLI dispatches by the first token and
+// hands us a `cmd*`; wrap it in Command to read arguments. Validation that used to live in the
+// old if-chain conditions now lives in the handler body: on bad input we ESP_LOGW and return
+// (callbacks are void, so per-command failure can't propagate a bool — handleCommand only reports
+// parser-level errors like unknown command). Output still goes through the global ESP_LOG/UART_LOG
+// path (dispatch-only refactor; routing unchanged).
 
+static void cmdSync(cmd *c) {
+    if (!manualPwm) { ESP_LOGW("main", "sync: only in manual PWM (use 'dc N' first)"); return; }
+    auto arg = Command(c).getArg(0).getValue();
+    if (arg == "on" or arg == "1" or arg == "off" or arg == "0") {
+        converter.forcedPwm_(false);
+        converter.enableSyncRect(arg == "on" or arg == "1", true);
+    } else if (arg == "forced") {
+        converter.enableSyncRect(true);
+        converter.forcedPwm_(true);
+    } else {
+        ESP_LOGW("main", "sync: expected on|off|forced");
+    }
+}
 
-    if ((inp[0] == '+' or inp[0] == '-') && !adcSampler.isCalibrating() && inp.length() < 6 &&
-        inp.toInt() != 0 && std::abs(inp.toInt()) < converter.pwmCtrlMax) {
-        int pwmStep = inp.toInt();
-        //manualPwm = true; // don't switch to manual pwm here!
-        converter.pwmPerturb((int16_t) pwmStep);
-        ESP_LOGI("main", "Manual PWM step %i -> %i", pwmStep, (int) converter.getCtrlOnPwmCnt());
-    } else if (manualPwm && inp.startsWith("sync ")) {
-        auto arg = inp.substring(5);
-        if (arg == "on" or arg == "1" or arg == "off" or arg == "0") {
-            converter.forcedPwm_(false);
-            converter.enableSyncRect(arg == "on" or arg == "1", true);
-        } else if (arg == "forced") {
+static void cmdBflow(cmd *c) {
+    if (!manualPwm) { ESP_LOGW("main", "bf: only in manual PWM (use 'dc N' first)"); return; }
+    if (!mppt.bflow) { ESP_LOGW("main", "panel switch not configured"); return; }
+    auto newState = Command(c).getArg(0).getValue().toInt();
+    if (newState != 0 and newState != 1) { ESP_LOGW("main", "bf: expected 0|1"); return; }
+    if (mppt.bflow.state() != newState)
+        ESP_LOGI("main", "Set bflow state %i", (int) newState);
+    mppt.bflow.enable(newState);
+}
+
+static void cmdRestart(cmd *) { systemRestart(); }
+
+static void cmdMppt(cmd *) {
+    if (!manualPwm) { ESP_LOGW("main", "MPPT already enabled"); return; }
+    ESP_LOGI("main", "MPPT re-enabled");
+    manualPwm = false;
+}
+
+static void cmdDc(cmd *c) {
+    if (adcSampler.isCalibrating()) { ESP_LOGW("main", "dc: busy calibrating"); return; }
+    auto v = Command(c).getArg(0).getValue();
+    if (v.length() == 0) { ESP_LOGW("main", "dc: expected duty cycle"); return; }
+    auto dc = v.toInt();
+    if (dc < 0 || dc > converter.pwmCtrlMax) { ESP_LOGW("main", "dc: out of range [0,%i]", (int) converter.pwmCtrlMax); return; }
+
+    if (!manualPwm || converter.disabled()) {
+        ESP_LOGI("main", "Switched to manual PWM");
+        if (dc != 0 && !mppt.limits.reverse_current_paranoia) {
             converter.enableSyncRect(true);
-            converter.forcedPwm_(true);
-        } else {
-            return false;
+            mppt.bflow.enable(true);
         }
-    } else if (manualPwm && (inp.startsWith("bf ") || inp.startsWith("panel "))) {
-        if (!mppt.bflow) {
-            ESP_LOGW("main", "panel switch not configured");
-            return false;
-        }
-        auto newState = inp.substring(inp.indexOf(' ') + 1).toInt();
-        if (newState != 0 and newState != 1) return false;
-        if (mppt.bflow.state() != newState)
-            ESP_LOGI("main", "Set bflow state %i", newState);
-        mppt.bflow.enable(newState);
-    } else if (inp == "restart" or inp == "reset" or inp == "reboot") {
-        systemRestart();
-    } else if (inp == "mppt" && manualPwm) {
-        ESP_LOGI("main", "MPPT re-enabled");
-        manualPwm = false;
-    } else if (inp.startsWith("dc ") && !adcSampler.isCalibrating() && inp.length() <= 8
-               && inp.substring(3).toInt() >= 0 && inp.substring(3).toInt() <= converter.pwmCtrlMax) {
-        auto dc = inp.substring(3).toInt();
+    }
+    manualPwm = true;
+    mppt.setTargetDutyCycle(dc);
+}
 
-        if (!manualPwm || converter.disabled()) {
-            ESP_LOGI("main", "Switched to manual PWM");
-            if (dc != 0 && !mppt.limits.reverse_current_paranoia) {
-                converter.enableSyncRect(true);
-                mppt.bflow.enable(true);
-            }
-        }
+static void cmdShortLs(cmd *) {
+    if (converter.boost() && abs(sensors.Vin->ewm.avg.get()) < 0.05) {
         manualPwm = true;
-        mppt.setTargetDutyCycle(dc);
-        // pwm.enableLowSide(true);
-    } else if (inp == "short-ls") {
-        if (converter.boost() && abs(sensors.Vin->ewm.avg.get()) < 0.05) {
-            manualPwm = true;
-            converter.shortLs();
-        } else {
-            return false;
-        }
-    } else if (inp.startsWith("speed ") && inp.length() <= 12) {
-        float speedScale = inp.substring(6).toFloat();
-        if (speedScale >= 0 && speedScale < 10) {
-            mppt.speedScale = speedScale;
-            ESP_LOGI("main", "Set tracker speed scale %.4f", speedScale);
-        }
-    } else if (inp.startsWith("fan ")) {
-        if (!mppt.fan.fanSet(inp.substring(4).toFloat() * 0.01f))
-            return false;
-    } else if (inp.startsWith("led ")) {
-        led.setRGB(inp.substring(4).c_str());
-    } else if (inp == "sweep") {
-        mppt.startSweep();
-    } else if (inp == "reset-lag") {
-        maxLoopLag = 0;
+        converter.shortLs();
+    } else {
+        ESP_LOGW("main", "short-ls: requires boost mode and Vin~0");
+    }
+}
+
+static void cmdSpeed(cmd *c) {
+    float speedScale = Command(c).getArg(0).getValue().toFloat();
+    if (speedScale >= 0 && speedScale < 10) {
+        mppt.speedScale = speedScale;
+        ESP_LOGI("main", "Set tracker speed scale %.4f", speedScale);
+    } else {
+        ESP_LOGW("main", "speed: out of range [0,10)");
+    }
+}
+
+static void cmdFan(cmd *c) {
+    if (!mppt.fan.fanSet(Command(c).getArg(0).getValue().toFloat() * 0.01f))
+        ESP_LOGW("main", "fan: set failed");
+}
+
+static void cmdLed(cmd *c) { led.setRGB(Command(c).getArg(0).getValue().c_str()); }
+
+static void cmdSweep(cmd *) { mppt.startSweep(); }
+
+static void cmdResetLag(cmd *) {
+    maxLoopLag = 0;
 #if CAPTURE_LOOP_DT
-        maxLoopDT = 0;
+    maxLoopDT = 0;
 #endif
-        rtcount_print(true);
-    } else if (inp == "wifi on") {
+    rtcount_print(true);
+}
+
+static void cmdWifi(cmd *c) {
+    auto arg = Command(c).getArg(0).getValue();
+    if (arg == "on") {
         disableWifi = false;
         connect_wifi_async();
-    } else if (inp == "wifi off") {
+    } else if (arg == "off") {
         WiFi.disconnect(true);
         disableWifi = true;
         nvs.open();
         if (!nvs.readString("wifi_ssid", "").empty())
             nvs.writeString("wifi_ssid", "");
         nvs.close();
-    } else if (inp.startsWith("wifi-add ")) {
-        auto ssidAndPw = inp.substring(9);
-        auto i = ssidAndPw.indexOf(':');
-        if (i > 0) {
-            std::string ssid = ssidAndPw.substring(0, i).c_str();
-            auto psk = ssidAndPw.substring(i + 1);
-            ESP_LOGI("main", "adding wifi network %s (psk=%s)", ssid.c_str(), psk.c_str());
-            add_ap(ssid, psk.c_str());
-        }
-    } else if (inp == "scan-i2c") {
-        scan_i2c();
-    } else if (inp == "ls") {
-        //list_files();
-        ESP_LOGE("main", "not impl");
-        return false;
-    } else if (inp.startsWith("ota ")) {
-        auto url = inp.substring(4);
-        stopAndBackoff(10);
-        adcSampler.halted = true; // disable ADC reading
-        //MQTT.close();
-        doOta(url.c_str());
-        adcSampler.halted = false;
-        return true;
-    } else if (inp == "rt-stats") {
-        xTaskCreatePinnedToCore(print_real_time_stats_1s_task, "rtstats", 4096, NULL, 1, NULL, NON_RT_CORE /*core*/);
-    } else if (inp == "mem") {
-        UART_LOG("Total heap:  %9ld", ESP.getHeapSize());
-        UART_LOG("Free heap:   %9ld", ESP.getFreeHeap());
-        UART_LOG("Total PSRAM: %9ld", ESP.getPsramSize());
-        UART_LOG("Free PSRAM:  %9ld", ESP.getFreePsram());
-    } else if (inp == "sensor") {
-        for (auto s: adcSampler.sensors) {
-            auto u = s->params.unit;
-            UART_LOG("\nSensor `%s` (ch%d, %s):", s->params.teleName.c_str(), s->params.adcCh,
-                     s->isVirtual ? "virtual" : "physical");
-            UART_LOG("  num=%6lu  last=%7.3f %c   prev=%7.3f %c  raw=%8.4f", s->numSamples, s->last, u, s->previous, u,
-                     s->lastRaw);
-            UART_LOG("  EWM(%4lu):  avg= %7.3f %c   std*=%7.4f %c  std%%=%7.3f %%", s->ewm.span(),
-                     s->ewm.avg.get(), u,
-                     sqrt(s->ewm.std.get()) * abs(s->ewm.avg.get()), u,
-                     sqrt(s->ewm.std.get()) * 100.f);
-            UART_LOG("  ANF(span=%4.0f):  Nstd= %7.3f   Sstd=%7.3f   NSR=%7.3f", s->anf.span,
-                     sqrt(s->anf.ewmN.nvar()) * 100.0f, sqrt(s->anf.ewmS.nvar()) * 100.0f,
-                     sqrt(s->anf.ewmN.nvar() / s->anf.ewmS.nvar()));
-        }
-    } else if (inp == "ip") {
-        UART_LOG("Local IP Address: %s", WiFi.localIP().toString().c_str());
-    } else if (inp == "adc-restart") {
-        adcSampler.reInitADCs();
-    } else if (inp == "adc-reset") {
-        adcSampler.resetPeripherals();
-    } else if (inp.startsWith("hostname ") && inp.length() >= 9 + 1) {
-        nvs.open();
-        auto hn = inp.substring(9);
-        nvs.writeString("hostname", hn.c_str());
-        nvs.close();
-    } else if (inp.startsWith("set-config ")) {
-        auto ikey = inp.indexOf(' ', 11);
-        auto ival = inp.indexOf(' ', ikey + 1);
-        auto fn = "/littlefs/conf/" + inp.substring(11, ikey);
-        auto key = inp.substring(ikey + 1, ival);
-        auto val = inp.substring(ival + 1);
-        ConfFile conf{fn.c_str()};
-        auto oldVal = conf.getString(key.c_str(), "");
-        ESP_LOGI("main", "Setting conf '%s:%s' = '%s' (was %s)", fn.c_str(), key.c_str(), val.c_str(), oldVal.c_str());
-        if (oldVal != val.c_str())
-            conf.add({{key.c_str(), val.c_str()}}, true);
-        // set-config coil.conf L0 50
-        // set-config limits.conf iout_max 35
-        // set-config converter.conf vout_max 28.5
-        // set-config mqtt.conf broker_uri mqtt://192.168.1.134:1882
-        // set-config mqtt.conf username pv
-        // set-config mqtt.conf password 0ffgrid
-        // set-config charger.conf cell_voltage_eoc 3.53
-        // set-config charger.conf vout_max 12
+    } else {
+        ESP_LOGW("main", "wifi: expected on|off");
+    }
+}
 
-        // set-config sensor.conf vout_filt_len 10
-        // set-config sensor.conf iout_filt_len 10
-        // set-config sensor.conf vin_filt_len 10
+static void cmdWifiAdd(cmd *c) {
+    auto ssidAndPw = Command(c).getArg(0).getValue();
+    auto i = ssidAndPw.indexOf(':');
+    if (i <= 0) { ESP_LOGW("main", "wifi-add: expected ssid:password"); return; }
+    std::string ssid = ssidAndPw.substring(0, i).c_str();
+    auto psk = ssidAndPw.substring(i + 1);
+    ESP_LOGI("main", "adding wifi network %s (psk=%s)", ssid.c_str(), psk.c_str());
+    add_ap(ssid, psk.c_str());
+}
 
-        // get-config mqtt.conf broker_uri
-        // get-config converter.conf
-    } else if (inp.startsWith("get-config ")) {
-        auto ikey = inp.indexOf(' ', 11);
-        auto fn = "/littlefs/conf/" + inp.substring(11, ikey != -1 ? ikey : inp.length());
-        ConfFile conf{fn.c_str()};
-        if (ikey != -1) {
-            auto key = inp.substring(ikey + 1);
-            auto val = conf.getString(key.c_str(), "");
-            printf("Conf '%s:%s' = '%s'\n", fn.c_str(), key.c_str(), val.c_str());
-        } else {
-            for (const auto &key: conf.keys()) {
-                ESP_LOGI("main", "Conf '%s:%s' = '%s'", fn.c_str(), key.c_str(), conf.getString(key).c_str());
-            }
+static void cmdScanI2c(cmd *) { scan_i2c(); }
+
+static void cmdLs(cmd *) { ESP_LOGE("main", "not impl"); }
+
+static void cmdOta(cmd *c) {
+    auto url = Command(c).getArg(0).getValue();
+    if (url.length() == 0) { ESP_LOGW("main", "ota: expected url"); return; }
+    stopAndBackoff(10);
+    adcSampler.halted = true; // disable ADC reading
+    doOta(url.c_str());
+    adcSampler.halted = false;
+}
+
+static void cmdRtStats(cmd *) {
+    xTaskCreatePinnedToCore(print_real_time_stats_1s_task, "rtstats", 4096, NULL, 1, NULL, NON_RT_CORE /*core*/);
+}
+
+static void cmdMem(cmd *) {
+    UART_LOG("Total heap:  %9ld", ESP.getHeapSize());
+    UART_LOG("Free heap:   %9ld", ESP.getFreeHeap());
+    UART_LOG("Total PSRAM: %9ld", ESP.getPsramSize());
+    UART_LOG("Free PSRAM:  %9ld", ESP.getFreePsram());
+}
+
+static void cmdSensor(cmd *) {
+    for (auto s: adcSampler.sensors) {
+        auto u = s->params.unit;
+        UART_LOG("\nSensor `%s` (ch%d, %s):", s->params.teleName.c_str(), s->params.adcCh,
+                 s->isVirtual ? "virtual" : "physical");
+        UART_LOG("  num=%6lu  last=%7.3f %c   prev=%7.3f %c  raw=%8.4f", s->numSamples, s->last, u, s->previous, u,
+                 s->lastRaw);
+        UART_LOG("  EWM(%4lu):  avg= %7.3f %c   std*=%7.4f %c  std%%=%7.3f %%", s->ewm.span(),
+                 s->ewm.avg.get(), u,
+                 sqrt(s->ewm.std.get()) * abs(s->ewm.avg.get()), u,
+                 sqrt(s->ewm.std.get()) * 100.f);
+        UART_LOG("  ANF(span=%4.0f):  Nstd= %7.3f   Sstd=%7.3f   NSR=%7.3f", s->anf.span,
+                 sqrt(s->anf.ewmN.nvar()) * 100.0f, sqrt(s->anf.ewmS.nvar()) * 100.0f,
+                 sqrt(s->anf.ewmN.nvar() / s->anf.ewmS.nvar()));
+    }
+}
+
+static void cmdIp(cmd *) { UART_LOG("Local IP Address: %s", WiFi.localIP().toString().c_str()); }
+
+static void cmdAdcRestart(cmd *) { adcSampler.reInitADCs(); }
+
+static void cmdAdcReset(cmd *) { adcSampler.resetPeripherals(); }
+
+static void cmdHostname(cmd *c) {
+    auto hn = Command(c).getArg(0).getValue();
+    if (hn.length() == 0) { ESP_LOGW("main", "hostname: expected name"); return; }
+    nvs.open();
+    nvs.writeString("hostname", hn.c_str());
+    nvs.close();
+}
+
+// set-config <file> <key> <value...>  — value may contain spaces, so join the trailing tokens.
+//   set-config coil.conf L0 50            set-config mqtt.conf broker_uri mqtt://192.168.1.134:1882
+//   set-config limits.conf iout_max 35    set-config charger.conf cell_voltage_eoc 3.53
+static void cmdSetConfig(cmd *c) {
+    Command cc(c);
+    if (cc.countArgs() < 3) { ESP_LOGW("main", "set-config: expected <file> <key> <value>"); return; }
+    auto fn = "/littlefs/conf/" + cc.getArg(0).getValue();
+    auto key = cc.getArg(1).getValue();
+    String val = cc.getArg(2).getValue();
+    for (int i = 3; i < cc.countArgs(); ++i) val += " " + cc.getArg(i).getValue();
+    ConfFile conf{fn.c_str()};
+    auto oldVal = conf.getString(key.c_str(), "");
+    ESP_LOGI("main", "Setting conf '%s:%s' = '%s' (was %s)", fn.c_str(), key.c_str(), val.c_str(), oldVal.c_str());
+    if (oldVal != val.c_str())
+        conf.add({{key.c_str(), val.c_str()}}, true);
+}
+
+// get-config <file> [key]  — print one key, or dump the whole file.
+static void cmdGetConfig(cmd *c) {
+    Command cc(c);
+    if (cc.countArgs() < 1) { ESP_LOGW("main", "get-config: expected <file> [key]"); return; }
+    auto fn = "/littlefs/conf/" + cc.getArg(0).getValue();
+    ConfFile conf{fn.c_str()};
+    if (cc.countArgs() >= 2) {
+        auto key = cc.getArg(1).getValue();
+        auto val = conf.getString(key.c_str(), "");
+        printf("Conf '%s:%s' = '%s'\n", fn.c_str(), key.c_str(), val.c_str());
+    } else {
+        for (const auto &key: conf.keys())
+            ESP_LOGI("main", "Conf '%s:%s' = '%s'", fn.c_str(), key.c_str(), conf.getString(key).c_str());
+    }
+}
+
+static void cmdVset(cmd *c) {
+    float v = Command(c).getArg(0).getValue().toFloat();
+    if (v >= 0 and v <= 999) mppt.charger.params.Vbat_max = v;
+    else ESP_LOGW("main", "vset: out of range [0,999]");
+}
+
+static void cmdIset(cmd *c) {
+    float v = Command(c).getArg(0).getValue().toFloat();
+    if (v >= 0 and v <= 999) mppt.charger.params.Ibat_lim = v;
+    else ESP_LOGW("main", "iset: out of range [0,999]");
+}
+
+// service [list]                       service start|stop|restart|reload <name>
+// service log <name> <error|warn|info>
+static void cmdService(cmd *c) {
+    Command cc(c);
+    int n = cc.countArgs();
+    String sub = n >= 1 ? cc.getArg(0).getValue() : String("list");
+
+    if (sub == "list") {
+        UART_LOG("%-10s %-8s %-6s %-8s %s", "NAME", "STATE", "LOG", "ENABLED", "DETAIL");
+        for (auto *s: g_services.all()) {
+            auto detail = s->statusDetail();
+            UART_LOG("%-10s %-8s %-6s %-8s %s", s->name(), stateStr(s->state()),
+                     levelToStr(s->logLevel()), s->enabled() ? "yes" : "no", detail.c_str());
         }
-    } else if (inp.startsWith("vset ")) {
-        float v = inp.substring(5).toFloat();
-        if (v >= 0 and v <= 999)
-            mppt.charger.params.Vbat_max = inp.substring(5).toFloat();
-        else return false;
-    } else if (inp.startsWith("iset ")) {
-        float v = inp.substring(5).toFloat();
-        if (v >= 0 and v <= 999)
-            mppt.charger.params.Ibat_lim = inp.substring(5).toFloat();
-        else return false;
-    } else if (inp == "service" || inp == "service list") {
-        UART_LOG("%-10s %-8s %-6s %-8s", "NAME", "STATE", "LOG", "ENABLED");
-        for (auto *s: g_services.all())
-            UART_LOG("%-10s %-8s %-6s %-8s%s", s->name(), stateStr(s->state()), levelToStr(s->logLevel()),
-                     s->enabled() ? "yes" : "no",
-                     (strcmp(s->name(), "mqtt") == 0 && MQTT.isConnected()) ? "  (connected)" : "");
-    } else if (inp.startsWith("service start ")) {
-        auto *s = g_services.findByName(inp.substring(14).c_str());
-        if (!s) return false;
+        return;
+    }
+
+    if (n < 2) { ESP_LOGW("main", "service: expected <name>"); return; }
+    auto name = cc.getArg(1).getValue();
+    auto *s = g_services.findByName(name.c_str());
+    if (!s) { ESP_LOGW("main", "service: unknown '%s'", name.c_str()); return; }
+
+    if (sub == "start") {
         s->setEnabledPersist(true);
         if (!s->start()) UART_LOG("start failed (state=%s)", stateStr(s->state()));
-    } else if (inp.startsWith("service stop ")) {
-        auto *s = g_services.findByName(inp.substring(13).c_str());
-        if (!s) return false;
+    } else if (sub == "stop") {
         s->setEnabledPersist(false);
         s->stop();
-    } else if (inp.startsWith("service reload ")) {
-        auto *s = g_services.findByName(inp.substring(15).c_str());
-        if (!s) return false;
-        s->reload();
-    } else if (inp.startsWith("service log ")) {
-        // service log <name> <error|warn|info>
-        auto rest = inp.substring(12);
-        auto sp = rest.indexOf(' ');
-        if (sp < 0) return false;
-        auto *s = g_services.findByName(rest.substring(0, sp).c_str());
-        if (!s) return false;
-        s->setLogLevel(strToLevel(rest.substring(sp + 1).c_str()), /*persist*/ true);
+    } else if (sub == "restart") {
+        s->restart();
+    } else if (sub == "log") {
+        if (n < 3) { ESP_LOGW("main", "service log: expected <error|warn|info>"); return; }
+        s->setLogLevel(strToLevel(cc.getArg(2).getValue().c_str()), /*persist*/ true);
     } else {
-        ESP_LOGE("main", "unknown or unexpected command");
+        ESP_LOGW("main", "service: unknown subcommand '%s'", sub.c_str());
+    }
+}
+
+static void cmdHelp(cmd *) { UART_LOG("%s", cli.toString().c_str()); }
+
+void setupCli() {
+    cli.addCommand("help,?", cmdHelp);
+    cli.addCommand("restart,reset,reboot", cmdRestart);
+    cli.addCommand("mppt", cmdMppt);
+    cli.addCommand("short-ls", cmdShortLs);
+    cli.addCommand("sweep", cmdSweep);
+    cli.addCommand("reset-lag", cmdResetLag);
+    cli.addCommand("scan-i2c", cmdScanI2c);
+    cli.addCommand("ls", cmdLs);
+    cli.addCommand("rt-stats", cmdRtStats);
+    cli.addCommand("mem", cmdMem);
+    cli.addCommand("sensor", cmdSensor);
+    cli.addCommand("ip", cmdIp);
+    cli.addCommand("adc-restart", cmdAdcRestart);
+    cli.addCommand("adc-reset", cmdAdcReset);
+
+    cli.addSingleArgCmd("dc", cmdDc);
+    cli.addSingleArgCmd("sync", cmdSync);
+    cli.addSingleArgCmd("bf,panel", cmdBflow);
+    cli.addSingleArgCmd("speed", cmdSpeed);
+    cli.addSingleArgCmd("fan", cmdFan);
+    cli.addSingleArgCmd("led", cmdLed);
+    cli.addSingleArgCmd("wifi", cmdWifi);
+    cli.addSingleArgCmd("wifi-add", cmdWifiAdd);
+    cli.addSingleArgCmd("ota", cmdOta);
+    cli.addSingleArgCmd("hostname", cmdHostname);
+    cli.addSingleArgCmd("vset", cmdVset);
+    cli.addSingleArgCmd("iset", cmdIset);
+
+    cli.addBoundlessCmd("set-config", cmdSetConfig);
+    cli.addBoundlessCmd("get-config", cmdGetConfig);
+    cli.addBoundlessCmd("service", cmdService);
+}
+
+bool handleCommand(const String &inp) {
+    ESP_LOGI("main", "received serial command: '%s'", inp.c_str());
+
+    // +N / -N PWM step is a signed numeric token, not a named command -> handle before SimpleCLI.
+    if ((inp[0] == '+' or inp[0] == '-') && !adcSampler.isCalibrating() && inp.length() < 6 &&
+        inp.toInt() != 0 && std::abs(inp.toInt()) < converter.pwmCtrlMax) {
+        int pwmStep = inp.toInt();
+        converter.pwmPerturb((int16_t) pwmStep);
+        ESP_LOGI("main", "Manual PWM step %i -> %i", pwmStep, (int) converter.getCtrlOnPwmCnt());
+        loopLF(wallClockUs());
+        return true;
+    }
+
+    cli.parse(inp);
+    if (cli.errored()) {
+        ESP_LOGE("main", "%s", cli.getError().toString().c_str()); // unknown command / parse error
         return false;
     }
 
-    ESP_LOGI("main", "OK: %s", inp.c_str());
     loopLF(wallClockUs());
-
     return true;
 }
 

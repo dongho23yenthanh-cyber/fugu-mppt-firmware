@@ -16,6 +16,8 @@ public:
     BleConsoleService() : Service("ble", "/littlefs/conf/ble.conf", /*requiresNetwork*/ false,
                                   /*enabledDefault*/ false) {}
 
+    std::string statusDetail() const override { return bleConsoleConnected() ? "connected" : ""; }
+
 protected:
     bool onStart() override {
         ConfFile c{"/littlefs/conf/ble.conf", /*no_warn_if_not_open*/ true};

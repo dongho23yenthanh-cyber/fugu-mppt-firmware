@@ -28,9 +28,12 @@ public:
     // Forward to the owned LCD so callers use the service handle, not the wrapped lcd object.
     void displayMessage(const std::string &msg, uint16_t timeoutMs) { lcd.displayMessage(msg, timeoutMs); }
 
+    [[nodiscard]] std::string statusDetail() const override { return lcd ? "ok" : ""; }
+
 protected:
+
     bool onStart() override { return initLcd(); }
-    void onStop() override {} // no hard teardown; tick simply stops when not Running
+    void onStop() override { } // no hard teardown; tick simply stops when not Running
     void onTick() override {
         if (lcd && !adcSampler.adcStates.empty())
             lcd.updateValues(LcdValues{

@@ -14,6 +14,11 @@ public:
     TelnetService() : Service("telnet", "/littlefs/conf/telnet.conf", /*requiresNetwork*/ true) {
     }
 
+    [[nodiscard]] std::string statusDetail() const override {
+        return const_cast<ESPTelnet &>(telnet).isConnected()
+                   ? std::string(telnet.getIP().c_str())
+                   : "";
+    }
 
 protected:
     bool onStart() override;

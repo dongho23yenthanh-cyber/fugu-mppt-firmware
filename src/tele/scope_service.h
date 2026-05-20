@@ -21,6 +21,8 @@ public:
     // for its yield decision instead of reaching into the wrapped scope object.
     bool hasClient() const { return scopeObj.connected; }
 
+    std::string statusDetail() const override { return hasClient() ? "connected" : ""; }
+
 protected:
     bool onStart() override;
     void onStop() override;

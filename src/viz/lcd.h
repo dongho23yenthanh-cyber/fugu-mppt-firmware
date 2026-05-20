@@ -30,8 +30,7 @@ public:
 
     void updateValues(const LcdValues &values);
 
-    explicit operator bool()
-    {
+    explicit operator bool() const {
         return lcd != nullptr;
     }
 };

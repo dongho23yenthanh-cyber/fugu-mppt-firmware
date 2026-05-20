@@ -15,6 +15,12 @@ class TelemetryService : public Service {
 public:
     TelemetryService() : Service("telemetry", "/littlefs/conf/tele.conf", /*requiresNetwork*/ true) {}
 
+    // The UDP target it flushes points to, once a host is configured/resolved.
+    std::string statusDetail() const override {
+        const auto &host = mppt.tele.influxdbHost;
+        return host ? std::string("→ ") + host.toString().c_str() : std::string();
+    }
+
 protected:
     bool onStart() override { return WiFi.isConnected(); } // UDP is connectionless, nothing to open
     void onStop() override {}

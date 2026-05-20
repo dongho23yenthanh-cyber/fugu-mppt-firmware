@@ -14,9 +14,11 @@ namespace {
     void _callback(FtpOperation ftpOperation, uint32_t freeSpace, uint32_t totalSpace) {
         switch (ftpOperation) {
             case FTP_CONNECT:
+                //ftpService._clientConnected = true;
                 Serial.println(F("FTP: Connected!"));
                 break;
             case FTP_DISCONNECT:
+                //ftpService._clientConnected = false;
                 Serial.println(F("FTP: Disconnected!"));
                 break;
             case FTP_FREE_SPACE_CHANGE:

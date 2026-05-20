@@ -10,11 +10,20 @@
 
 class FtpService : public Service {
 public:
-    FtpService() : Service("ftp", "/littlefs/conf/ftp.conf", /*requiresNetwork*/ true) {}
+    FtpService() : Service("ftp", "/littlefs/conf/ftp.conf", /*requiresNetwork*/ true) {
+    }
+
+    std::string statusDetail() const override { return ""; }
+
+    // Set from the SimpleFTPServer connect/disconnect callback (ftp_service.cpp), which is a plain
+    // function pointer and so reaches this through the global `ftpService` instance.
+    //volatile bool _clientConnected = false;
 
 protected:
     bool onStart() override;
+
     void onStop() override;
+
     void onTick() override;
 
 private:

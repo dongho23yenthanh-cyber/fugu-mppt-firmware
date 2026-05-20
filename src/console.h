@@ -10,6 +10,10 @@ int console_write_usb(const char *buf, unsigned int len);
 
 void loopUart(unsigned long nowMs);
 
+// Generic line-based console driver: reads from read(), echoes via write(), and dispatches
+// completed lines to handleCommand(). Reused by every transport (UART, USB, BLE).
+void loopConsole(int read(char *buf, size_t len), int write(const char *buf, size_t len), unsigned long nowMs);
+
 extern unsigned long lastTimeOutUs;
 extern bool usbConnected;
 

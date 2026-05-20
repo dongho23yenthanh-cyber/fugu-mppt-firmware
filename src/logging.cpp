@@ -10,9 +10,9 @@
 //   static const size_t INITIAL_IMPLICIT_PRODUCER_HASH_SIZE = 0;
 //};
 
-int vprintf_(const char *fmt, va_list argptr);
+static int vprintf_(const char *fmt, va_list argptr);
 
-int vprintf_mux(const char *fmt, va_list argptr);
+static int vprintf_mux(const char *fmt, va_list argptr);
 
 struct AsyncLogEntry {
     char *str;
@@ -27,7 +27,10 @@ static moodycamel::ReaderWriterQueue<AsyncLogEntry> uart_async_log_queue{};
 
 ESPTelnet *log_telnet = nullptr;
 
-void (*logCallback)(const char *str, uint16_t len) = nullptr;
+// Up to kMaxLogCallbacks sinks; written/read only from core 0 (network loop + flush), so no lock.
+static constexpr int kMaxLogCallbacks = 4;
+static LogCallback logCallbacks[kMaxLogCallbacks] = {};
+static int logCallbackCount = 0;
 
 vprintf_like_t old_vprintf = &vprintf;
 
@@ -37,25 +40,29 @@ void loggingEnableDefer() {
     deferLogs = true;
 }
 
-void addLogCallback(void (*callback)(const char *str, uint16_t len)) {
-    if (logCallback != nullptr && callback != nullptr) {
-        ESP_LOGW("log", "callback already set, overwrite");
+void addLogCallback(LogCallback callback) {
+    if (!callback) return;
+    for (int i = 0; i < logCallbackCount; ++i)
+        if (logCallbacks[i] == callback) return; // dedupe
+    if (logCallbackCount >= kMaxLogCallbacks) {
+        ESP_LOGW("log", "log callback table full, dropping");
+        return;
     }
-    logCallback = callback;
+    logCallbacks[logCallbackCount++] = callback;
+}
+
+void removeLogCallback(LogCallback callback) {
+    for (int i = 0; i < logCallbackCount; ++i) {
+        if (logCallbacks[i] == callback) {
+            logCallbacks[i] = logCallbacks[--logCallbackCount]; // compact (order irrelevant)
+            logCallbacks[logCallbackCount] = nullptr;
+            return;
+        }
+    }
 }
 
 
-void enqueue_log(const char *s, int len) {
-    assert((xPortGetCoreID() == 1));
-
-    if (uart_async_log_queue.size_approx() > 200) return;
-    auto buf = new char[len + 1];
-    strncpy(buf, s, len + 1);
-    uart_async_log_queue.enqueue(AsyncLogEntry{buf, (uint16_t) len, false});
-}
-
-
-int enqueue_log(const char *fmt, size_t l, const va_list &args, bool appendBreak = false, bool timestamp = false) {
+static int enqueue_log(const char *fmt, size_t l, const va_list &args, bool appendBreak = false, bool timestamp = false) {
     assert((xPortGetCoreID() == 1)); // ensure RT core
 
     if (uart_async_log_queue.size_approx() > 200) return -1;
@@ -155,7 +162,7 @@ void UART_LOG_ASYNC(const char *fmt, ...) {
 }
 */
 
-int printf_old(const char *fmt, ...) {
+static int printf_old(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     int l = old_vprintf(fmt, args);
@@ -181,8 +188,8 @@ void flush_async_uart_log() {
         if (log_telnet)
             log_telnet->write((uint8_t *) entry.str, entry.len);
 
-        if (logCallback)
-            logCallback(entry.str, entry.len);
+        for (int i = 0; i < logCallbackCount; ++i)
+            logCallbacks[i](entry.str, entry.len);
 
         delete[] entry.str;
     }
@@ -194,17 +201,17 @@ void flush_async_uart_log() {
  * @param argptr
  * @return
  */
-int vprintf_mux(const char *fmt, va_list argptr) {
+static int vprintf_mux(const char *fmt, va_list argptr) {
     static char loc_buf[300];
 
     int r = old_vprintf(fmt, argptr);
 
-    if (log_telnet or logCallback) {
+    if (log_telnet or logCallbackCount) {
         int l = vsnprintf(loc_buf, sizeof(loc_buf), fmt, argptr);
         if (l > 0) {
             //enqueue_telnet_log(loc_buf, l);
             if (log_telnet) log_telnet->write((uint8_t *) loc_buf, l);
-            if (logCallback)logCallback(loc_buf, l);
+            for (int i = 0; i < logCallbackCount; ++i) logCallbacks[i](loc_buf, l);
         }
     }
 
@@ -212,7 +219,7 @@ int vprintf_mux(const char *fmt, va_list argptr) {
 }
 
 
-int vprintf_(const char *fmt, va_list argptr) {
+static int vprintf_(const char *fmt, va_list argptr) {
     // xPortCanYield() returns true in critical sections and ISR (where print is not allowed)
     if ((xPortGetCoreID() == 1 && deferLogs) || !xPortCanYield()) {
         // RT core1: defer all log to core0

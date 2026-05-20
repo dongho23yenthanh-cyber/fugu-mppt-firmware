@@ -43,4 +43,10 @@ class ESPTelnet;
 void set_logging_telnet(ESPTelnet *telnet);
 
 
-void addLogCallback(void (*callback)(const char *str, uint16_t len));
+// Log sinks: multiple callbacks may be registered concurrently (e.g. MQTT + BLE console). Each
+// receives every muxed log line on core 0. addLogCallback dedupes and ignores nullptr.
+typedef void (*LogCallback)(const char *str, uint16_t len);
+
+void addLogCallback(LogCallback callback);
+
+void removeLogCallback(LogCallback callback);

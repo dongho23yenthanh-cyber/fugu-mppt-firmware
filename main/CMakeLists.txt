@@ -15,14 +15,19 @@ endif ()
 
 idf_component_register(SRCS
         ${MAIN_SRC}
+        "../src/sensor_setup.cpp"
         "../src/mppt.cpp"
         "../src/logging.cpp"
         "../src/util.cpp"
         "../src/adc/adc_esp32_cont.cpp"
         "../src/viz/lcd.cpp"
         "../src/tele/telemetry.cpp"
+        "../src/tele/ftp_service.cpp"
+        "../src/tele/telnet_service.cpp"
+        "../src/tele/scope_service.cpp"
         "../src/web/server.cpp"
         "../src/console.cpp"
+        "../src/console_ble.cpp"
         "../src/etc/rt.cpp"
         "../src/tele/mqtt.cpp"
         "../src/etc/ota.cpp"
@@ -45,6 +50,12 @@ idf_component_register(SRCS
 if ($ENV{FUGU_BAT_V})
     # 14.25, 28.5, 57
     component_compile_definitions("FUGU_BAT_V=$ENV{FUGU_BAT_V}")
+endif ()
+
+# WITH_BLE=1 compiles the BLE NUS console (console_ble.cpp) and registers BleConsoleService.
+# Must be paired with the NimBLE sdkconfig (top-level CMakeLists pulls in sdkconfig.ble).
+if ($ENV{WITH_BLE})
+    component_compile_definitions("WITH_BLE=1")
 endif ()
 
 component_compile_options(-Werror=missing-field-initializers)

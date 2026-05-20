@@ -1,9 +1,10 @@
 #pragma once
 
+#include <atomic>
+
 #include "console.h"
 #include "etc/coulomb_counter.h"
 #include "etc/linear_glide.h"
-#include "etc/mean_accumulator_sync.h"
 #include "tele/mqtt.h"
 #include "util.h"
 
@@ -36,13 +37,13 @@ struct BatChargerParams {
 
 struct BatteryState {
     static constexpr auto VCELL_EXPIRATION_TIME_SEC = 180;
+    static constexpr uint16_t IBAT_MIN_SAMPLES = 8; // smoothing warm-up before ibat is published
 
     volatile float vcell_high = 0; // voltage of highest cell reported by BMS
     volatile unsigned long vcell_high_t = 0; // timestamp of highest cell voltage
 
     EWMA<volatile float, float> vout_avg{60}; // time-averaged pack voltage
-    MeanAccumulatorSync ibat_mean{}; // time-averaged battery current (from BMS, MQTT thread → RT consumer)
-    MeanAccumulator iout_mean{}; // time-averaged out current (from this charger) TODO currently unused?
+    MeanAccumulator iout_mean{}; // out current (this charger); loop-task only, not shared
     CoulombCounter coulombCounter{}; // Ah-since-last-full tracker, used for recharge hysteresis
 
     void setVcellHigh(const float &vcell_high_) {
@@ -54,10 +55,18 @@ struct BatteryState {
         return vcell_high > 0 and wallClockUs() - vcell_high_t < (VCELL_EXPIRATION_TIME_SEC * 1000000);
     }
 
+    // producer (MQTT task): smooth ibat here and publish a single lock-free
+    // snapshot the loop-task consumer only loads. NAN until IBAT_MIN_SAMPLES seen.
     void updateBatCurrent(const float &ibat) {
-        ibat_mean.add(ibat);
+        _ibatEwma.add(ibat);
+        if (_ibatSamples < IBAT_MIN_SAMPLES) ++_ibatSamples;
+        if (_ibatSamples >= IBAT_MIN_SAMPLES)
+            _ibatSmoothed.store(_ibatEwma.get(), std::memory_order_relaxed);
         coulombCounter.updateBatCurrent(ibat);
     }
+
+    // consumer (loop task): NAN until smoothing is warm
+    [[nodiscard]] float ibatSmoothed() const { return _ibatSmoothed.load(std::memory_order_relaxed); }
 
     void update(float vout, float iout) {
         vout_avg.add(vout);
@@ -66,6 +75,11 @@ struct BatteryState {
         if (isfinite(iout))iout_mean.add(iout);
         else iout_mean.clear();
     }
+
+private:
+    EWMA<float> _ibatEwma{IBAT_MIN_SAMPLES}; // producer-private smoothing
+    uint16_t _ibatSamples = 0; // producer-private warm-up counter
+    std::atomic<float> _ibatSmoothed{NAN}; // single writer: producer
 };
 
 class Li_ChgTerminationCondition {
@@ -159,13 +173,13 @@ public:
     void _updateTermination() {
         constexpr auto MEAN_NUM = 8;
 
-        // cheap gates first; ibat_mean is the cross-thread one so its
-        // gate+pop are folded into a single locked op via tryPop().
+        // cheap gates first; iout_mean paces this (loop-task only). ibat is the
+        // cross-task value but it's a plain lock-free atomic load now.
         if (batSt.iout_mean.num < MEAN_NUM) return;
         if (!batSt.haveValidCellVoltage()) return;
 
-        float ibat;
-        if (!batSt.ibat_mean.tryPop(MEAN_NUM, ibat)) return;
+        float ibat = batSt.ibatSmoothed();
+        if (!std::isfinite(ibat)) return; // smoothing not warm yet
         (void) batSt.iout_mean.pop(); // unused, still pop to keep the accumulator bounded
 
         bool wasTerm = bool(termCond);

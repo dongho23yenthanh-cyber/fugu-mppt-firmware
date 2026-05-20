@@ -307,7 +307,8 @@ inline size_t pseudo_median_of_nine( const RandomAccessIterator &array, const qu
 // any subsequent MeanAccumulator (or float member) in a containing struct to
 // be misaligned. On Xtensa this means unaligned-load traps / slow paths, and
 // it also breaks the single-instruction atomicity of float load/store that
-// cross-thread readers rely on (e.g. BatteryState::ibat_mean).
+// cross-task readers rely on (e.g. the std::atomic<float> snapshots in
+// BatteryState / CoulombCounter).
 struct MeanAccumulator {
     // TODO trapezoidal sum?
     float sum;

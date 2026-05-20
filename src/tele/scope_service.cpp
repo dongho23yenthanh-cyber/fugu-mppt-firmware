@@ -2,6 +2,7 @@
 
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <mdns.h>
 
 bool ScopeService::onStart() {
     if (!WiFi.isConnected()) return false;
@@ -18,10 +19,10 @@ bool ScopeService::onStart() {
 
 void ScopeService::onStop() {
     scopeObj.end();
-    scopeObj.connected = false;
+    mdns_service_remove("_scope", "_tcp"); // else a restart hits "Service already exists" on re-add
 }
 
 void ScopeService::onTick() {
     scopeObj.update();
-    if (scopeObj.connected) scopeObj.netLoop(); // blocks ~1 tick; serves as the yield
+    if (scopeObj.connected) scopeObj.netLoop(); // blocks ~1 tick
 }

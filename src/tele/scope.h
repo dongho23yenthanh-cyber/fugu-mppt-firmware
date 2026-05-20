@@ -184,6 +184,7 @@ public:
 
     void end() {
         srv.end();
+        connected = false;
     }
 
     static constexpr uint8_t TypInt = 'i';

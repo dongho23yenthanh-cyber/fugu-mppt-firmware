@@ -40,3 +40,6 @@
 [submodule "etc/fugu"]
 	path = etc/fugu
 	url = https://github.com/fl4p/fugu-py
+[submodule "components/SimpleCLI/SimpleCLI"]
+	path = components/SimpleCLI/SimpleCLI
+	url = https://github.com/SpacehuhnTech/SimpleCLI

@@ -19,9 +19,14 @@ public:
     // onStart() with the loaded conf, so `service reload mqtt` re-subscribes.
     std::function<void(const ConfFile &)> preStart{nullptr};
 
+    // Wired by main.cpp: the throttled periodic publish (HA power, etc.). Kept here as a hook so
+    // mqtt.cpp stays free of mppt/home-assistant deps. Invoked from onTick() at ~3s while Running.
+    std::function<void()> tickHook{nullptr};
+
 private:
     std::unordered_map<std::string, MqttMsgCallback> mqttMsgHandlers{};
     bool mqttConnected = false;
+    unsigned long _lastTickMs = 0;
 
 public:
     bool isConnected()const  { return mqttConnected; }
@@ -34,6 +39,7 @@ public:
 
     bool onStart() override;
     void onStop() override;
+    void onTick() override;
 
     void _handleEvent(esp_event_base_t base, int32_t event_id, void *event_data);
 

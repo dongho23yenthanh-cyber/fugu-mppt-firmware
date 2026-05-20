@@ -8,6 +8,7 @@
 
 #define TAG "mqtt"
 
+
 static void mqttLogCallback(const char *str, uint16_t len);
 
 static void log_error_if_nonzero(const char *message, int error_code) {
@@ -168,6 +169,16 @@ bool MqttService::onStart() {
 
 void MqttService::onStop() {
     close();
+}
+
+void MqttService::onTick() {
+    // Throttled periodic publish (HA power, etc.). The body is wired by main.cpp via tickHook to
+    // keep mppt/home-assistant deps out of this TU; haMqttUpdate() itself no-ops until connected.
+    if (!tickHook) return;
+    auto now = wallClockMs();
+    if (now - _lastTickMs < 3000) return;
+    _lastTickMs = now;
+    tickHook();
 }
 
 void MqttService::_invokeForTest(const std::string &topic, const char *data, int len) {

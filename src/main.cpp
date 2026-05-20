@@ -193,7 +193,7 @@ void setup() {
         connect_wifi_async();
         bool res = wait_for_wifi();
         led.setHexShort(res ? 0x565 : 0x200);
-        lcdService.lcd.displayMessage(
+        lcdService.displayMessage(
             res ? ("WiFi connected.\n" + std::string(WiFi.localIP().toString().c_str())) : "WiFi timeout.", 2000);
 
         teleConf = ConfFile{"/littlefs/conf/tele.conf"};
@@ -250,6 +250,11 @@ void setup() {
     MQTT.preStart = [](const ConfFile &mqttConf) {
         mppt.charger.beginMqtt(mqttConf);
         MQTT.onConnected = haMqttSendDiscovery;
+    };
+    // Periodic HA power publish, throttled inside MqttService::onTick (only ticks while Running).
+    MQTT.tickHook = [] {
+        float pow = mppt.sensorPhysicalI->ewm.avg.get() * mppt.sensorPhysicalU->ewm.avg.get();
+        haMqttUpdate({.power = mppt.isSweeping() ? NAN : pow});
     };
     g_services.registerService(&MQTT);
     g_services.registerService(&telemetryService);
@@ -658,18 +663,13 @@ static void loopNetwork_task(void *arg) {
 
     if ((wallClockUs() - lastTimeOutUs) >= (mppt.converter.disabled() ? (lfPeriod * 8) : lfPeriod) or !lastTimeOutUs) {
         loopLF(wallClockUs());
-        float pow = mppt.sensorPhysicalI->ewm.avg.get() * mppt.sensorPhysicalU->ewm.avg.get();
-        //if (mppt.converter.disabled()) pow = 0;
-        if (WiFi.isConnected())
-            haMqttUpdate({
-                .power = mppt.isSweeping() ? NAN : pow
-            });
+        // HA power publish moved to MqttService::onTick (MQTT.tickHook, wired in setup()).
         lastTimeOutUs = wallClockUs();
     }
 
     // Preserve the cooperative yield: scope's netLoop() blocks ~1 tick when a client is attached
     // and serves as the yield; otherwise we must yield explicitly.
-    if (!(scopeService.state() == ServiceState::Running && scope && scope->connected))
+    if (!(scopeService.state() == ServiceState::Running && scopeService.hasClient()))
         vTaskDelay(pdMS_TO_TICKS(1));
 }
 

@@ -97,7 +97,7 @@ public:
         ESP_LOGI("service", "stopped '%s'", _name);
     }
 
-    bool reload() {
+    bool restart() {
         stop();
         return start();
     }

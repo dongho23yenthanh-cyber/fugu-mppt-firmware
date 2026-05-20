@@ -25,6 +25,9 @@ public:
         return lcd.init(addr);
     }
 
+    // Forward to the owned LCD so callers use the service handle, not the wrapped lcd object.
+    void displayMessage(const std::string &msg, uint16_t timeoutMs) { lcd.displayMessage(msg, timeoutMs); }
+
 protected:
     bool onStart() override { return initLcd(); }
     void onStop() override {} // no hard teardown; tick simply stops when not Running

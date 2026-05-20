@@ -17,6 +17,10 @@ public:
 
     ScopeService() : Service("scope", "/littlefs/conf/scope.conf", /*requiresNetwork*/ true) {}
 
+    // True while a scope TCP client is attached. Lets the network loop reference the service handle
+    // for its yield decision instead of reaching into the wrapped scope object.
+    bool hasClient() const { return scopeObj.connected; }
+
 protected:
     bool onStart() override;
     void onStop() override;

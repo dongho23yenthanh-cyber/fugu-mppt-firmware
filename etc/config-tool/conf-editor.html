@@ -1,0 +1,1079 @@
+<!doctype html>
+<!-- this document is an LLM generated placeholder -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fugu MPPT config editor</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a3340;
+    --fg:#d7dde3; --muted:#8b96a3; --accent:#4493f8; --accent2:#2ea043;
+    --unit:#d29922; --warn:#f0883e;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:var(--bg); color:var(--fg); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; gap:16px;
+           align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  header .spacer { flex:1; }
+  button, label.btn {
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px;
+    padding:7px 13px; cursor:pointer; font-size:13px; }
+  button:hover, label.btn:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  label.btn input { display:none; }
+  #drop {
+    margin:40px auto; max-width:640px; border:2px dashed var(--line); border-radius:12px;
+    padding:48px 24px; text-align:center; color:var(--muted); transition:border-color .15s,background .15s; }
+  #drop.hover { border-color:var(--accent); background:var(--panel); }
+  #drop h2 { color:var(--fg); margin:0 0 6px; font-size:18px; }
+  #drop .controls { margin-top:18px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+  #app { display:none; }
+  #tabs { display:flex; gap:2px; padding:0 16px; border-bottom:1px solid var(--line);
+          overflow-x:auto; background:var(--panel); }
+  .tab { padding:10px 14px; cursor:pointer; color:var(--muted); border-bottom:2px solid transparent;
+         white-space:nowrap; font-size:13px; }
+  .tab:hover { color:var(--fg); }
+  .tab.active { color:var(--fg); border-bottom-color:var(--accent); }
+  .tab .dot { color:var(--warn); margin-left:6px; }
+  #panes { padding:18px 22px 60px; }
+  .pane { display:none; }
+  .pane.active { display:block; }
+  .pane .path { color:var(--muted); font-size:12px; margin-bottom:14px; font-family:ui-monospace,monospace; }
+  .row { display:grid; grid-template-columns:minmax(160px,260px) 1fr; gap:14px; padding:10px 0;
+         border-bottom:1px solid var(--line); align-items:start; }
+  .row .k { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; word-break:break-all; }
+  .row .k .unit { color:var(--unit); margin-left:6px; font-size:11px; }
+  .row .k .nometa { color:var(--warn); font-size:11px; margin-left:6px; }
+  .row .k .type { display:inline-block; margin-left:8px; font-size:10px; padding:1px 7px; border-radius:10px;
+    background:var(--panel2); border:1px solid var(--line); color:var(--muted); vertical-align:middle; letter-spacing:.03em; }
+  .row .k .type[data-t="float"]  { color:#79c0ff; border-color:#1f4d72; }
+  .row .k .type[data-t="byte"],
+  .row .k .type[data-t="long"]   { color:#7ee787; border-color:#2a5a32; }
+  .row .k .type[data-t="string"] { color:#d2a8ff; border-color:#4a3a66; }
+  .row .desc { color:var(--muted); font-size:12px; margin-top:3px; }
+  .row .val { max-width:440px; }
+  .row .val-line { display:flex; gap:8px; align-items:center; }
+  .row .inwrap { position:relative; display:block; flex:1; }
+  .clear-btn { flex:none; width:30px; height:32px; padding:0; line-height:1; font-size:17px;
+    background:transparent; border:1px solid var(--line); border-radius:6px; color:var(--muted); cursor:pointer; }
+  .clear-btn:hover { border-color:var(--warn); color:var(--warn); }
+  .row .val input {
+    width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; padding:7px 9px; font-family:ui-monospace,monospace; font-size:13px; }
+  .row .val input:focus { outline:none; border-color:var(--accent); }
+  .row.changed .val input { border-color:var(--warn); }
+  .row .unit-suffix {
+    position:absolute; right:10px; top:50%; transform:translateY(-50%);
+    color:var(--unit); font-size:11px; pointer-events:none; user-select:none; white-space:nowrap; }
+  .row .orig { color:var(--muted); font-size:11px; margin-top:4px; }
+  .row.extra .val input { background:#0a0d12; border-style:dashed; }
+  .row.extra.filled .val input { background:var(--bg); border-style:solid; }
+  .row .val input::placeholder { color:#5a6573; font-style:italic; }
+  .addkey { margin-top:18px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .addkey input { background:var(--bg); color:var(--fg); border:1px solid var(--line);
+                  border-radius:6px; padding:6px 8px; font-family:ui-monospace,monospace; font-size:13px; }
+  .toolbar { display:flex; gap:10px; align-items:center; margin-bottom:12px; }
+  .toolbar .grow { flex:1; }
+  details.raw { margin-top:22px; border:1px solid var(--line); border-radius:8px; }
+  details.raw summary { padding:9px 12px; cursor:pointer; color:var(--muted); }
+  details.raw pre { margin:0; padding:12px; background:#0a0d12; border-top:1px solid var(--line);
+                    overflow:auto; font-size:12px; }
+  .err { color:var(--warn); }
+  .pill { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:20px; padding:2px 9px; }
+  #uploadlog { position:fixed; right:16px; bottom:16px; width:min(560px,92vw); max-height:50vh; overflow:auto;
+    background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+    font-family:ui-monospace,monospace; font-size:12px; display:none; z-index:50; box-shadow:0 8px 30px rgba(0,0,0,.55); }
+  #uploadlog .ulhdr { display:flex; gap:8px; align-items:center; margin-bottom:8px; color:var(--fg); font-family:inherit; }
+  #uploadlog .ulhdr .spacer { flex:1; }
+  #uploadlog-body div { white-space:pre-wrap; word-break:break-all; line-height:1.5; }
+  #uploadlog .sent { color:var(--accent); }
+  #uploadlog .resp { color:var(--muted); }
+  #uploadlog .resp.ok { color:var(--accent2); }
+  #uploadlog .resp.err { color:var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fugu MPPT — config editor</h1>
+  <span id="srcname" class="pill" style="display:none"></span>
+  <span id="serial-status" class="pill" style="display:none"></span>
+  <span class="spacer"></span>
+  <button id="serial-btn" style="display:none">Read from serial</button>
+  <label class="btn" id="reload-zip" style="display:none">Open .zip<input type="file" accept=".zip"></label>
+  <label class="btn" id="reload-dir" style="display:none">Open folder<input type="file" webkitdirectory directory multiple></label>
+  <button id="upload" style="display:none">Upload changes to device</button>
+  <button id="download" class="primary" style="display:none">Download .zip</button>
+</header>
+
+<div id="drop">
+  <h2>Drop a config .zip here</h2>
+  <div>…or open a <code>.zip</code> / a folder structured like <code>config/fmetal</code> (with a <code>conf/</code> dir of <code>*.conf</code> files).</div>
+  <div class="controls">
+    <label class="btn">Choose .zip<input id="pick-zip" type="file" accept=".zip"></label>
+    <label class="btn">Choose folder<input id="pick-dir" type="file" webkitdirectory directory multiple></label>
+    <button id="connect-serial" class="btn">Connect serial (115200)</button>
+    <button id="connect-ble" class="btn">Connect Bluetooth</button>
+  </div>
+  <div style="margin-top:10px;color:var(--muted);font-size:12px">…or read the live config straight off the device over USB serial, or over Bluetooth (NUS; Chrome/Edge, https or localhost).</div>
+  <div id="drop-msg" class="err" style="margin-top:14px"></div>
+</div>
+
+<div id="app">
+  <div id="tabs"></div>
+  <div id="panes"></div>
+</div>
+
+<div id="uploadlog">
+  <div class="ulhdr"><strong>Upload</strong><span id="uploadlog-stat" class="pill"></span><span class="spacer"></span><button id="uploadlog-close">close</button></div>
+  <div id="uploadlog-body"></div>
+</div>
+
+<script>
+"use strict";
+
+/* ----------------------------------------------------------------------------
+   Config-key metadata mined from the firmware source (units + descriptions).
+   Lookup order: FILE_META[file][key] -> META[key] -> channel pattern ->
+   ssid pattern -> inline comment from the file -> (none).
+---------------------------------------------------------------------------- */
+const META = {
+  // board.conf
+  mcu:{unit:"",desc:"MCU type, e.g. esp32s3 or esp32",type:"string"},
+  skip_assert:{unit:"",desc:"Skip GPIO pull-resistor sanity checks at init",type:"bool"},
+  i2c_sda:{unit:"GPIO",desc:"I2C SDA pin number",type:"int"},
+  i2c_scl:{unit:"GPIO",desc:"I2C SCL pin number",type:"int"},
+  i2c_freq:{unit:"Hz",desc:"I2C bus clock frequency",type:"int"},
+  i2c_port:{unit:"",desc:"ESP32 I2C controller index (0 or 1)",type:"int"},
+  ina22x_alert:{unit:"GPIO",desc:"INA226 ALERT pin number",type:"int"},
+  ina22x_addr:{unit:"",desc:"INA226 I2C address",type:"int"},
+  ina22x_resistor:{unit:"Ω",desc:"INA226 current-sense shunt resistance",type:"float"},
+  ina22x_range:{unit:"A",desc:"INA226 max current range for PGA config",type:"float"},
+  pwm_freq:{unit:"Hz",desc:"Converter PWM switching frequency",type:"int"},
+  pwm_driver_logic:{unit:"",desc:"Gate driver logic: HiLi or InEn",type:"enum"},
+  pwm_hi:{unit:"GPIO",desc:"High-side gate driver pin (HiLi mode)",type:"int"},
+  pwm_li:{unit:"GPIO",desc:"Low-side gate driver pin (HiLi mode)",type:"int"},
+  pwm_sd:{unit:"GPIO",desc:"Gate driver shutdown/DIS pin (HiLi mode)",type:"int"},
+  pwm_in:{unit:"GPIO",desc:"Gate driver IN pin (InEn mode)",type:"int"},
+  pwm_en:{unit:"GPIO",desc:"Gate driver EN pin (InEn mode)",type:"int"},
+  panel_en:{unit:"GPIO",desc:"Panel/input backflow enable switch pin",type:"int"},
+  panel_sd:{unit:"GPIO",desc:"Panel/input backflow shutdown switch pin",type:"int"},
+  led_WS2812:{unit:"GPIO",desc:"WS2812 status LED data pin",type:"int"},
+  led_WS2812B:{unit:"GPIO",desc:"WS2812 LED data pin (alt key)",type:"int"},
+  led_simple:{unit:"GPIO",desc:"Plain on/off status LED pin",type:"int"},
+  fan_pwm:{unit:"GPIO",desc:"Cooling fan PWM pin",type:"int"},
+  adc_fake_freq:{unit:"Hz",desc:"Mock ADC total fake sample rate (all channels)",type:"int"},
+  ads_alert:{unit:"GPIO",desc:"ADS1x15 ALERT/RDY pin number",type:"int"},
+
+  // sensor.conf
+  adc:{unit:"",desc:"Default ADC backend for all channels",type:"string"},
+  expected_hz:{unit:"Hz",desc:"Expected control-loop sample rate (lower-bound check)",type:"int"},
+  power_conversion_eff:{unit:"",desc:"Assumed converter efficiency for virtual current sensor",type:"float"},
+  conversion_eff:{unit:"",desc:"Legacy efficiency key (superseded by power_conversion_eff)",type:"float"},
+  ignore_calibration_constraints:{unit:"",desc:"Bypass ADC calibration sanity constraints",type:"bool"},
+  esp32adc1_sr:{unit:"Hz",desc:"Internal ADC1 continuous-mode raw sample rate",type:"int"},
+  esp32adc1_avg:{unit:"",desc:"Internal ADC1 hardware averaging count per sample",type:"int"},
+  iin_min_supply_voltage:{unit:"V",desc:"Legacy: min supply voltage for current sensor",type:"float"},
+
+  // limits.conf
+  vin_max:{unit:"V",desc:"Maximum input voltage before protection cutout",type:"float"},
+  vin_min:{unit:"V",desc:"Minimum input voltage; below this converter stops",type:"float"},
+  iin_max:{unit:"A",desc:"Maximum input current limit",type:"float"},
+  iout_max:{unit:"A",desc:"Maximum output current limit",type:"float"},
+  iout_short:{unit:"A",desc:"Output short-circuit current threshold",type:"float"},
+  p_max:{unit:"W",desc:"Maximum power (used for thermal derating)",type:"float"},
+  temp_max:{unit:"°C",desc:"Maximum temperature before shutdown",type:"float"},
+  temp_derate:{unit:"°C",desc:"Temperature where power derating begins",type:"float"},
+  reverse_current_paranoia:{unit:"",desc:"Enable aggressive reverse-current protection",type:"bool"},
+
+  // coil.conf
+  L0:{unit:"H",desc:"Coil inductance (for ripple-current computation)",type:"float"},
+
+  // converter.conf
+  topo:{unit:"",desc:"Converter topology: buck or boost",type:"enum"},
+  forced_pwm:{unit:"",desc:"Force CCM PWM even at light loads (1=on)",type:"bool"},
+  boost:{unit:"",desc:"Legacy boost flag (replaced by topo=buck|boost)",type:"bool"},
+  mode:{unit:"",desc:"Legacy control mode (currently unused)",type:"string"},
+
+  // charger.conf
+  cv_eoc:{unit:"V",desc:"End-of-charge voltage of highest cell at tail current",type:"float"},
+  cv_float:{unit:"V",desc:"Float cell voltage where termination line meets zero current",type:"float"},
+  vout_max_fallback:{unit:"V",desc:"Max output voltage when BMS data missing; 0 disables converter",type:"float"},
+  ibat_max:{unit:"A",desc:"Maximum battery charge current limit",type:"float"},
+  bat_c:{unit:"Ah",desc:"Effective battery pack capacity",type:"float"},
+  tail_c_rate:{unit:"C",desc:"End-of-charge tail current as fraction of capacity",type:"float"},
+  recharge_dod:{unit:"",desc:"Depth-of-discharge since full to release termination",type:"float"},
+
+  // tracker.conf
+  target_duty_cycle:{unit:"",desc:"Fixed duty cycle fraction; if set, disables MPPT tracking",type:"float"},
+
+  // mqtt.conf
+  broker_uri:{unit:"",desc:"MQTT broker URI, e.g. mqtt://host:port",type:"string"},
+  username:{unit:"",desc:"MQTT broker login username",type:"string"},
+  password:{unit:"",desc:"MQTT broker login password",type:"string"},
+  cell_voltages_max_topic:{unit:"",desc:"Topic for BMS highest cell voltage",type:"string"},
+  ibat_topic:{unit:"",desc:"Topic for battery current from BMS",type:"string"},
+  ibat_lim_topic:{unit:"",desc:"Topic for battery charge current limit",type:"string"},
+
+  // tele.conf
+  influxdb_host:{unit:"",desc:"InfluxDB host IP for UDP telemetry (port 8086)",type:"string"},
+
+  // ftp.conf (nvs takes precedence; conf is the fallback)
+  ftp_user:{unit:"",desc:"FTP username for config access over LAN",type:"string"},
+  ftp_pass:{unit:"",desc:"FTP password for config access over LAN",type:"string"},
+
+  // lcd.conf
+  addr:{unit:"",desc:"LCD I2C address (0 = auto-probe 0x27/0x3F)",type:"int"},
+
+  // ble.conf
+  ble_security:{unit:"",desc:"BLE pairing mode: justworks or secure",type:"string"},
+  ble_passkey:{unit:"",desc:"BLE static passkey for secure pairing (0 = none)",type:"int"},
+
+  // pprof.conf
+  sprofiler_hz:{unit:"Hz",desc:"Sampling profiler frequency (needs OpenOCD attached)",type:"int"},
+
+  // every service conf (mqtt/tele/ftp/telnet/scope/lcd/ble)
+  enabled:{unit:"",desc:"Start this service at boot (1=on, 0=off)",type:"bool"},
+  log_level:{unit:"",desc:"Service log verbosity: error, warn or info",type:"enum"},
+};
+
+// vout_max means slightly different things per file
+const FILE_META = {
+  "limits.conf":   { vout_max:{unit:"V",desc:"Maximum output voltage before protection cutout",type:"float"} },
+  "charger.conf":  { vout_max:{unit:"V",desc:"Max pack/output charge-target voltage",type:"float"} },
+  "converter.conf":{ vout_max:{unit:"V",desc:"Legacy output voltage limit (real one is in limits.conf)",type:"float"} },
+};
+const META_VOUT_MAX = {unit:"V",desc:"Maximum output voltage",type:"float"};
+
+// channel-prefixed sensor keys (vin_/vout_/iin_/iout_/ntc_ + suffix)
+const CHAN_PREFIX = { vin:"Vin (input voltage)", vout:"Vout (output voltage)",
+                      iin:"Iin (input current)", iout:"Iout (output current)", ntc:"NTC (temperature)" };
+const CHAN_SUFFIX = {
+  adc:{unit:"",desc:"ADC backend for this channel",type:"string"},
+  ch:{unit:"",desc:"ADC channel index (255 = absent)",type:"int"},
+  rh:{unit:"Ω",desc:"Voltage divider upper (high-side) resistor",type:"float"},
+  rl:{unit:"Ω",desc:"Voltage divider lower resistor",type:"float"},
+  factor:{unit:"",desc:"Linear scale factor raw ADC → physical (sign sets direction)",type:"float"},
+  midpoint:{unit:"",desc:"Zero/offset midpoint subtracted before scaling",type:"float"},
+  filt_len:{unit:"",desc:"Filter window length (samples)",type:"int"},
+};
+
+/* Every key the firmware actually reads per file (mined from src/), so the
+   editor can surface fields even when the uploaded .conf omits them.
+   wifi.conf is pattern-based (ssid_<name>/_psk) so it has no fixed list. */
+const FILE_KEYS = {
+  "board.conf":["mcu","skip_assert","i2c_sda","i2c_scl","i2c_freq","i2c_port",
+    "ina22x_alert","ina22x_addr","ina22x_resistor","ina22x_range",
+    "pwm_freq","pwm_driver_logic","pwm_hi","pwm_li","pwm_sd","pwm_in","pwm_en",
+    "panel_en","panel_sd","led_WS2812","led_WS2812B","led_simple","fan_pwm","ads_alert","adc_fake_freq"],
+  "sensor.conf":["adc","expected_hz","power_conversion_eff","ignore_calibration_constraints",
+    "esp32adc1_sr","esp32adc1_avg",
+    "vin_adc","vin_ch","vin_rh","vin_rl","vin_filt_len",
+    "vout_adc","vout_ch","vout_rh","vout_rl","vout_filt_len",
+    "iin_adc","iin_ch","iin_factor","iin_midpoint","iin_filt_len",
+    "iout_adc","iout_ch","iout_factor","iout_midpoint","iout_filt_len",
+    "ntc_adc","ntc_ch","ntc_filt_len"],
+  "limits.conf":["vin_max","vin_min","vout_max","iin_max","iout_max","iout_short",
+    "p_max","temp_max","temp_derate","reverse_current_paranoia"],
+  "coil.conf":["L0"],
+  "converter.conf":["topo","forced_pwm"],
+  "charger.conf":["vout_max","cv_eoc","cv_float","vout_max_fallback","ibat_max",
+    "bat_c","tail_c_rate","recharge_dod"],
+  "tracker.conf":["target_duty_cycle"],
+  "mqtt.conf":["broker_uri","username","password","cell_voltages_max_topic","ibat_topic","ibat_lim_topic","enabled","log_level"],
+  "tele.conf":["influxdb_host","enabled","log_level"],
+  "ftp.conf":["ftp_user","ftp_pass","enabled","log_level"],
+  "telnet.conf":["enabled","log_level"],
+  "scope.conf":["enabled","log_level"],
+  "lcd.conf":["addr","enabled","log_level"],
+  "ble.conf":["ble_security","ble_passkey","enabled","log_level"],
+  "pprof.conf":["sprofiler_hz"],
+  "wifi.conf":[],
+};
+
+/* Data type = the ConfFile getter the firmware reads the key with
+   (getByte/getLong/getFloat/getString), determined by grepping src/. */
+const TYPE_KEYS = {
+  byte: new Set(["ads_alert","addr","enabled","fan_pwm","forced_pwm","i2c_port","i2c_sda","ignore_calibration_constraints",
+    "ina22x_addr","ina22x_alert","led_simple","led_WS2812","ntc_ch","panel_en","panel_sd",
+    "pwm_sd","pwm_hi","pwm_li","pwm_in","pwm_en","reverse_current_paranoia","skip_assert","expected_hz"]),
+  long: new Set(["adc_fake_freq","ble_passkey","esp32adc1_avg","esp32adc1_sr","i2c_freq","i2c_scl","led_WS2812B","pwm_freq","sprofiler_hz"]),
+  float: new Set(["L0","bat_c","cv_eoc","cv_float","ibat_max","iin_max","ina22x_range","ina22x_resistor",
+    "iout_max","iout_short","p_max","power_conversion_eff","conversion_eff","recharge_dod","tail_c_rate",
+    "target_duty_cycle","temp_derate","temp_max","vin_calib","vin_max","vout_calib","vout_max","vout_max_fallback"]),
+  string: new Set(["adc","ble_security","broker_uri","cell_voltages_max_topic","ftp_pass","ftp_user","ibat_lim_topic",
+    "ibat_topic","influxdb_host","log_level","mcu","mode","password","pwm_driver_logic","topo","username"]),
+};
+const CHAN_SUFFIX_TYPE = { adc:"string", ch:"byte", rh:"float", rl:"float", factor:"float", midpoint:"float", filt_len:"long" };
+
+function lookupType(key){
+  for (const t of ["byte","long","float","string"]) if (TYPE_KEYS[t].has(key)) return t;
+  const m = key.match(/^(vin|vout|iin|iout|ntc)_(.+)$/);
+  if (m && CHAN_SUFFIX_TYPE[m[2]]) return CHAN_SUFFIX_TYPE[m[2]];
+  if (/^ssid_.+$/.test(key)) return "string";
+  return "";
+}
+
+function lookupMeta(file, key, inlineComment) {
+  const base = file.split("/").pop();
+  if (FILE_META[base] && FILE_META[base][key]) return FILE_META[base][key];
+  if (key === "vout_max") return META_VOUT_MAX;
+  if (META[key]) return META[key];
+  const m = key.match(/^(vin|vout|iin|iout|ntc)_(.+)$/);
+  if (m && CHAN_SUFFIX[m[2]]) {
+    const s = CHAN_SUFFIX[m[2]];
+    return { unit:s.unit, desc:CHAN_PREFIX[m[1]] + ": " + s.desc, type:s.type };
+  }
+  if (/^ssid_.+_psk$/.test(key)) return {unit:"",desc:"WiFi password for the matching ssid_*",type:"string"};
+  if (/^ssid_.+$/.test(key))    return {unit:"",desc:"WiFi network SSID to connect to",type:"string"};
+  if (inlineComment) return {unit:"", desc:inlineComment, type:"", fromComment:true};
+  return null;
+}
+
+/* ----------------------------------------------------------------------------
+   conf parsing: round-trippable; preserves comments + whitespace.
+   A line model is {raw, key, value, comment}. Editing rewrites only the value.
+---------------------------------------------------------------------------- */
+function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
+
+function parseConf(text){
+  const rawLines = text.split("\n");
+  const lines = rawLines.map(raw => {
+    const hash = raw.indexOf("#");
+    const before = hash >= 0 ? raw.slice(0,hash) : raw;
+    const comment = hash >= 0 ? raw.slice(hash+1).trim() : "";
+    const stripped = before.trim();
+    if (!stripped || !stripped.includes("=")) return { raw, key:null };
+    const eq = stripped.indexOf("=");
+    return { raw, key:stripped.slice(0,eq).trim(), value:stripped.slice(eq+1).trim(), comment };
+  });
+  return { lines };
+}
+
+function rewriteLine(raw, key, val){
+  const re = new RegExp("^(\\s*"+escapeRe(key)+"\\s*=\\s*)([^#\\r\\n]*?)([ \\t]*(?:#[^\\r\\n]*)?\\r?)$");
+  const m = raw.match(re);
+  if (!m) return key + "=" + val;
+  return m[1] + val + m[3];
+}
+
+function setConfValue(model, key, val){
+  for (const l of model.lines){
+    if (l.key === key){ l.value = val; l.raw = rewriteLine(l.raw, key, val); return; }
+  }
+  // append new key
+  if (model.lines.length && model.lines[model.lines.length-1].raw === "")
+    model.lines.splice(model.lines.length-1, 0, {raw:key+"="+val, key, value:val, comment:""});
+  else
+    model.lines.push({raw:key+"="+val, key, value:val, comment:""});
+}
+
+// Remove a key's line (and its inline comment) from the file. Standalone
+// comment lines are left in place.
+function removeConfKey(model, key){
+  model.lines = model.lines.filter(l => l.key !== key);
+}
+
+function serializeConf(model){ return model.lines.map(l => l.raw).join("\n"); }
+
+// Serialize a tracked file, appending any "extra" (firmware-known) keys the
+// user filled in that weren't already present in the file.
+function serializeFile(f){
+  let text = serializeConf(f.model);
+  const present = new Set(f.model.lines.filter(l=>l.key!=null).map(l=>l.key));
+  const adds = Object.entries(f.extras||{}).filter(([k,v])=>String(v).trim()!=="" && !present.has(k));
+  if (adds.length){
+    if (text!=="" && !text.endsWith("\n")) text+="\n";
+    text += adds.map(([k,v])=>k+"="+v).join("\n")+"\n";
+  }
+  return text;
+}
+
+/* ----------------------------------------------------------------------------
+   ZIP read (handles stored + deflate via DecompressionStream) and write (stored).
+---------------------------------------------------------------------------- */
+async function inflateRaw(u8){
+  const ds = new DecompressionStream("deflate-raw");
+  const stream = new Response(u8).body.pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function readZip(buf){
+  const dv = new DataView(buf), u8 = new Uint8Array(buf), td = new TextDecoder();
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= 0; i--){ if (dv.getUint32(i,true) === 0x06054b50){ eocd = i; break; } }
+  if (eocd < 0) throw new Error("not a zip file (no end-of-central-directory record)");
+  const count = dv.getUint16(eocd+10,true), cdOff = dv.getUint32(eocd+16,true);
+  const entries = []; let p = cdOff;
+  for (let i=0;i<count;i++){
+    if (dv.getUint32(p,true) !== 0x02014b50) break;
+    const method=dv.getUint16(p+10,true), compSize=dv.getUint32(p+20,true);
+    const nameLen=dv.getUint16(p+28,true), extraLen=dv.getUint16(p+30,true), cmtLen=dv.getUint16(p+32,true);
+    const localOff=dv.getUint32(p+42,true);
+    const name=td.decode(u8.subarray(p+46,p+46+nameLen));
+    entries.push({name,method,compSize,localOff});
+    p += 46+nameLen+extraLen+cmtLen;
+  }
+  const files = {};
+  for (const e of entries){
+    if (e.name.endsWith("/")) continue;
+    const lNameLen=dv.getUint16(e.localOff+26,true), lExtraLen=dv.getUint16(e.localOff+28,true);
+    const start=e.localOff+30+lNameLen+lExtraLen;
+    const comp=u8.subarray(start,start+e.compSize);
+    if (e.method===0) files[e.name]=comp.slice();
+    else if (e.method===8) files[e.name]=await inflateRaw(comp);
+    else throw new Error("unsupported compression ("+e.method+") for "+e.name);
+  }
+  return files;
+}
+
+const CRC_TABLE = (()=>{ const t=new Uint32Array(256);
+  for (let n=0;n<256;n++){ let c=n; for (let k=0;k<8;k++) c = (c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c>>>0; }
+  return t; })();
+function crc32(u8){ let c=0xFFFFFFFF; for (let i=0;i<u8.length;i++) c=CRC_TABLE[(c^u8[i])&0xFF]^(c>>>8); return (c^0xFFFFFFFF)>>>0; }
+
+function writeZip(files){
+  const enc=new TextEncoder(), local=[], central=[]; let offset=0;
+  for (const name of Object.keys(files)){
+    const data=files[name], nameB=enc.encode(name), crc=crc32(data), sz=data.length;
+    const lh=new Uint8Array(30+nameB.length), ldv=new DataView(lh.buffer);
+    ldv.setUint32(0,0x04034b50,true); ldv.setUint16(4,20,true); ldv.setUint16(8,0,true);
+    ldv.setUint32(14,crc,true); ldv.setUint32(18,sz,true); ldv.setUint32(22,sz,true);
+    ldv.setUint16(26,nameB.length,true); lh.set(nameB,30);
+    local.push(lh,data);
+    const ch=new Uint8Array(46+nameB.length), cdv=new DataView(ch.buffer);
+    cdv.setUint32(0,0x02014b50,true); cdv.setUint16(4,20,true); cdv.setUint16(6,20,true);
+    cdv.setUint16(10,0,true); cdv.setUint32(16,crc,true); cdv.setUint32(20,sz,true); cdv.setUint32(24,sz,true);
+    cdv.setUint16(28,nameB.length,true); cdv.setUint32(42,offset,true); ch.set(nameB,46);
+    central.push(ch);
+    offset += lh.length + sz;
+  }
+  const cdStart=offset; let cdSize=0; central.forEach(c=>cdSize+=c.length);
+  const eocd=new Uint8Array(22), edv=new DataView(eocd.buffer);
+  edv.setUint32(0,0x06054b50,true); edv.setUint16(8,central.length,true); edv.setUint16(10,central.length,true);
+  edv.setUint32(12,cdSize,true); edv.setUint32(16,cdStart,true);
+  return new Blob([...local,...central,eocd],{type:"application/zip"});
+}
+
+/* ----------------------------------------------------------------------------
+   App state + UI
+---------------------------------------------------------------------------- */
+const TAB_ORDER = ["board","sensor","limits","coil","converter","charger","tracker","mqtt","tele","pprof","wifi"];
+const td = new TextDecoder();
+let state = null;  // {sourceName, files:{path:{isConf, model?, bytes?}}, confPaths:[], active}
+
+function isConfPath(p){ return /\.conf$/i.test(p); }
+
+function load(files, sourceName){
+  const map = {};
+  for (const path of Object.keys(files)){
+    const bytes = files[path];
+    if (isConfPath(path)){
+      const model = parseConf(td.decode(bytes));
+      const base = path.split("/").pop();
+      // stable display order: keys present in the file first, then remaining
+      // firmware-known keys. Keeps rows from jumping when toggled set/unset.
+      const order = model.lines.filter(l=>l.key!=null).map(l=>l.key);
+      for (const k of (FILE_KEYS[base]||[])) if (!order.includes(k)) order.push(k);
+      // value each key had in the file, so we can show "was: …" after edits/deletes
+      const original = {};
+      for (const l of model.lines) if (l.key!=null && !(l.key in original)) original[l.key]=l.value;
+      map[path] = { isConf:true, model, extras:{}, order, original };
+    }
+    else map[path] = { isConf:false, bytes };
+  }
+  const confPaths = Object.keys(map).filter(p=>map[p].isConf).sort(confSort);
+  if (!confPaths.length) throw new Error("no .conf files found in the upload");
+  state = { sourceName, files:map, confPaths, active:confPaths[0] };
+  renderApp();
+}
+
+function confSort(a,b){
+  const ai=TAB_ORDER.indexOf(a.split("/").pop().replace(/\.conf$/,""));
+  const bi=TAB_ORDER.indexOf(b.split("/").pop().replace(/\.conf$/,""));
+  return (ai<0?99:ai)-(bi<0?99:bi) || a.localeCompare(b);
+}
+
+function renderApp(){
+  document.getElementById("drop").style.display="none";
+  document.getElementById("app").style.display="block";
+  for (const id of ["download","reload-zip","reload-dir","serial-btn"]) document.getElementById(id).style.display="";
+  const sn=document.getElementById("srcname"); sn.style.display=""; sn.textContent=state.sourceName;
+
+  const tabs=document.getElementById("tabs"); tabs.innerHTML="";
+  for (const path of state.confPaths){
+    const t=document.createElement("div");
+    t.className="tab"+(path===state.active?" active":"");
+    t.title=path;
+    t.innerHTML = path.split("/").pop() + '<span class="dot" data-path="'+path+'" style="display:none">●</span>';
+    t.onclick=()=>{ state.active=path; renderApp(); };
+    tabs.appendChild(t);
+  }
+  renderPane();
+  refreshDirtyMarks();
+}
+
+function renderPane(){
+  const panes=document.getElementById("panes"); panes.innerHTML="";
+  const path=state.active, f=state.files[path], model=f.model;
+  const pane=document.createElement("div"); pane.className="pane active";
+
+  const pathEl=document.createElement("div"); pathEl.className="path"; pathEl.textContent=path;
+  pane.appendChild(pathEl);
+
+  const unitInputs = [];  // [input, unitSpan] pairs to size after layout
+
+  function makeRow(key, value, comment, isExtra){
+    const meta = lookupMeta(path, key, comment);
+    const row = document.createElement("div");
+    row.className = "row" + (isExtra ? " extra" : "");
+    row._key = key;
+
+    const left = document.createElement("div");
+    const k = document.createElement("div"); k.className="k";
+    const ty = lookupType(key);
+    k.innerHTML = escHtml(key)
+      + (ty ? ' <span class="type" data-t="'+ty+'" title="firmware reads this with ConfFile::get'+
+              ty.charAt(0).toUpperCase()+ty.slice(1)+'()">'+ty+'</span>' : "")
+      + (meta ? "" : ' <span class="nometa" title="no metadata found in firmware">?</span>');
+    left.appendChild(k);
+    const d = document.createElement("div"); d.className="desc";
+    d.textContent = meta ? meta.desc : "(no description found)";
+    if (meta && meta.fromComment) d.textContent += "  ·  (from file comment)";
+    left.appendChild(d);
+
+    const right = document.createElement("div"); right.className="val";
+    const line = document.createElement("div"); line.className="val-line";
+    const wrap = document.createElement("div"); wrap.className="inwrap";
+    const inp = document.createElement("input"); inp.type="text"; inp.value=value;
+    inp.spellcheck=false; inp.autocomplete="off";
+    if (isExtra) inp.placeholder="<not set>";
+    wrap.appendChild(inp);
+    if (meta && meta.unit){
+      const u = document.createElement("span"); u.className="unit-suffix"; u.textContent=meta.unit;
+      wrap.appendChild(u); unitInputs.push([inp,u]);
+    }
+    line.appendChild(wrap);
+
+    // clear button: removes the entry from the file, leaving it <not set>
+    const clearBtn = document.createElement("button");
+    clearBtn.type="button"; clearBtn.className="clear-btn"; clearBtn.textContent="×";
+    clearBtn.title="remove from file (set to <not set>)";
+    clearBtn.onclick = ()=>{ removeConfKey(model,key); f.extras[key]=""; markDirty(path); renderPane(); refreshDirtyMarks(); };
+    const updateClearVis = ()=>{ clearBtn.style.display = inp.value.trim()!=="" ? "" : "none"; };
+    line.appendChild(clearBtn);
+
+    right.appendChild(line);
+    const origEl = document.createElement("div"); origEl.className="orig"; origEl.style.display="none";
+    right.appendChild(origEl);
+
+    const orig = f.original[key];  // value loaded from the file (undefined if not in file)
+    const updateOrig = ()=>{
+      const show = orig!==undefined && inp.value!==orig;
+      origEl.style.display = show ? "" : "none";
+      if (show) origEl.textContent = "was: " + (orig==="" ? "(empty)" : orig);
+      row.classList.toggle("changed", show);
+    };
+    inp.oninput = isExtra
+      ? ()=>{ f.extras[key]=inp.value; row.classList.toggle("filled", inp.value.trim()!==""); updateOrig(); updateClearVis(); markDirty(path); refreshRaw(); }
+      : ()=>{ setConfValue(model,key,inp.value); updateOrig(); updateClearVis(); markDirty(path); refreshRaw(); };
+    updateOrig(); updateClearVis();
+
+    row.appendChild(left); row.appendChild(right);
+    return row;
+  }
+
+  // render every key in the stable order; present rows come from the model,
+  // the rest render as <not set> placeholders.
+  for (const key of f.order){
+    const l = model.lines.find(x=>x.key===key);
+    if (l){
+      pane.appendChild(makeRow(key, l.value, l.comment, false));
+    } else {
+      const v = f.extras[key] || "";
+      const row = makeRow(key, v, "", true);
+      if (v.trim()!=="") row.classList.add("filled");
+      pane.appendChild(row);
+    }
+  }
+
+  // add-key (arbitrary)
+  const add=document.createElement("div"); add.className="addkey";
+  const ki=document.createElement("input"); ki.placeholder="new key";
+  const vi=document.createElement("input"); vi.placeholder="value";
+  const ab=document.createElement("button"); ab.textContent="+ add key";
+  ab.onclick=()=>{ const key=ki.value.trim(); if(!key) return;
+    setConfValue(model,key,vi.value); delete f.extras[key];
+    if (!f.order.includes(key)) f.order.push(key);
+    markDirty(path); renderPane(); refreshDirtyMarks(); };
+  add.append(ki,vi,ab); pane.appendChild(add);
+
+  // raw preview
+  const det=document.createElement("details"); det.className="raw";
+  const sum=document.createElement("summary"); sum.textContent="raw "+path.split("/").pop();
+  const pre=document.createElement("pre"); pre.textContent=serializeFile(f);
+  function refreshRaw(){ if(det.open) pre.textContent=serializeFile(f); }
+  det.ontoggle=refreshRaw;
+  det.append(sum,pre); pane.appendChild(det);
+
+  panes.appendChild(pane);
+
+  // size each unit-bearing input's right padding to its suffix width
+  for (const [inp,u] of unitInputs) inp.style.paddingRight = (u.offsetWidth + 16) + "px";
+}
+
+// Keys whose current value differs from what the file loaded with: present
+// keys compared to f.original, originally-absent keys count as changed only
+// once filled in. {key, cur, orig} (orig undefined if the key wasn't in the file).
+function changedFields(f){
+  const out = [];
+  if (!f.isConf) return out;
+  for (const key of f.order){
+    const orig = f.original[key];
+    const l = f.model.lines.find(x=>x.key===key);
+    const cur = l ? l.value : (f.extras[key]||"");
+    if (orig===undefined ? cur.trim()!=="" : cur!==orig) out.push({key, cur, orig});
+  }
+  return out;
+}
+// A file is "changed" if any field changed. Reverting every field clears the mark.
+function isFileDirty(f){ return changedFields(f).length > 0; }
+function markDirty(path){ refreshDirtyMarks(); }
+function refreshDirtyMarks(){
+  document.querySelectorAll("#tabs .dot").forEach(d=>{
+    const f = state.files[d.dataset.path];
+    d.style.display = (f && isFileDirty(f)) ? "" : "none";
+  });
+}
+function escHtml(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function download(){
+  const enc=new TextEncoder(); const out={};
+  for (const path of Object.keys(state.files)){
+    const f=state.files[path];
+    out[path] = f.isConf ? enc.encode(serializeFile(f)) : f.bytes;
+  }
+  const blob=writeZip(out);
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download=(state.sourceName.replace(/\.zip$/i,"")||"config")+"-edited.zip";
+  a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+
+/* ----------------------------------------------------------------------------
+   Input wiring: zip file, folder, drag-drop
+---------------------------------------------------------------------------- */
+function showStatus(msg, isErr){
+  const c = isErr ? "var(--warn)" : "var(--muted)";
+  const dm=document.getElementById("drop-msg"); dm.textContent=msg; dm.style.color=c;
+  const hs=document.getElementById("serial-status");
+  if (hs){ hs.textContent=msg; hs.style.display=msg?"":"none"; hs.style.color=c; }
+}
+function showErr(msg){ showStatus(msg, true); }
+
+async function handleZipFile(file){
+  try { load(await readZip(await file.arrayBuffer()), file.name); }
+  catch(e){ showErr("Could not read "+file.name+": "+e.message); }
+}
+
+async function handleFolder(fileList){
+  try {
+    const arr = Array.from(fileList).filter(Boolean);
+    if (!arr.length) throw new Error("no files in selection");
+    const files={};
+    for (const file of arr){
+      const rel = file.webkitRelativePath || file.name;
+      files[rel] = new Uint8Array(await file.arrayBuffer());
+    }
+    const root=(arr[0].webkitRelativePath||"").split("/")[0] || "config";
+    load(files, root);
+  } catch(e){ showErr("Could not read folder: "+e.message); }
+}
+
+// Drag-dropped folders: dataTransfer.files is empty/invalid for directories,
+// so walk the FileSystemEntry tree (must grab entries synchronously, pre-await).
+function readEntryTree(entry, prefix, out){
+  return new Promise(resolve=>{
+    if (entry.isFile){
+      entry.file(file=>{ out.push({file, path:prefix+entry.name}); resolve(); }, ()=>resolve());
+    } else if (entry.isDirectory){
+      const reader=entry.createReader(), kids=[];
+      const readBatch=()=>reader.readEntries(async batch=>{
+        if (!batch.length){
+          await Promise.all(kids.map(k=>readEntryTree(k, prefix+entry.name+"/", out)));
+          resolve();
+        } else { kids.push(...batch); readBatch(); }
+      }, ()=>resolve());
+      readBatch();
+    } else resolve();
+  });
+}
+
+async function handleEntries(entries){
+  try {
+    const collected=[];
+    for (const en of entries) await readEntryTree(en, "", collected);
+    if (!collected.length) throw new Error("dropped folder is empty");
+    const files={};
+    for (const {file,path} of collected) files[path]=new Uint8Array(await file.arrayBuffer());
+    load(files, entries[0].name || "config");
+  } catch(e){ showErr("Could not read dropped folder: "+e.message); }
+}
+
+function wireInput(el, handler){ el.addEventListener("change", e=>{ if(e.target.files.length) handler(e.target.files); el.value=""; }); }
+wireInput(document.getElementById("pick-zip"), fl=>handleZipFile(fl[0]));
+wireInput(document.getElementById("pick-dir"), handleFolder);
+wireInput(document.querySelector("#reload-zip input"), fl=>handleZipFile(fl[0]));
+wireInput(document.querySelector("#reload-dir input"), handleFolder);
+document.getElementById("download").onclick=download;
+
+const drop=document.getElementById("drop");
+["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("hover");}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("hover");}));
+drop.addEventListener("drop",e=>{
+  // Grab FileSystemEntries synchronously (they expire once the handler returns).
+  const items=e.dataTransfer.items;
+  const entries=[];
+  if (items && items.length && items[0].webkitGetAsEntry){
+    for (const it of items){ const en=it.webkitGetAsEntry(); if (en) entries.push(en); }
+  }
+  if (entries.some(en=>en.isDirectory)){ handleEntries(entries); return; }
+  const f=e.dataTransfer.files; if(!f.length) return;
+  if (/\.zip$/i.test(f[0].name)) handleZipFile(f[0]); else handleFolder(f);
+});
+window.addEventListener("dragover",e=>e.preventDefault());
+window.addEventListener("drop",e=>{ if(state) e.preventDefault(); });
+
+/* ----------------------------------------------------------------------------
+   Web Serial: read live config off the device via `get-config <file>`.
+   Lines look like:  Conf '/littlefs/conf/board.conf:mcu' = 'esp32s3'
+   and each file ends with:  main: OK: get-config board.conf
+---------------------------------------------------------------------------- */
+let serialPort=null, serialReader=null;
+// Active transport write fn (set by connectSerial / connectBluetooth). getConfig() is transport-agnostic.
+let activeWrite=null;
+// Which transport was used last and the authorized handles, so the upload can
+// silently reconnect (no chooser) after the read flow closed the connection.
+let lastTransport=null;        // 'serial' | 'ble'
+let grantedSerialPort=null;    // navigator.serial port, stays authorized across close()
+let grantedBleDevice=null;     // BLE device, stays authorized across gatt.disconnect()
+const lineListeners = new Set();
+// The device prefixes each line with an ESP log tag, e.g.
+//   I (941282) main: Conf '/littlefs/conf/board.conf:mcu' = 'esp32s3'
+// so match the Conf pattern anywhere in the line, not just at the start.
+const CONF_LINE = /Conf '\/littlefs\/conf\/([^:']+):([^']+)' = '(.*)'\s*$/;
+
+async function serialReadLoop(port){
+  const reader = port.readable.getReader();
+  serialReader = reader;
+  const dec = new TextDecoder(); let buf="";
+  try {
+    while (true){
+      const {value,done} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while ((i=buf.indexOf("\n")) >= 0){
+        const ln = buf.slice(0,i).replace(/\r$/,"");
+        buf = buf.slice(i+1);
+        lineListeners.forEach(fn=>fn(ln));
+      }
+    }
+  } catch(e){ /* port closed/cancelled */ }
+  finally { try { reader.releaseLock(); } catch(_){} }
+}
+
+async function serialWrite(str){
+  const w = serialPort.writable.getWriter();
+  try { await w.write(new TextEncoder().encode(str)); }
+  finally { w.releaseLock(); }
+}
+
+// Send `get-config <file>`, collect Conf lines until the OK confirmation.
+function getConfig(file, timeoutMs=3000){
+  return new Promise(async (resolve,reject)=>{
+    const kv = {};
+    const onLine = (ln)=>{
+      const m = ln.match(CONF_LINE);
+      if (m && m[1]===file){ kv[m[2]] = m[3]; return; }
+      if (ln.includes("OK: get-config "+file)){ done(); resolve(kv); }
+    };
+    const timer = setTimeout(()=>{ done(); reject(new Error("timeout")); }, timeoutMs);
+    const done = ()=>{ clearTimeout(timer); lineListeners.delete(onLine); };
+    lineListeners.add(onLine);
+    try { await activeWrite("get-config "+file+"\r\n"); }
+    catch(e){ done(); reject(e); }
+  });
+}
+
+// Send one console command. Collects the device's reply lines and resolves
+// {ok, lines} when it echoes the result marker: console.cpp writes
+// "OK: <cmd>" / "ERR: <cmd>" once handleCommand() returns.
+function sendCommand(cmdStr, timeoutMs=4000){
+  return new Promise((resolve,reject)=>{
+    const lines = [];
+    const onLine = (ln)=>{
+      const ok = ln.endsWith("OK: "+cmdStr), err = ln.endsWith("ERR: "+cmdStr);
+      // drop the device's char-by-char echo of the command we just typed ("> <cmd>")
+      if (!ok && !err && ln.replace(/^>\s*/,"").trim()===cmdStr) return;
+      lines.push(ln);
+      if (ok){ done(); resolve({ok:true, lines}); }
+      else if (err){ done(); resolve({ok:false, lines}); }
+    };
+    const timer = setTimeout(()=>{ done(); reject(new Error("timeout")); }, timeoutMs);
+    const done = ()=>{ clearTimeout(timer); lineListeners.delete(onLine); };
+    lineListeners.add(onLine);
+    activeWrite(cmdStr+"\r\n").catch(e=>{ done(); reject(e); });
+  });
+}
+
+// Ask the device its name via the `hostname` command (prints "Hostname: <name>").
+function fetchHostname(timeoutMs=2500){
+  return new Promise(resolve=>{
+    const onLine = (ln)=>{ const m = ln.match(/Hostname:\s*(.+?)\s*$/); if (m){ done(); resolve(m[1]); } };
+    const timer = setTimeout(()=>{ done(); resolve(null); }, timeoutMs);
+    const done = ()=>{ clearTimeout(timer); lineListeners.delete(onLine); };
+    lineListeners.add(onLine);
+    activeWrite("hostname\r\n").catch(()=>{ done(); resolve(null); });
+  });
+}
+
+async function importFromDevice(sourceLabel){
+  let label = sourceLabel || "device";
+  try { const hn = await fetchHostname(); if (hn) label = hn; } catch(_){}
+  const enc = new TextEncoder(); const files = {}; let n=0;
+  for (const file of Object.keys(FILE_KEYS)){
+    showStatus("reading "+file+" …");
+    try {
+      const kv = await getConfig(file);
+      const keys = Object.keys(kv);
+      if (!keys.length) continue;            // file absent or empty on device
+      files["conf/"+file] = enc.encode(keys.map(k=>k+"="+kv[k]).join("\n")+"\n");
+      n++;
+    } catch(e){ /* timeout: treat as absent, keep going */ }
+  }
+  if (!n) throw new Error("no config received — is the device at the console prompt?");
+  load(files, label);
+  showStatus("");
+}
+
+async function disconnectSerial(){
+  try { if (serialReader) await serialReader.cancel(); } catch(_){}
+  serialReader=null;
+  try { if (serialPort) await serialPort.close(); } catch(_){}
+  serialPort=null;
+  activeWrite=null;
+}
+
+async function connectSerial(){
+  if (!('serial' in navigator)){
+    showErr("Web Serial isn't available — use Chrome or Edge over localhost or https.");
+    return;
+  }
+  let port;
+  try { port = await navigator.serial.requestPort(); }
+  catch(e){ return; }   // user dismissed the chooser
+  grantedSerialPort = port; lastTransport = "serial";
+  try {
+    await port.open({ baudRate:115200 });
+    serialPort = port;
+    serialReadLoop(port);            // runs in background until disconnect
+    activeWrite = serialWrite;
+    showStatus("connected — reading config from device …");
+    await importFromDevice("serial-device");
+    document.getElementById("upload").style.display="";
+  } catch(e){
+    showErr("Serial: "+e.message);
+  } finally {
+    await disconnectSerial();
+  }
+}
+
+/* ----------------------------------------------------------------------------
+   Web Bluetooth: same get-config flow over the Nordic UART Service (NUS).
+   Chromium only (Chrome/Edge/Opera), secure context (https or localhost) — not file://,
+   Safari, Firefox or iOS. Requires the firmware built with WITH_BLE and `service start ble`.
+---------------------------------------------------------------------------- */
+const NUS_SVC = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const NUS_RX  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // write (client -> device)
+const NUS_TX  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // notify (device -> client)
+let bleDevice=null, bleServer=null, bleRxChar=null, bleTxChar=null, bleBuf="";
+
+function onBleNotify(e){
+  bleBuf += new TextDecoder().decode(e.target.value);
+  let i;
+  while ((i=bleBuf.indexOf("\n")) >= 0){
+    const ln = bleBuf.slice(0,i).replace(/\r$/,"");
+    bleBuf = bleBuf.slice(i+1);
+    lineListeners.forEach(fn=>fn(ln));
+  }
+}
+
+async function bleWrite(str){
+  const data = new TextEncoder().encode(str);
+  for (let off=0; off<data.length; off+=20){            // keep within the default 20-byte ATT payload
+    const slice = data.slice(off, off+20);
+    // Write WITH response: if the RX characteristic requires encryption (justworks/passkey),
+    // the ATT error on an unencrypted write is what makes the OS trigger pairing. A
+    // write-without-response has no error channel, so the command would be silently dropped.
+    if (bleRxChar.writeValueWithResponse) await bleRxChar.writeValueWithResponse(slice);
+    else await bleRxChar.writeValue(slice);
+  }
+}
+
+async function disconnectBluetooth(){
+  try { if (bleTxChar){ bleTxChar.removeEventListener('characteristicvaluechanged', onBleNotify); await bleTxChar.stopNotifications(); } } catch(_){}
+  try { if (bleServer && bleServer.connected) bleServer.disconnect(); } catch(_){}
+  bleTxChar=null; bleRxChar=null; bleServer=null; bleDevice=null; bleBuf=""; activeWrite=null;
+}
+
+// gatt.connect()+service discovery on Chrome/macOS often fails on the first try
+// ("Connection attempt failed" / "GATT operation failed") — retry a few times.
+async function bleConnectAndDiscover(device, attempts=4){
+  let lastErr;
+  for (let i=1; i<=attempts; i++){
+    try {
+      const server = await device.gatt.connect();
+      const svc = await server.getPrimaryService(NUS_SVC);
+      const rx = await svc.getCharacteristic(NUS_RX);
+      const tx = await svc.getCharacteristic(NUS_TX);
+      return { server, rx, tx };
+    } catch(e){
+      lastErr = e;
+      try { device.gatt.disconnect(); } catch(_){}
+      if (i < attempts){
+        showStatus(`BLE connect attempt ${i}/${attempts} failed (${e.message}) — retrying…`);
+        await new Promise(r=>setTimeout(r, 500*i));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+async function connectBluetooth(){
+  if (!('bluetooth' in navigator)){
+    showErr("Web Bluetooth isn't available — use Chrome or Edge over localhost or https (not Safari/Firefox/iOS).");
+    return;
+  }
+  try { bleDevice = await navigator.bluetooth.requestDevice({ filters:[{services:[NUS_SVC]}], optionalServices:[NUS_SVC] }); }
+  catch(e){ return; }   // user dismissed the chooser
+  grantedBleDevice = bleDevice; lastTransport = "ble";
+  try {
+    const { server, rx, tx } = await bleConnectAndDiscover(bleDevice);
+    bleServer = server; bleRxChar = rx; bleTxChar = tx;
+    bleBuf="";
+    await bleTxChar.startNotifications();
+    bleTxChar.addEventListener('characteristicvaluechanged', onBleNotify);
+    activeWrite = bleWrite;
+    showStatus("connected — reading config from device …");
+    await importFromDevice("ble-device");
+    document.getElementById("upload").style.display="";
+  } catch(e){
+    showErr("Bluetooth: "+e.message+" — if it was paired before, remove the device in your OS Bluetooth settings; make sure no phone or other browser tab holds the connection, then retry.");
+  } finally {
+    await disconnectBluetooth();
+  }
+}
+
+/* ----------------------------------------------------------------------------
+   Upload: push only the changed fields back with `set-config <file> <key> <value>`
+   over whichever transport was used last, reconnecting silently if the read flow
+   already closed the connection.
+---------------------------------------------------------------------------- */
+async function ensureConnection(){
+  if (activeWrite) return;            // still connected
+  if (lastTransport==="serial"){
+    if (!grantedSerialPort) throw new Error("connect to the device first");
+    await grantedSerialPort.open({ baudRate:115200 });
+    serialPort = grantedSerialPort;
+    serialReadLoop(serialPort);
+    activeWrite = serialWrite;
+  } else if (lastTransport==="ble"){
+    if (!grantedBleDevice) throw new Error("connect to the device first");
+    const { server, rx, tx } = await bleConnectAndDiscover(grantedBleDevice);
+    bleServer = server; bleRxChar = rx; bleTxChar = tx; bleBuf="";
+    await bleTxChar.startNotifications();
+    bleTxChar.addEventListener('characteristicvaluechanged', onBleNotify);
+    activeWrite = bleWrite;
+  } else {
+    throw new Error("read the config from a device first");
+  }
+}
+
+async function uploadChanged(){
+  if (!state) return;
+  // gather changed fields: set-config for new/edited values, del-config for cleared keys
+  const cmds = [];
+  for (const path of state.confPaths){
+    const f = state.files[path], base = path.split("/").pop();
+    for (const {key,cur} of changedFields(f)){
+      if (cur.trim()==="") cmds.push({ str:`del-config ${base} ${key}`, label:base+":"+key, f, key, del:true });
+      else cmds.push({ str:`set-config ${base} ${key} ${cur}`, label:base+":"+key, f, key, cur });
+    }
+  }
+  if (!cmds.length){ showStatus("nothing changed to upload"); return; }
+  // confirm: list every command that will be sent before touching the device
+  const tname = lastTransport==="ble" ? "Bluetooth" : lastTransport==="serial" ? "serial" : "the device";
+  const prompt = `Send these ${cmds.length} command(s) to ${tname}?\n\n` + cmds.map(c=>"  "+c.str).join("\n");
+  if (!window.confirm(prompt)) return;
+  const btn = document.getElementById("upload"); btn.disabled = true;
+  const weOpened = !activeWrite;
+  const failed = []; let ok=0, aborted=false;
+  ulOpen(`sending ${cmds.length} command(s) over ${tname}`);
+  try {
+    await ensureConnection();
+    for (let i=0;i<cmds.length;i++){
+      const c = cmds[i];
+      showStatus(`uploading ${i+1}/${cmds.length}: ${c.label} …`);
+      ulLine("sent", "> "+c.str);
+      try {
+        const r = await sendCommand(c.str);
+        for (const ln of r.lines) ulLine("resp"+(r.ok?" ok":" err"), ln);
+        if (r.ok){ ok++; if (c.del) delete c.f.original[c.key]; else c.f.original[c.key] = c.cur; }  // now matches device → clears the mark
+        else failed.push(c.label);
+      } catch(e){ ulLine("resp err", "(no response: "+e.message+")"); failed.push(c.label+" ("+e.message+")"); }
+    }
+  } catch(e){
+    showErr("Upload: "+e.message); ulLine("resp err", "connection failed: "+e.message); aborted=true;
+  } finally {
+    if (weOpened) await (lastTransport==="ble"?disconnectBluetooth():disconnectSerial());
+    btn.disabled=false;
+    renderPane(); refreshDirtyMarks();   // drop dots/"was:" for fields now on the device
+  }
+  if (aborted){ ulStat("connection failed", true); return; }   // keep the connection error visible
+  let msg = `uploaded ${ok}/${cmds.length} changed field${cmds.length>1?"s":""}`;
+  if (failed.length) msg += " — failed: "+failed.join(", ");
+  ulStat(`done: ${ok}/${cmds.length} ok`+(failed.length?`, ${failed.length} failed`:""), failed.length>0);
+  showStatus(msg, failed.length>0);
+}
+
+// Upload log panel: shows each command sent and the device's reply lines.
+function ulOpen(statusText){
+  document.getElementById("uploadlog-body").innerHTML="";
+  ulStat(statusText, false);
+  document.getElementById("uploadlog").style.display="block";
+}
+function ulStat(text, isErr){
+  const s=document.getElementById("uploadlog-stat");
+  s.textContent=text; s.style.color = isErr ? "var(--warn)" : "var(--muted)";
+}
+function ulLine(cls, text){
+  const log=document.getElementById("uploadlog"), body=document.getElementById("uploadlog-body");
+  const d=document.createElement("div"); d.className=cls; d.textContent=text; body.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+document.getElementById("uploadlog-close").onclick = ()=>{ document.getElementById("uploadlog").style.display="none"; };
+
+document.getElementById("upload").onclick = uploadChanged;
+document.getElementById("connect-serial").onclick = connectSerial;
+document.getElementById("serial-btn").onclick = connectSerial;
+document.getElementById("connect-ble").onclick = connectBluetooth;
+
+if (typeof DecompressionStream === "undefined")
+  showErr("Note: this browser lacks DecompressionStream; compressed .zip reading may fail. Folder upload still works.");
+</script>
+</body>
+</html>

@@ -1,14 +1,14 @@
 fallback_hosts = [
     # (ip, port, name),
-    ('192.168.4.13', 0, 'flat'),
-    ('192.168.4.2', 0, 'fry'),
+    ('192.168.4.3', 0, 'flat'),
+    ('192.168.4.2', 0, 'fry'), # 192.168.4.3
 ]
 
 """
 
 1. build (idf.py build)
 2. start web server to serve firmware binary
-    python3 -m http.server 9000
+    python3 -m http.server 9000upd
 3. discover hosts
 4 iterate hosts
     > ota http://192.168.1.161:9000/build/fugu-firmware.bin 
@@ -17,13 +17,32 @@ idf.py build
 
 """""
 import asyncio
+import atexit
+import os
 import re
+import socket
+import subprocess
 import sys
 import time
 
 from etc.fugu.discover import discover_scope_servers
 from etc.fugu.fugu import FuguDevice
 from etc.fugu.transport import SocketTransport
+
+HTTP_PORT = 9000
+
+
+def ensure_http_server():
+    """Spawn `python3 -m http.server` serving the repo root if port is free."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(('127.0.0.1', HTTP_PORT)) == 0:
+            return  # something already listening
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    print(f'starting http.server on :{HTTP_PORT} (cwd={repo_root})')
+    proc = subprocess.Popen([sys.executable, '-m', 'http.server', str(HTTP_PORT)],
+                            cwd=repo_root, stderr=subprocess.DEVNULL)
+    atexit.register(proc.terminate)
+    time.sleep(.5)
 
 hosts = discover_scope_servers()
 
@@ -34,8 +53,6 @@ if not hosts:
     sys.exit(1)
 
 print(hosts)
-
-listening = set()
 
 
 async def send_ota_command(addr, name):
@@ -61,10 +78,6 @@ async def send_ota_command(addr, name):
     fd.on_message = on_message
 
     private_ip, *_ = st.sock.getsockname()
-    if private_ip not in listening:
-        # http.server.SimpleHTTPRequestHandler()
-        # TODO we currently spawn the http server in ota.sh
-        listening.add(private_ip)
     # fd.wait_for_pwm_state()
     fd.write(f"ping\n")  # clear command buffer on device
     time.sleep(.1)
@@ -109,6 +122,7 @@ async def send_ota_command(addr, name):
 
 
 async def main():
+    ensure_http_server()
     res = await asyncio.gather(*[send_ota_command(ip, name) for ip, port, name in hosts])
     res = dict(zip((name for _, _, name in hosts), res))
     for name, ok in res.items():

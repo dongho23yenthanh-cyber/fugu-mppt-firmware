@@ -1,7 +1,6 @@
 #pragma once
 
 //#include "../adc/sampling.h"
-//#include "Point.h"
 //#include "../store.h"
 #include <string>
 #include <Arduino.h>
@@ -27,9 +26,9 @@ bool wait_for_wifi();
 void wifiLoop(bool connect = false);
 
 
-class Point;
+#include "line_protocol.h"
 
-void telemetryAddPoint(Point &p, uint16_t maxQueue = 40);
+void telemetryAddPoint(LineProtocol &p, uint16_t maxQueue = 40);
 
 void telemetryFlushPointsQ(const IPAddress &addr);
 

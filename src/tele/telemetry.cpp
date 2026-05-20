@@ -1,10 +1,9 @@
 #include "telemetry.h"
 
 #include "../adc/sampling.h"
-#include "Point.h"
+#include "line_protocol.h"
 #include "../web/server.h"
 #include "../store.h"
-//#include <InfluxDbClient.h>
 
 #include <WiFiMulti.h>
 //#include <WiFiUdp.h>
@@ -204,7 +203,7 @@ static void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
 }
 
 
-static void influxWritePointsUDP(const IPAddress &dst, moodycamel::ReaderWriterQueue<Point> &q) {
+static void influxWritePointsUDP(const IPAddress &dst, moodycamel::ReaderWriterQueue<std::string> &q) {
     constexpr int MTU = CONFIG_TCP_MSS;
     // notice that MTU is not the UDP max message size (which is >64k?), here we use MTU from ip4 as a "safe" value
 
@@ -214,13 +213,13 @@ static void influxWritePointsUDP(const IPAddress &dst, moodycamel::ReaderWriterQ
 
     static String msg;
 
-    static Point p{""};
-    while (q.try_dequeue(p)) {
-        auto lp = p.toLineProtocol();
-        if (msg.length() + lp.length() >= MTU) {
+    std::string lp;
+    while (q.try_dequeue(lp)) {
+        if (msg.length() + lp.length() + 1 >= MTU) {
             udpFlushString(dst, port, msg);
         }
-        msg += lp + '\n';
+        msg += lp.c_str();
+        msg += '\n';
     }
 }
 
@@ -237,24 +236,13 @@ const char *getChipId() {
 }
 
 
-moodycamel::ReaderWriterQueue<Point> pointsQ{};
+moodycamel::ReaderWriterQueue<std::string> pointsQ{};
 
-void telemetryAddPoint(Point &p, uint16_t maxQueue) {
-    //static std::vector<Point> points_frame;
-
+void telemetryAddPoint(LineProtocol &p, uint16_t maxQueue) {
     assert(p.hasTime());
 
-    if (!p.hasTags())
-        p.addTag("mcu", getChipId());
-
     if (pointsQ.size_approx() < maxQueue)
-        pointsQ.enqueue(p);
-
-    //if (points_frame.size() >= maxQueue) {
-    //    if (timeSynced)
-    //        influxWritePointsUDP(&points_frame[0], points_frame.size());
-    //    points_frame.clear();
-    //}
+        pointsQ.enqueue(p.takeLine());
 }
 
 void telemetryFlushPointsQ(const IPAddress &addr) {
@@ -266,10 +254,10 @@ extern VIinVout<const Sensor *> sensors;
 
 void dcdcDataChanged(const ADC_Sampler &dcdc, const Sensor &sensor) {
     if (timeSynced && sensor.params.rawTelemetry && !sensor.params.teleName.empty() && WiFi.isConnected()) {
-        Point point("mppt");
+        LineProtocol point("mppt");
         point.addTag("device", getHostname().c_str());
         point.addField(sensor.params.teleName.c_str(), sensor.last, 3);
-        point.setTime(WritePrecision::MS);
+        point.setTimeMs();
         telemetryAddPoint(point, 600);
     }
 }

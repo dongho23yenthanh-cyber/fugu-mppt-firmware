@@ -1,7 +1,6 @@
 #include "mppt.h"
 
-#include "Point.h"
-#include "WritePrecision.h"
+#include "tele/line_protocol.h"
 
 
 /**
@@ -413,7 +412,7 @@ void MpptController::telemetry() {
     float power = sensorPhysicalI->med3.get() * sensorPhysicalU->med3.get();
 
 
-    Point point("mppt");
+    LineProtocol point("mppt");
     point.addTag("device", getHostname().c_str());
     point.addField("I", sensorPhysicalI->med3.get(), 3);
     point.addField("Ui", sensors.Vin->med3.get(), 2);
@@ -458,7 +457,7 @@ void MpptController::telemetry() {
         point.addField("cv_lim_idx", limIdxSampled.pop());
     }
 
-    point.setTime(WritePrecision::MS);
+    point.setTimeMs();
 
     telemetryAddPoint(point, 80);
     _lastPointWrite = wallClockUs();

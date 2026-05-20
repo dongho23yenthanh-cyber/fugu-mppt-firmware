@@ -1,3 +1,5 @@
+*this document is an LLM generated placeholder*
+
 # Plan: Bluetooth (BLE) Serial Console
 
 ## Implementation status (2026-05-20)

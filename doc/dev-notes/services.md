@@ -1,3 +1,5 @@
+*this document is an LLM generated placeholder*
+
 So ownership and logic are split across three files, joined by a global. That indirection is exactly the kind of thing the service
 refactor is trying to eliminate (ftp_service.h:4 even notes "no dependency on the main.cpp globals" — but it does depend on one
 indirectly).

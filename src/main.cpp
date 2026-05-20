@@ -115,7 +115,7 @@ void setup() {
     }
 
 
-    {
+    try {
         ConfFile pprofConf{"/littlefs/conf/pprof.conf", true};
 
         auto sprofHz = (uint32_t) pprofConf.getLong("sprofiler_hz", 0); // 100~300
@@ -126,10 +126,21 @@ void setup() {
         } else if (sprofHz) {
             ESP_LOGW("main", "sprofiler configured but not debugger attached");
         }
+    } catch (const std::exception &e) {
+        // a malformed pprof.conf must not brick the device — the profiler is purely diagnostic
+        ESP_LOGE("main", "error reading pprof.conf, skipping profiler: %s", e.what());
     }
 
 
-    ConfFile boardConf{"/littlefs/conf/board.conf"};
+    // A malformed board.conf must not abort setup() (which would reboot and re-read the same bad
+    // file → boot loop). Fall back to an empty config and run the safe-idle path via setupErr.
+    ConfFile boardConf;
+    try {
+        boardConf = ConfFile{"/littlefs/conf/board.conf"};
+    } catch (const std::exception &e) {
+        ESP_LOGE("main", "error reading board.conf: %s", e.what());
+        setupErr = true;
+    }
 
     if (!boardConf && std::filesystem::exists("/littlefs/conf")) {
         for (const auto &entry: std::filesystem::directory_iterator("/littlefs/conf")) {
@@ -203,7 +214,12 @@ void setup() {
         lcdService.displayMessage(
             res ? ("WiFi connected.\n" + std::string(WiFi.localIP().toString().c_str())) : "WiFi timeout.", 2000);
 
-        teleConf = ConfFile{"/littlefs/conf/tele.conf"};
+        try {
+            teleConf = ConfFile{"/littlefs/conf/tele.conf"};
+        } catch (const std::exception &e) {
+            // telemetry host is optional — a malformed tele.conf must not brick the device
+            ESP_LOGE("main", "error reading tele.conf: %s", e.what());
+        }
     }
 
     Limits lim{};

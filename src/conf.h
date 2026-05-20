@@ -38,7 +38,8 @@ class ConfFile {
 
 public:
     // In-memory ConfFile, primarily for tests. Skips the file read.
-    explicit ConfFile(std::unordered_map<std::string, std::string> map) : _map(std::move(map)), path("<in-mem>") {}
+    explicit ConfFile() : _map({}), path("") {}
+    explicit ConfFile(std::unordered_map<std::string, std::string> map ) : _map(std::move(map)), path("<in-mem>") {}
 
     explicit ConfFile(const char *path, bool no_warn_if_not_open = false) : path(path) {
         FILE *f = fopen(path, "r");
@@ -59,9 +60,10 @@ public:
                 continue;
             auto ie = line.find_first_of('=');
             if (ie == std::string::npos) {
-                ESP_LOGE(TAG, "error reading %s: '=' not found in line '%s'", path, line.c_str());
-                fclose(f);
-                throw std::runtime_error("error reading line: " + line);
+                // tolerate a malformed line: skip it and keep the rest of the file usable, rather
+                // than throwing (an uncaught throw here at boot would reboot → re-read → boot loop)
+                ESP_LOGW(TAG, "skipping malformed line in %s: '=' not found in '%s'", path, line.c_str());
+                continue;
             }
             auto k = trim(line.substr(0, ie));
             if (_map.find(k) != _map.end()) {
@@ -77,7 +79,9 @@ public:
     // duplicate lines. Existing keys keep their position; their inline comment (`# ...` after the
     // value) is preserved. Comment-only lines and blank lines are kept verbatim. Pre-existing
     // duplicate lines of a key being written are collapsed to one. Genuinely new keys are appended.
-    void add(const std::unordered_map<std::string, std::string> &values, bool overwrite = false) {
+    // Returns false on any I/O failure (cannot open / short write / fsync error) instead of
+    // aborting — a failed config write must never panic-reboot the device.
+    bool add(const std::unordered_map<std::string, std::string> &values, bool overwrite = false) {
         // read current file into lines (stripping the trailing newline)
         std::vector<std::string> lines;
         if (FILE *fr = fopen(path, "r")) {
@@ -135,24 +139,29 @@ public:
         FILE *f = fopen(path, "w");
         if (f == nullptr) {
             ESP_LOGE("store", "Cannot write %s", path);
-            assert(f != nullptr);
+            return false;
         }
         for (auto &line: out) {
-            if (!line.empty())
-                assert(fwrite(line.c_str(), line.length(), 1, f) == 1);
+            if (!line.empty() && fwrite(line.c_str(), line.length(), 1, f) != 1) {
+                ESP_LOGE("store", "short write to %s", path);
+                fclose(f);
+                return false;
+            }
             fputc('\n', f);
         }
 
 #ifndef CONFIG_LITTLEFS_FLUSH_FILE_EVERY_WRITE
         if (fsync(fileno(f)) != 0) {
+            ESP_LOGE("store", "fsync failed for %s", path);
             fclose(f);
-            assert(false);
+            return false;
         }
 #endif
 
         fclose(f);
 
         for (auto &[key, val]: values) _map[key] = val; // keep in-memory view consistent
+        return true;
     }
 
     // Append-only insert: just tacks `key=val` onto the end without reading/rewriting the file.
@@ -160,38 +169,47 @@ public:
     // keys in place, so re-writing the same key GROWS the file with duplicate lines (last one wins
     // on read). Use only for one-shot writes / append-heavy paths where file growth is acceptable;
     // prefer add() for keys that get rewritten repeatedly (e.g. service enabled/log_level).
-    void addFast(const std::unordered_map<std::string, std::string> &values, bool overwrite = false) {
+    // Returns false on any I/O failure instead of aborting (see add()).
+    bool addFast(const std::unordered_map<std::string, std::string> &values, bool overwrite = false) {
         FILE *f = fopen(path, "a");
         if (f == nullptr) {
             f = fopen(path, "w");
             if (f == nullptr) {
                 ESP_LOGE("store", "Cannot write %s", path);
+                return false;
             }
-            assert(f != nullptr);
         }
 
         for (auto &[key, val]: values) {
             if (_map.find(key) != _map.end()) {
-                if (!overwrite)
+                if (!overwrite) {
+                    fclose(f);
                     throw std::runtime_error("duplicate key: " + key);
+                }
                 ESP_LOGW(TAG, "addFast duplicate key %s (file grows)", key.c_str());
             }
             fputc('\n', f);
-            assert(fwrite(key.c_str(), key.length(), 1, f) == 1);
-            assert(fwrite("=", 1, 1, f) == 1);
-            assert(fwrite(val.c_str(), val.length(), 1, f) == 1);
+            if (fwrite(key.c_str(), key.length(), 1, f) != 1
+                || fwrite("=", 1, 1, f) != 1
+                || fwrite(val.c_str(), val.length(), 1, f) != 1) {
+                ESP_LOGE("store", "short write to %s", path);
+                fclose(f);
+                return false;
+            }
         }
 
 #ifndef CONFIG_LITTLEFS_FLUSH_FILE_EVERY_WRITE
         if (fsync(fileno(f)) != 0) {
+            ESP_LOGE("store", "fsync failed for %s", path);
             fclose(f);
-            assert(false);
+            return false;
         }
 #endif
 
         fclose(f);
 
         for (auto &[key, val]: values) _map[key] = val; // keep in-memory view consistent
+        return true;
     }
 
     template<typename T>

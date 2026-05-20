@@ -104,7 +104,8 @@ void setupSensors(const ConfFile &boardConf, const Limits &lim) {
             }
         }
 
-        auto filtLen = (uint16_t) sensConf.getLong(chn + '_' + "filt_len");
+        auto constexpr DEFAULT_FILT_LEN = 10;
+        auto filtLen = (uint16_t) sensConf.getLong(chn + '_' + "filt_len", DEFAULT_FILT_LEN);
 
         params.emplace(chn, p{
                            .params = SensorParams{

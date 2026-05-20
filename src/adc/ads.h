@@ -139,7 +139,7 @@ public:
     void setChannelGain(uint8_t channel, adsGain_t gain) {
         assert_throw(channel <= 3u, "");
         if (gain != gainsByChannel[channel])
-            ESP_LOGI("ads", "Set channel %hhu gain %.3f -> %.3f", channel, gainVoltageRange(gainsByChannel[channel]),
+            ESP_LOGI("ads", "Set channel %u gain %.3f -> %.3f", channel, gainVoltageRange(gainsByChannel[channel]),
                  gainVoltageRange(gain));
         gainsByChannel[channel] = gain;
     }

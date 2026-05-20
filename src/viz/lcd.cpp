@@ -44,7 +44,7 @@ bool LCD::init(uint8_t configuredAddr) {
         return false;
     }
 
-    ESP_LOGI(TAG, "Using addr 0x%02hhX", addr);
+    ESP_LOGI(TAG, "Using addr 0x%02X", addr);
     lcd = new LiquidCrystal_I2C(addr, 16, 2);
 
     periodicInit();

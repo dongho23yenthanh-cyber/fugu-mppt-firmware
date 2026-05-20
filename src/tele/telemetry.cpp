@@ -180,7 +180,7 @@ bool wait_for_wifi() {
             return false;
         }
     }
-    ESP_LOGI("tele", "Connected to WiFi, RSSI %hhi IP %s", WiFi.RSSI(), WiFi.localIP().toString().c_str());
+    ESP_LOGI("tele", "Connected to WiFi, RSSI %d IP %s", (int) WiFi.RSSI(), WiFi.localIP().toString().c_str());
 
     _wifiConnected();
 
@@ -226,8 +226,13 @@ static void influxWritePointsUDP(const IPAddress &dst, moodycamel::ReaderWriterQ
 
 const char *getChipId() {
     static char ssid[25]{0};
-    if (!strlen(ssid))
-        snprintf(ssid, 25, "%s-%llX", CONFIG_IDF_TARGET, ESP.getEfuseMac());
+    if (!strlen(ssid)) {
+        // newlib-nano printf has no 64-bit support; split MAC into hi/lo 32-bit
+        // words so the result stays identical to "%llX" for any 48-bit MAC.
+        uint64_t mac = ESP.getEfuseMac();
+        snprintf(ssid, 25, "%s-%lX%08lX", CONFIG_IDF_TARGET,
+                 (unsigned long) (mac >> 32), (unsigned long) (mac & 0xFFFFFFFF));
+    }
     return ssid;
 }
 

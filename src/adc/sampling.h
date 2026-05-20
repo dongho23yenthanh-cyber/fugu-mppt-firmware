@@ -234,7 +234,7 @@ public:
     const Sensor *addSensor(AsyncADC<float> *adc, SensorParams params, float maxY, uint32_t ewmSpan) {
         assert(adc != nullptr);
         auto maxX = params.transform.apply_inverse(params.transform.factor < 0 ? -maxY : maxY);
-        ESP_LOGI("sampler", "%s ADC ch %hhu maxY=%.4f, maxX=%.4f", params.teleName.c_str(), params.adcCh, maxY, maxX);
+        ESP_LOGI("sampler", "%s ADC ch %u maxY=%.4f, maxX=%.4f", params.teleName.c_str(), params.adcCh, maxY, maxX);
         adc->setMaxExpectedVoltage(params.adcCh, maxX);
 
         auto &sensorByCh(getAdcState(adc).sensorByCh);

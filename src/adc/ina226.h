@@ -50,7 +50,7 @@ public:
 
         ina226_instance = this;
         attachInterrupt(digitalPinToInterrupt(alertPin), ina226_alert, FALLING);
-        ESP_LOGI("ina22x", "Setup ALERT interrupt pin %hhu", alertPin);
+        ESP_LOGI("ina22x", "Setup ALERT interrupt pin %u", alertPin);
 
         assert(!new_data);
 
@@ -84,7 +84,7 @@ public:
 
     bool resetPeripherals() override {
         if (!i2c_test_address(ina226.i2cAddress)) {
-            ESP_LOGI("ina22x", "Chip didnt respond at address 0x%02hhX", (uint8_t) ina226.i2cAddress);
+            ESP_LOGI("ina22x", "Chip didnt respond at address 0x%02X", (uint8_t) ina226.i2cAddress);
             return false;
         }
 
@@ -223,7 +223,7 @@ public:
         //assert(!new_data);
 
         if (digitalRead(alertPin) != HIGH) {
-            ESP_LOGE("ina22x", "Alert pin %hhu not pulled up, short to ground?", alertPin);
+            ESP_LOGE("ina22x", "Alert pin %u not pulled up, short to ground?", alertPin);
             return false;
         }
 

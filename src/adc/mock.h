@@ -126,7 +126,7 @@ public:
     float getInputImpedance(uint8_t ch) override { return 100e3; }
 
     void reset(const uint8_t ch) override {
-        ESP_LOGI("adc_fake", "Reset channel %hhu at %lu", ch, wallClockUs());
+        ESP_LOGI("adc_fake", "Reset channel %u at %lu", ch, wallClockUs());
         resetTimes[ch] = wallClockUs();
     }
 

@@ -48,7 +48,7 @@ esp_err_t i2c_write_short(i2c_port_t i2c_master_port, uint8_t address, uint8_t c
     if (ret == ESP_OK) {
         //printf("i2c_write successful\r\n");
     } else {
-        ESP_LOGE("i2c", "i2c_write_short(addr=0x%02hhX,cmd=0x%02hhX) failed", address, command);
+        ESP_LOGE("i2c", "i2c_write_short(addr=0x%02X,cmd=0x%02X) failed", address, command);
     }
 
     return (ret);

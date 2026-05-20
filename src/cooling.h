@@ -18,7 +18,7 @@ public:
 
         pinMode(pin, OUTPUT);
         digitalWrite(pin, LOW);
-        ESP_LOGI("fan", "Initialized at pin %hhu", pin);
+        ESP_LOGI("fan", "Initialized at pin %u", pin);
 
         /*
         auto freq = ledcAttach(pin, 16000, FAN_PWM_BITS);
@@ -26,7 +26,7 @@ public:
             ESP_LOGE("fan", "ledcSetup failed");
             return false;
         } else {
-            ESP_LOGI("fan", "Initialized at pin %hhu", pin);
+            ESP_LOGI("fan", "Initialized at pin %u", pin);
         }
 
         //ledcAttachPin((uint8_t) PinConfig::Fan, FAN_PWM_CH);

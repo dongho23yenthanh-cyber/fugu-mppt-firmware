@@ -39,10 +39,10 @@ void scan_i2c() {
          */
 
         if (error == 0) {
-            ESP_LOGI(TAG, "Device found at address 0x%02hhX", address);
+            ESP_LOGI(TAG, "Device found at address 0x%02X", address);
             nDevices++;
         } else if (error != 2) {
-            ESP_LOGW(TAG, "Unknown error %hhu at address 0x%02hhX", error, address);
+            ESP_LOGW(TAG, "Unknown error %u at address 0x%02X", error, address);
         }
     }
     if (nDevices == 0)

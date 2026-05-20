@@ -107,7 +107,7 @@ public:
         } else if (terminated and shouldRelease(vcell_high, ahSinceFull)) {
             terminated = false;
         }
-        ESP_LOGI("charger", "termination %hhu (iBat=%.2f, vcHigh=%.3f, vcTerm=%.3f, vcD=%.3f, ahSF=%.2f)",
+        ESP_LOGI("charger", "term %u (iBat=%.2f vcHigh=%.3f vcTerm=%.3f vcD=%.3f ahSF=%.2f)",
                  terminated, ibat, vcell_high, _v_term, _v_term - vcell_high, ahSinceFull);
         return terminated;
     }

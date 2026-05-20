@@ -57,7 +57,12 @@ IIR:
 ![img_8.png](img/noiseIIR2.webp)
 
 
+#notch
+* 50hz/60hz band stop filter to remove inverter noise (notch filter)
+    * https://www.youtube.com/watch?v=tpAA5eUb6eo
 
+
+# Claude Recommends
 
 - Drop the notch on Vout unless you can show inverter pickup on the scope channel. The biquad adds ~2-sample group delay and ringing risk
   for a benefit you may not be getting (DC-side ripple at 100 Hz on the battery node is usually tiny — the bulk caps absorb it).

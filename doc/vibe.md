@@ -26,3 +26,11 @@ write a config tool
 
 # differential binary flaser
 
+
+
+
+## filtering
+* evaluate the filter pipeline (adc averaging, notch, med3, ewm). Do the components make sense? Is the order correct?
+  any other filter recommendation (kalman, multi-pass ewm ..) for the digital control loop? (Vout is the critical control variable)
+* when the user connects to the console, i want the charger to print the last 20 warnings and errors
+* detect high impedance battery connection

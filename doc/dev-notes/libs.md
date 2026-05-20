@@ -39,8 +39,8 @@ CoAp https://github.com/espressif/idf-extra-components/tree/master/coap (REST fo
 https://github.com/espressif/idf-extra-components/tree/master/network_provisioning
 
 # profiling
-https://github.com/espressif/idf-extra-components/tree/master/ccomp_timer
-esp32-semihosting-profiler
+see [performance profiling.md](performance%20profiling.md)
+
 
 # ota
 https://github.com/espressif/idf-extra-components/tree/master/esp_delta_ota
@@ -51,3 +51,7 @@ https://github.com/espressif/idf-extra-components/tree/master/fmt
 
 # graphics
 https://github.com/espressif/idf-extra-components/tree/master/thorvg (vector graphics)
+
+
+# ascii plots
+https://github.com/stolk/energygraph

@@ -65,3 +65,10 @@ https://docs.espressif.com/projects/esp-idf/en/stable/esp32h2/api-guides/app_tra
   https://gcc.gnu.org/onlinedocs/gcc/Instrumentation-Options.html
 
 
+
+ä libs
+https://github.com/espressif/idf-extra-components/tree/master/ccomp_timer
+https://github.com/espressif/esp-idf/tree/master/examples/system/perfmon
+https://github.com/LiluSoft/esp32-semihosting-profiler
+https://github.com/Carbon225/esp32-perfmon
+https://esp32.com/viewtopic.php?t=39619

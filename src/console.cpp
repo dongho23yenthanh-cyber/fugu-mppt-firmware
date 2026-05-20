@@ -58,9 +58,6 @@ void loopConsole(int read(char *buf, size_t len), int write(const char *buf, siz
             inp.trim();
             if (inp.length() > 0) {
                 bool ok = handleCommand(inp);
-                // Completion marker so line-oriented clients (e.g. etc/ble_console.py) detect the end
-                // of a response and needn't wait out a timeout. The command's own output (via ESP_LOG)
-                // has already flushed synchronously on this core by the time handleCommand() returns.
                 char marker[160];
                 int n = snprintf(marker, sizeof(marker), "%s: %s\r\n", ok ? "OK" : "ERR", inp.c_str());
                 if (n > 0) write(marker, n < (int) sizeof(marker) ? n : (int) sizeof(marker) - 1);

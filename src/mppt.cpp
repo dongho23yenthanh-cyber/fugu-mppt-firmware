@@ -61,7 +61,10 @@ void MpptController::update() {
     float Iout_max = min(limits.Iout_max, charger.Iout_max());
 
     // periodic sweep / scan
-    if (!_sweeping /*&& power_smooth < 30*/ && (nowUs - sampler.getTimeLastCalibrationUs()) > (30 * 60000000)) {
+    // Skip while the battery is full / output-voltage-limited (CV): there's no MPP to find,
+    // and ramping duty from 0 would just dump a charge pulse into a full pack (recharge-after-full).
+    bool batteryFull = bool(charger.termCond) || ctrlState.mode == MpptControlMode::CV;
+    if (!_sweeping && !batteryFull && (nowUs - sampler.getTimeLastCalibrationUs()) > (30 * 60000000)) {
         ESP_LOGI("mppt", "periodic sweep & sensor calibration");
         startSweep();
         rtcount("mppt.update.startSweep");
@@ -189,7 +192,7 @@ void MpptController::update() {
             }
         } else {
             ESP_LOGI("mppt", "PWM fade to %i stopped at controlMode %s", (int) targetDutyCycle,
-                     MpptState2String[(int) controlMode].c_str());
+                     MpptState2String[(int) controlMode]);
             targetDutyCycle = 0;
         }
     }
@@ -240,7 +243,7 @@ void MpptController::update() {
             UART_LOG_ASYNC(
                 "Limiting! Control value %.2f => perturbation %.2f (to %hu), mode=%s, idx=%i (act=%.3f, tgt=%.3f)",
                 controlValue, fp, converter.getCtrlOnPwmCnt(),
-                MpptState2String[(int) controlMode].c_str(), ctrlState.limIdx, limitingControl->actual,
+                MpptState2String[(int) controlMode], ctrlState.limIdx, limitingControl->actual,
                 limitingControl->target);
 
             if (controlMode == MpptControlMode::CC)

@@ -57,3 +57,10 @@ Notes on what's been done and what's still on the table to shrink the firmware i
 7. **`CONFIG_COMPILER_OPTIMIZATION_SIZE=y`** (`-Os` instead of `-O2`) — `~100–150 KB`.
    Don't do this without measuring `rtcount` numbers before/after — `loopRT` is pinned to core 1, no `vTaskDelay`,
    ADC-sample-to-PWM latency is critical.
+
+```
+- 
+VFS / FAT / SPIFFS / SD: Disable if only using LittleFS.
+- 
+Console / UART: If you only use your own console, disable CONFIG_ESP_CONSOLE_UART_DEFAULT.
+```

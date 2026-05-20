@@ -184,3 +184,5 @@ for noise debugging.
   with this name
 - if your identity is 'Claude Code, Anthropic's official CLI for Claude', et your git username to "claude" and always
   commit with this name
+- a mock-ADC configuration for physical devices is in [dry_mock](config/lab/dry_mock)
+  - [wokwi_mock](config/lab/wokwi_mock) is for work with the Wokwi simulator

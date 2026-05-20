@@ -1,5 +1,7 @@
 # todo
 
+- test conf-editor.html
+
 - write a python script that interacts with the device over the serial console
   - test all possible console commands in a meaningful order
   - accept a cli parameter that informs if the device is using a mock setup (fake ADC readings, not driving any PWM)
@@ -164,3 +166,59 @@ Each service has its own log level, which can be adjusted at run-time.
 
 
 
+1. A malformed value still throws even when the key has a default. In getX (conf.h:~205-230), a parse failure (trailing chars / out-of-range) throws unconditionally — the def is
+   only used when the key is absent, not when it's present-but-garbage. So temp_max=9O (letter O) throws rather than falling back to 90, and inside Limits/sensor setup that
+   becomes setupErr → converter disabled. If you want "bad value → warn and use the default," that's a deliberate change to getX: on parse error, if a default was supplied, log a
+   warning and return def instead of throwing. This is the biggest remaining gap against your stated requirement.
+
+
+file size:
+- For more headroom you could switch to CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL (lets the 40 MHz crystal sleep too) — but only if the
+  Fugu2 actually has a 32.768 kHz crystal populated. I left it on main-XTAL since that's safe regardless.
+
+⏺ All clang/LSP false positives (it can't find <cmath>/<atomic> either — the language server isn't configured with the
+toolchain sysroot). Now remove the now-unused locked primitive
+
+
+If you ever wire up VS Code/opencode too, those do take the flag directly — add
+--query-driver=/Users/fab/.espressif/tools/**/xtensa-esp32s3-elf-* to their clangd args.
+
+
+
+┌─────────────────────────────────────────┬──────┬───────────────────────────────────────────────────────────────────────────────────┐
+│               File (HEAD)               │ Line │                                        Use                                        │
+├─────────────────────────────────────────┼──────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ etc/mqtt_client.py                      │ 52   │ username_pw_set("pv", "<redacted>") — MQTT broker                                    │
+├─────────────────────────────────────────┼──────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ etc/mqtt-console-logger/mqtt_console.py │ 57   │ same MQTT broker password                                                         │
+├─────────────────────────────────────────┼──────┼───────────────────────────────────────────────────────────────────────────────────┤
+│ etc/micropython-relay/relay.py          │ 51   │ InfluxDB token for influx.fabi.me (openpe:<redacted>) — different service, same      │
+│                                         │      │ password                                                                          │
+└─────────────────────────────────────────┴──────┴───────────────────────────────────────────────────────────────────────────────────┘
+
+So the secret is reused across your MQTT broker and an InfluxDB instance, and both are exposed in the current public tree (not just
+history). Rotate <redacted> on both services — that's the only fix that matters once something's been public.
+
+
+make service log obey log level setting
+
+
+
+
+
+So the realistic choices:
+
+- (A) portMUX snapshot (my original): ~10 lines, no behavior change. Lock held only to copy ≤4 pointers; callbacks run outside the lock
+  (so no deadlock when a callback logs).
+- (B) "array touched only by the network loop": fully lock-free, matches the async-log style — but requires moving fan-out out of
+  vprintf_mux and an MP-safe registration handoff, and it defers core-0 sync logs.
+# TODO consider B   ^^^
+
+
+todo desc:
+ble_passkey
+399533
+×	long	Passkey for BLE pairing
+ble_security
+passkey
+×	string	BLE security mode (justworks, passkey, etc.)

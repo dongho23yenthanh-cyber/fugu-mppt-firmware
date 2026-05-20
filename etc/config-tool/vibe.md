@@ -20,29 +20,44 @@ conf-tool.py --hosts '.+' --local-conf config/fmetal
 
 # web version
 
-Create a web app to edit a ConfFile set (single page HTML). Users can upload *.zip files (or folders if possible) which
-follow
-the structure like ../../config/fmetal . Each .conf file gets its own tab.
-Inspect each config value, try to find it in the firmware code and figure out unit (if applicable) and a short
-description.
-Display both in the input form.
+Create a web app to edit a set of ConfFiles. Single page HTML `conf-editor.html`.
+Users can upload *.zip files or folders which follow the structure like ../../config/fmetal .
+Each .conf file gets its own tab. Inspect each config value, try to find it in the firmware code and figure out unit (if
+applicable) and a short description.
+Display unit and description in the input form.
 When users are done editing, they can download a zip file with the updated configuration files.
 
+## general logic
+
+* show all fields, even if they are missing in the file. inputs have a background text `<not set>` then.
+* `<not set>` fields are not written to the file
+* there is a way to add new entries (input form below)
+* when loading new data (either from an uploaded file/folder or from serial port or Bluetooth), all existing data is
+  cleared
+
+## field inputs
+
+* the input fields have a reasonable width
 * show the data type of each field (string, byte, long, float, ...)
 * display the unit inside the input elements, right aligned
-* GPIO pins have the unit "GPIO"
-* show all fields, even if they are missing in the file. inputs have a background text '<not set>' then.
-* missing fields are only written to the files if they already existed
-* there is a way to add new entries.
-* show the raw contents of the .conf file below
-* there is a x -button next to the input that set the value to '<not set>' removing the entry from the file
+    * GPIO pins have the unit "GPIO"
+* there is a x -button next to the input that set the value to `<not set>` removing the entry from the file
     * the x-button is only visible if a value is present
-* when a value in a tab has been changed, show a small dot next to the tab name
-* the input fields have a reasonable width
-* when changing or deleting a value display its original value loaded from the file below the input (`was: ...`)
+* when changing or deleting a value, display its original value loaded from the file below the input (`was: ...`)
+    * notice that `<not set>` and 0 is *not* the same. Make sure to compare with `===` operator
     * when deleting a field with the value 0, make sure that `was: ...` is still shown
+    * strings can be empty, which is different from `<not set>`
+* show the raw contents of the .conf file below
+* when a value in a tab has been changed, show a small dot next to the tab name (changed marker)
+    * when the user reverts all fields in a tab to its original values the changed marker disappears
 
+# testing
+
+* write a test for every feature described before
+    * you can choose the language, put the test code under './test'
 * test the page headlessly (jsdom or similar), if you can't report it before continuing
+    * run test with a single .conf file, a folder and a zip file (create one)
+* use regression testing
 
 # serial port
 
@@ -62,6 +77,10 @@ I (267988) main: OK: get-config board.conf
 
 make sure to wait for the final confirmation `main: OK: get-config <file>`
 
+To read the device's name use `hostname`.
+
+## Serial port dev advice
+
 First, try the communication with the device directly to get an understanding.
 If the port is held by a `idf.py monitor` session, kill that session. If the port is held by another process, stop and
 report.
@@ -70,10 +89,22 @@ Then headlessly test it with the Web Serial API. If you can't test, stop and rep
 If you cannot automate the native serial port-chooser dialog and there is no way to grant a physical serial port,
 drive it with a mock navigator.serial whose port replays the real device's exact captured output.
 
+# Bluetooth connection
 
+An additional way to read (and write) config files is a BLE GATT Nordic UART Service (NUS) console.
+It uses the same protocol as the wired serial console described earlier.
+Put another button next to the Serial Connect button to scan for a BLE device, connect to the NUS console and fetch the
+files.
 
-# bluetooth
+# upload
 
-an additional way to read (and write) config files is a BLE GATT Nordic UART Service (NUS) console.
-It uses the same protocol as the wird serial console described earlier.
-Put another button next to the Serial Connect button to scan for a BLE device, connect to the NUS console and fetch the files.
+Add an upload button that uploads *only changed* fields to the device.
+Use the `set-config <file> <key> <value>` command to upload values.
+Use `del-config <file> <key>` command to remove values that were previously set on the device.
+Send this command to either serial or Bluetooth connection, depending on which was used last.
+*Before submitting*, show a confirmation dialog to the user listing all commands that will be sent.
+Display the commands sent an the device response during upload.
+
+# cron
+
+scan the firmware code for ConfFile keys and update the html tool

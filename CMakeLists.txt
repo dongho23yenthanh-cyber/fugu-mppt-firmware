@@ -19,7 +19,11 @@ project(fugu-firmware)
 
 set (CMAKE_CXX_FLAGS "-fexceptions") # -mfp16-format=ieee
 
-littlefs_create_partition_image(littlefs config/fmetal
-#        FLASH_IN_PROJECT
+littlefs_create_partition_image(littlefs config/lab/dry_mock
+        FLASH_IN_PROJECT
 )
+
+#littlefs_create_partition_image(littlefs config/lab/wokwi_mock
+#        FLASH_IN_PROJECT
+#)
 

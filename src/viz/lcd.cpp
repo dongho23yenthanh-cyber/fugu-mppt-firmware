@@ -10,7 +10,7 @@
 #include "lcd.h"
 
 
-const char *TAG = "LCD";
+const char *TAG = "lcd";
 
 
 bool testAddress(uint8_t addr) {
@@ -131,7 +131,7 @@ void LCD::periodicInit() {
     lcd->begin(); //16, 2);
     lcd->clear();
 
-    ESP_LOGI("lcd", "lcd->begin()");
+    ESP_LOGI(TAG, "lcd->begin()");
 
     lastInit = millis();
 }

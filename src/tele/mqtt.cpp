@@ -22,7 +22,7 @@ void MqttService::subscribeTopic(const std::string &topic, MqttMsgCallback fn) {
     assert_throw(!mqttConnected, "");
     mqttMsgHandlers[topic] = std::move(fn);
     if (mqttConnected) {
-        ESP_LOGI("mqtt", "Subscribe to '%s", topic.c_str());
+        ESP_LOGI(TAG, "Subscribe to '%s", topic.c_str());
         assert_throw(esp_mqtt_client_subscribe(client, topic.c_str(), 0) != 1, "");
     }
 }
@@ -114,7 +114,7 @@ static void mqttLogCallback(const char *str, uint16_t len) {
     }
 
     if (esp_mqtt_client_publish(MQTT.client, topic, str, len, 0, 0) < 0)
-        ESP_LOGE("mqtt", "publish error %d", len);
+        ESP_LOGE(TAG, "publish error %d", len);
     //esp_mqtt_client_publish(MQTT.client, topic, str, len, 0, 0);
     //esp_mqtt_client_enqueue(MQTT.client, topic, str, len, 0, 0, false);
 }
@@ -129,7 +129,7 @@ void MqttService::init(const ConfFile &conf) {
 
     if (brokerUri.empty())return;
 
-    ESP_LOGI("mqtt", "connecting to broker %s@%s (pw %u chars)", username.c_str(), brokerUri.c_str(),
+    ESP_LOGI(TAG, "connecting to broker %s@%s (pw %u chars)", username.c_str(), brokerUri.c_str(),
              password.length());
 
 

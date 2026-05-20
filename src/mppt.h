@@ -97,7 +97,8 @@ enum class MpptControlMode : uint8_t {
 };
 
 
-static const std::array<std::string, (size_t) MpptControlMode::Max> MpptState2String{
+// inline + const char* => single copy in flash .rodata, no per-TU std::string array or global ctor
+inline constexpr std::array<const char *, (size_t) MpptControlMode::Max> MpptState2String{
     "N/A",
     "CV",
     "CC",
@@ -589,7 +590,7 @@ public:
         ESP_LOGI("mppt",
                  "Stop sweep after %.2fs at controlMode=%s (limIdx=%i, tgt=%.2f, act=%.2f) PWM=%hu, MPP=(%.1fW,PWM=%hu,%.1fV)",
                  (wallClockUs() - sampler.getTimeLastCalibrationUs()) * 1e-6f,
-                 MpptState2String[(uint8_t) controlMode].c_str(), limIdx,
+                 MpptState2String[(uint8_t) controlMode], limIdx,
                  limCtrl ? limCtrl->target : NAN, limCtrl ? limCtrl->actual : NAN,
                  converter.getCtrlOnPwmCnt(), maxPowerPoint.power, maxPowerPoint.dutyCycle, maxPowerPoint.voltage
         );

@@ -51,7 +51,9 @@ struct rtcount_stat {
             min{std::numeric_limits<unsigned long>::max()}, min_num{0};
 };
 
-static std::unordered_map<const char *, rtcount_stat> rtcount_stats{};
+// Single definition lives in rt.cpp; declared extern here so all TUs share one map
+// (a `static` here would give every including TU its own copy and silently un-aggregate stats).
+extern std::unordered_map<const char *, rtcount_stat> rtcount_stats;
 
 extern volatile bool rtcount_en;
 

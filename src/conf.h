@@ -20,7 +20,7 @@
 
 #define TAG "conf"
 
-static std::string trim(const std::string &s) {
+inline std::string trim(const std::string &s) {
     // removes whitespace characters from beginnig and end of string s
     const int l = (int) s.length();
     int a = 0, b = l - 1;

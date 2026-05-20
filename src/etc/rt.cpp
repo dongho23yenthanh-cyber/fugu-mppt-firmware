@@ -3,6 +3,8 @@
 
 volatile bool rtcount_en = true;
 
+std::unordered_map<const char *, rtcount_stat> rtcount_stats{};
+
 //Linked list of vector descriptions, sorted by cpu.intno value
 vector_desc_t *vector_desc_head = NULL;
 

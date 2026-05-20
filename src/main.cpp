@@ -86,11 +86,6 @@ KeyValueStorage nvs{};
 
 void systemRestart();
 
-// Console command table (SimpleCLI). Built once by setupCli(); handleCommand() feeds it whole
-// command lines from every transport (UART/USB/telnet/BLE). See doc/Console.md.
-static SimpleCLI cli;
-void setupCli();
-
 static void loopNetwork_task(void *arg);
 
 static void loopRT(void *arg); // this is the critical one
@@ -331,7 +326,7 @@ static esp_err_t disable_cpu_power_saving(void) {
     return ret;
 }
 
-static void stopAndBackoff(uint32_t secondsDelay) {
+void stopAndBackoff(uint32_t secondsDelay) {
     mppt.shutdownDcdc();
     delayStartUntil = wallClockUs() + secondsDelay * 1000000;
 }
@@ -485,7 +480,7 @@ static std::string mpptStateStr() {
     return arrow + MpptState2String[(uint8_t) st];
 }
 
-static void loopLF(const unsigned long &nowUs) {
+void loopLF(const unsigned long &nowUs) {
     auto &nSamples(sensors.Vout ? sensors.Vout->numSamples : lastNSamples);
     auto dt = nowUs - lastTimeOutUs;
     uint32_t sps = (dt > 20000) ? (uint64_t) (nSamples - lastNSamples) * 1000000llu / dt : 0;

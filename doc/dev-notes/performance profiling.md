@@ -1,5 +1,16 @@
 # esp32-semihosting-profiler
 * https://github.com/espressif/esp-idf/blob/master/examples/storage/semihost_vfs/README.md
+
+> **Opt-in via `WITH_SPROFILER=1`.** Default builds exclude the `esp32-semihosting-profiler`
+> component to save flash (~6 KB) and DIRAM (~8 KB `.bss`). To profile, build with:
+> ```
+> WITH_SPROFILER=1 idf.py reconfigure build
+> ```
+> The `reconfigure` is required: the env var toggles `EXCLUDE_COMPONENTS` in the top-level
+> `CMakeLists.txt`, which a plain `idf.py build` won't re-detect. `main.cpp` guards the profiler
+> init with `#ifdef WITH_SPROFILER`, and `main/CMakeLists.txt` sets the matching compile def
+> (mirrors the `WITH_BLE` flag pattern).
+
 ```
 # create /littlefs/conf/pprof.conf:
 # sprofiler_hz=100

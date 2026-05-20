@@ -6,6 +6,13 @@ if (DEFINED ENV{WITH_BLE})
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.ble")
 endif ()
 
+# The sampling profiler (components/esp32-semihosting-profiler) is opt-in via WITH_SPROFILER=1.
+# When off (default), drop the whole component so its flash + ~8 KB .bss isn't linked; main.cpp
+# guards its use with #ifdef WITH_SPROFILER. Keep in sync with main/CMakeLists.txt.
+if (NOT DEFINED ENV{WITH_SPROFILER})
+    set(EXCLUDE_COMPONENTS esp32-semihosting-profiler)
+endif ()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 project(fugu-firmware)

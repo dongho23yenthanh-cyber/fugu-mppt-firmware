@@ -59,6 +59,13 @@ if ($ENV{WITH_BLE})
     component_compile_definitions("WITH_BLE=1")
 endif ()
 
+# WITH_SPROFILER=1 compiles in the semihosting sampling profiler (sprofiler_initialize, only useful
+# with OpenOCD attached). Off by default; the top-level CMakeLists then EXCLUDE_COMPONENTS the
+# esp32-semihosting-profiler component so its flash + ~8 KB .bss is dropped entirely.
+if ($ENV{WITH_SPROFILER})
+    component_compile_definitions("WITH_SPROFILER=1")
+endif ()
+
 component_compile_options(-Werror=missing-field-initializers)
 component_compile_options(-Werror=attributes) # IRAM_ATTR used in forward decl
 

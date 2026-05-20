@@ -154,7 +154,9 @@ void MqttService::close() {
         esp_mqtt_client_stop(client);
         esp_mqtt_client_unregister_event(client, MQTT_EVENT_ANY, mqtt_event_handler);
         esp_mqtt_client_destroy(client);
+        client = nullptr; // else a restart with empty broker_uri (init() early-returns) leaves it dangling
     }
+    removeLogCallback(mqttLogCallback); // drop the sink; stop may not fire MQTT_EVENT_DISCONNECTED
 }
 
 bool MqttService::onStart() {

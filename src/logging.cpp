@@ -1,6 +1,7 @@
 #include "logging.h"
 
 #include <ESPTelnet.h>
+#include <freertos/FreeRTOS.h>
 
 #include "etc/readerwriterqueue.h"
 
@@ -27,10 +28,22 @@ static moodycamel::ReaderWriterQueue<AsyncLogEntry> uart_async_log_queue{};
 
 ESPTelnet *log_telnet = nullptr;
 
-// Up to kMaxLogCallbacks sinks; written/read only from core 0 (network loop + flush), so no lock.
+// Up to kMaxLogCallbacks sinks. Registered from the MQTT/BLE tasks, iterated from any core-0
+// logging context (vprintf_mux) + the network loop (flush). logCbMux guards the array; readers
+// snapshot it under the lock and invoke the callbacks outside (a callback may log -> re-enter).
 static constexpr int kMaxLogCallbacks = 4;
 static LogCallback logCallbacks[kMaxLogCallbacks] = {};
 static int logCallbackCount = 0;
+static portMUX_TYPE logCbMux = portMUX_INITIALIZER_UNLOCKED;
+
+// Copy the sink table into `out` (must hold kMaxLogCallbacks) under the lock; returns the count.
+static int snapshotLogCallbacks(LogCallback *out) {
+    portENTER_CRITICAL(&logCbMux);
+    int n = logCallbackCount;
+    for (int i = 0; i < n; ++i) out[i] = logCallbacks[i];
+    portEXIT_CRITICAL(&logCbMux);
+    return n;
+}
 
 vprintf_like_t old_vprintf = &vprintf;
 
@@ -42,23 +55,29 @@ void loggingEnableDefer() {
 
 void addLogCallback(LogCallback callback) {
     if (!callback) return;
+    bool full = false;
+    portENTER_CRITICAL(&logCbMux);
+    bool dup = false;
     for (int i = 0; i < logCallbackCount; ++i)
-        if (logCallbacks[i] == callback) return; // dedupe
-    if (logCallbackCount >= kMaxLogCallbacks) {
-        ESP_LOGW("log", "log callback table full, dropping");
-        return;
+        if (logCallbacks[i] == callback) { dup = true; break; }
+    if (!dup) {
+        if (logCallbackCount >= kMaxLogCallbacks) full = true;
+        else logCallbacks[logCallbackCount++] = callback;
     }
-    logCallbacks[logCallbackCount++] = callback;
+    portEXIT_CRITICAL(&logCbMux);
+    if (full) ESP_LOGW("log", "log callback table full, dropping"); // log outside the lock
 }
 
 void removeLogCallback(LogCallback callback) {
+    portENTER_CRITICAL(&logCbMux);
     for (int i = 0; i < logCallbackCount; ++i) {
         if (logCallbacks[i] == callback) {
             logCallbacks[i] = logCallbacks[--logCallbackCount]; // compact (order irrelevant)
             logCallbacks[logCallbackCount] = nullptr;
-            return;
+            break;
         }
     }
+    portEXIT_CRITICAL(&logCbMux);
 }
 
 
@@ -188,8 +207,9 @@ void flush_async_uart_log() {
         if (log_telnet)
             log_telnet->write((uint8_t *) entry.str, entry.len);
 
-        for (int i = 0; i < logCallbackCount; ++i)
-            logCallbacks[i](entry.str, entry.len);
+        LogCallback cbs[kMaxLogCallbacks];
+        int n = snapshotLogCallbacks(cbs);
+        for (int i = 0; i < n; ++i) cbs[i](entry.str, entry.len);
 
         delete[] entry.str;
     }
@@ -211,7 +231,9 @@ static int vprintf_mux(const char *fmt, va_list argptr) {
         if (l > 0) {
             //enqueue_telnet_log(loc_buf, l);
             if (log_telnet) log_telnet->write((uint8_t *) loc_buf, l);
-            for (int i = 0; i < logCallbackCount; ++i) logCallbacks[i](loc_buf, l);
+            LogCallback cbs[kMaxLogCallbacks];
+            int n = snapshotLogCallbacks(cbs);
+            for (int i = 0; i < n; ++i) cbs[i](loc_buf, l);
         }
     }
 

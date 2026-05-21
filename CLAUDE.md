@@ -138,6 +138,14 @@ same string protocol). Notable commands: `+N`/`-N` (PWM step), `dc N` (manual du
 `sweep`, `mppt` (re-enable auto), `sync on/off/forced`, `bf 0/1` (backflow switch), `fan N`, `set-config`/`get-config`,
 `ota <url>`, `rt-stats`, `sensor`, `wifi-add ssid:psk`, `restart`. See `doc/Console.md`.
 
+Host-side console client: `etc/fugu_console.py` drives this protocol from a PC over **serial (`-p`),
+TCP/telnet (`--ip`), or BLE/NUS (`--ble`)** — `-c "<cmd>"` runs one command, `-i` is a REPL, and the
+default mode is a PASS/FAIL/SKIP exerciser over a fixed command PLAN (`--mock` adds the PWM/charger
+group, `--include-network` the NVS/Wi-Fi group). Transport + line-console mechanics live in the
+vendored `etc/fugu/` package (its own repo, `fl4p/fugu-py`): `transport.py`
+(`SerialTransport`/`SocketTransport`/`BleTransport`), `console.py` (`Console`: line assembly,
+`command()→Reply`); `fugu.py::FuguDevice` wraps `Console` for the PWM-aware `etc/ota.py`.
+
 In-firmware debug: `rtcount(label)` macros (`src/etc/rt.h`) accumulate per-section timings; `sprofiler` is a sampling
 profiler (only useful with OpenOCD attached, configured by `pprof.conf::sprofiler_hz`); `scope` streams raw ADC over TCP
 for noise debugging.

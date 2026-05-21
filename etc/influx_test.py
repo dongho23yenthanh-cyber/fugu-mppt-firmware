@@ -17,13 +17,18 @@ The device only flushes once WiFi is connected AND time is synced (`MpptControll
 gates on `timeSynced`), so WiFi credentials must already be provisioned (wifi.conf / NVS). If no
 data arrives, that gate is the first thing to check.
 
-Reuses the serial `SerialConsole` from console_test.py. Requires pyserial.
+Uses `fugu.console.Console` over a serial transport. Requires pyserial.
+
+After collecting, the test also stops the telemetry service (`svc off tele`) and asserts the
+device goes silent — no more datagrams arrive once the producer and flush task are gated. It
+then re-enables the service to leave the device as it found it. Skip with `--no-stop-test`.
 
 Examples:
     python etc/influx_test.py --mock                       # auto-detect port + LAN IP
     python etc/influx_test.py --host 192.168.1.50          # force the advertised host IP
     python etc/influx_test.py --provision config/lab/dry_mock
     python etc/influx_test.py --duration 20                # collect for 20 s after sync
+    python etc/influx_test.py --no-stop-test               # skip the svc-off silence check
 """
 
 import argparse
@@ -34,7 +39,9 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from console_test import SerialConsole, autodetect_port  # noqa: E402
+from fugu.console import Console  # noqa: E402
+from fugu.transport import SerialTransport  # noqa: E402
+from fugu_console import autodetect_port  # noqa: E402
 
 UDP_PORT = 8086
 MEASUREMENT = "mppt"
@@ -135,7 +142,7 @@ def validate_line(line: str) -> list[str]:
     return errs
 
 
-def configure_and_reboot(con: SerialConsole, host: str) -> bool:
+def configure_and_reboot(con: Console, host: str) -> bool:
     print(f"configuring tele.conf influxdb_host = {host}")
     con.command(f"set-config tele.conf influxdb_host {host}")
     con.command("set-config tele.conf enabled 1")
@@ -169,6 +176,42 @@ def collect(sock: socket.socket, duration: float, settle: float) -> list[str]:
     return [ln for ln in lines if ln.strip()]
 
 
+def verify_stopped(con: Console, sock: socket.socket, drain: float, quiet: float) -> bool:
+    """Stop telemetry, drain in-flight datagrams, then require `quiet` seconds of silence.
+
+    `svc off tele` gates both the producer (Service::tick skips onTick) and the flush task
+    (telemetryFlushEnabled(false)), so the wire must fall silent. A few points may already be
+    on the wire when the stop lands; absorb those during the drain window before asserting.
+    Re-enables the service afterwards so the device is left as it was found.
+    """
+    print("\nstopping telemetry: svc off tele")
+    con.command("svc off tele")
+
+    sock.settimeout(0.5)
+    deadline = time.monotonic() + drain
+    drained = 0
+    while time.monotonic() < deadline:
+        try:
+            sock.recvfrom(65535)
+            drained += 1
+        except socket.timeout:
+            pass
+    print(f"drained {drained} in-flight datagram(s); requiring silence for {quiet:.0f}s …")
+
+    sock.settimeout(quiet)
+    ok = True
+    try:
+        data, addr = sock.recvfrom(65535)
+        snippet = data.decode("utf-8", "replace").splitlines()[:1]
+        print(f"FAIL: datagram from {addr[0]} after stop: {snippet}")
+        ok = False
+    except socket.timeout:
+        print(f"PASS: no telemetry for {quiet:.0f}s after stopping the service")
+
+    con.command("svc on tele")   # restore prior state
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="InfluxDB UDP telemetry test for Fugu MPPT firmware")
     ap.add_argument("-p", "--port", default=None, help="serial port (default: $ESPPORT or autodetect)")
@@ -181,6 +224,12 @@ def main() -> int:
     ap.add_argument("--duration", type=float, default=15.0, help="seconds to collect after first packet")
     ap.add_argument("--no-reboot", action="store_true",
                     help="skip set-config/reboot; just listen (device already configured)")
+    ap.add_argument("--no-stop-test", action="store_true",
+                    help="skip the post-collect 'svc off tele' silence check")
+    ap.add_argument("--stop-drain", type=float, default=3.0,
+                    help="seconds to absorb in-flight datagrams after svc off")
+    ap.add_argument("--stop-quiet", type=float, default=8.0,
+                    help="seconds of required silence after the drain window")
     args = ap.parse_args()
 
     host = args.host or lan_ip()
@@ -203,7 +252,8 @@ def main() -> int:
             print(f"provision failed: {e}")
             return 1
 
-    con = SerialConsole(serial_port, args.baud)
+    con = Console(SerialTransport(serial_port, baud=args.baud, timeout=0.2))
+    stop_ok = True
     try:
         if not args.no_reboot:
             print(f"opening console on {serial_port}")
@@ -214,6 +264,8 @@ def main() -> int:
                 return 1
             con.wait_ready(timeout=45.0)      # back from reboot; WiFi/NTP may still be pending
         lines = collect(sock, args.duration, args.settle)
+        if lines and not args.no_stop_test:
+            stop_ok = verify_stopped(con, sock, args.stop_drain, args.stop_quiet)
     finally:
         con.close()
         sock.close()
@@ -250,7 +302,10 @@ def main() -> int:
     if bad:
         print(f"FAIL: {bad}/{len(lines)} line(s) failed line-protocol validation")
         return 1
-    print(f"PASS: all {len(lines)} line(s) are valid InfluxDB line protocol")
+    if not stop_ok:
+        print("FAIL: telemetry kept arriving after the service was stopped")
+        return 1
+    print(f"PASS: all {len(lines)} line(s) valid; device went silent after svc off")
     return 0
 
 

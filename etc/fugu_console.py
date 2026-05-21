@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Serial-console exerciser for the Fugu MPPT firmware.
+"""Console client + exerciser for the Fugu MPPT firmware.
 
-Drives the device's string command protocol (the same one served on UART/USB-CDC/telnet/MQTT,
-see `doc/Console.md`) over a serial port and walks every console command in a meaningful order:
-read-only diagnostics first, then config round-trips and service ops, then the converter/PWM
-commands that actually move power.
+Talks the device's string command protocol (the same one served on UART/USB-CDC/telnet/MQTT/BLE,
+see `doc/Console.md`) over any transport. Three modes: a single command (`-c`), an interactive
+REPL (`-i`), or — the default — a test PLAN that walks every console command in a meaningful order
+(read-only diagnostics, config round-trips and service ops, then the converter/PWM commands that
+move power) and reports PASS/FAIL/SKIP. The transport and the line-console mechanics live in the
+`fugu` package (`fugu.transport`, `fugu.console.Console`); this file is the CLI and the plan.
+Defaults to serial; `--ble`/`--ip` select BLE or TCP/telnet.
 
 The PWM/charger group is gated behind `--mock`. A mock build (fake ADC, no real switching —
 `config/lab/*_mock`, sensor.conf using ADC_Fake) can run the full set safely; on real hardware
@@ -12,36 +15,34 @@ those commands can destroy the switches or disrupt an active charge, so they are
 default and reported as SKIPPED. NVS-mutating and reboot/flash commands (wifi, hostname, ota,
 restart) always require an explicit opt-in flag.
 
-Requires `pyserial`:  pip install pyserial
+Requires `pyserial` (serial) and/or `bleak` (BLE):  pip install pyserial bleak
 
 Examples:
-    python etc/console_test.py --mock                 # full sweep against a mock build
-    python etc/console_test.py                          # safe subset against real hardware
-    python etc/console_test.py -p /dev/cu.usbmodem1101 --mock
-    python etc/console_test.py -c "service list"        # run one command, print the reply
-    python etc/console_test.py -i                       # interactive REPL
+    python etc/fugu_console.py --mock                  # full sweep over serial against a mock build
+    python etc/fugu_console.py                           # safe subset against real hardware
+    python etc/fugu_console.py -p /dev/cu.usbmodem1101 --mock
+    python etc/fugu_console.py --ble --mock              # same sweep over BLE
+    python etc/fugu_console.py --ip 192.168.4.2          # over TCP/telnet
+    python etc/fugu_console.py -c "svc list"             # run one command, print the reply
+    python etc/fugu_console.py -i                        # interactive REPL
 """
 
 import argparse
 import glob
 import os
-import queue
-import re
 import sys
-import threading
-import time
 
-try:
-    import serial  # pyserial
+try:  # works both as `python etc/fugu_console.py` and `python -m etc.fugu_console`
+    from fugu.transport import SerialTransport, SocketTransport, BleTransport
+    from fugu.console import Console
 except ImportError:
-    sys.exit("pyserial is required:  pip install pyserial")
+    from etc.fugu.transport import SerialTransport, SocketTransport, BleTransport
+    from etc.fugu.console import Console
 
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _PORT_GLOBS = [
     "/dev/cu.usbmodem*", "/dev/cu.usbserial*", "/dev/cu.wchusbserial*", "/dev/cu.SLAB_USBtoUART*",
     "/dev/ttyUSB*", "/dev/ttyACM*",
 ]
-REJECT = "unknown or unexpected command"
 
 
 def autodetect_port() -> str:
@@ -54,84 +55,10 @@ def autodetect_port() -> str:
     sys.exit("no serial port found; pass --port or set $ESPPORT")
 
 
-class SerialConsole:
-    """Line-oriented wrapper around the serial console.
-
-    A background thread reads the port continuously (the firmware streams status lines between
-    commands), strips ANSI, and feeds whole lines into a queue. `command()` sends one command and
-    collects reply lines until it sees the firmware's `OK: <cmd>` confirmation, a rejection, or a
-    timeout.
-    """
-
-    def __init__(self, port: str, baud: int = 115200):
-        self.ser = serial.Serial(port, baudrate=baud, timeout=0.2)
-        self._buf = ""
-        self._lines: "queue.Queue[str]" = queue.Queue()
-        self._stop = threading.Event()
-        self._reader = threading.Thread(target=self._read_loop, daemon=True)
-        self._reader.start()
-
-    def _read_loop(self):
-        while not self._stop.is_set():
-            try:
-                chunk = self.ser.read(256)
-            except (serial.SerialException, OSError):
-                break
-            if not chunk:
-                continue
-            self._buf += _ANSI.sub("", chunk.decode("utf-8", "replace"))
-            while "\n" in self._buf:
-                line, self._buf = self._buf.split("\n", 1)
-                self._lines.put(line.rstrip("\r"))
-
-    def _drain(self):
-        while True:
-            try:
-                self._lines.get_nowait()
-            except queue.Empty:
-                return
-
-    def command(self, cmd: str, timeout: float = 4.0) -> list[str]:
-        """Send `cmd`, return reply lines up to and including the OK/reject marker (or timeout)."""
-        self._drain()
-        self.ser.write((cmd + "\r\n").encode())
-        self.ser.flush()
-        ok_marker = "OK: " + cmd
-        out: list[str] = []
-        deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            try:
-                line = self._lines.get(timeout=remaining)
-            except queue.Empty:
-                break
-            out.append(line)
-            if ok_marker in line or REJECT in line:
-                break
-        return out
-
-    def wait_ready(self, timeout: float = 30.0) -> bool:
-        """Poll `mem` until the firmware answers — covers the boot/ADC-calibration window."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if any("OK: mem" in ln for ln in self.command("mem", timeout=2.0)):
-                return True
-        return False
-
-    def close(self):
-        self._stop.set()
-        try:
-            self.ser.close()
-        except Exception:
-            pass
-
-
 # Test plan. Each step: (command, expect_substr | None, group, tolerate_reject)
 #   group "always"   : safe read-only / non-destructive, run everywhere
 #   group "mock"     : drives PWM or the live charger; only with --mock
-#   group "net"      : mutates NVS / Wi-Fi / reboots; only with --include-network / --restart
+#   group "net"      : mutates NVS / Wi-Fi / reboots; only with --include-network
 #   tolerate_reject  : the firmware declining is an acceptable outcome — either the final-else
 #                      REJECT marker, or an early `return false` that prints a warning but no OK
 #                      (e.g. no fan / no panel switch / wrong topology for this hardware).
@@ -149,7 +76,7 @@ PLAN = [
     ("reset-lag", None, GROUP_ALWAYS, False),
     ("ip", "IP Address", GROUP_ALWAYS, False),
     ("scan-i2c", None, GROUP_ALWAYS, True),       # may report no devices on a mock
-    ("service list", "NAME", GROUP_ALWAYS, False),
+    ("svc list", "NAME", GROUP_ALWAYS, False),
     # --- config: dump, then a non-destructive round-trip on a scratch file ------------------
     ("get-config board.conf", "board.conf", GROUP_ALWAYS, False),
     ("get-config converter.conf", "converter.conf", GROUP_ALWAYS, False),
@@ -161,8 +88,8 @@ PLAN = [
     ("fan 0", None, GROUP_ALWAYS, True),
     ("led 000", None, GROUP_ALWAYS, False),
     # --- service management: log level + restart (reversible; skip if the service isn't built) -
-    ("service log scope info", None, GROUP_ALWAYS, True),
-    ("service restart scope", None, GROUP_ALWAYS, True),
+    ("svc log scope info", None, GROUP_ALWAYS, True),
+    ("svc restart scope", None, GROUP_ALWAYS, True),
     # --- ADC backend re-init (brief; safe on a mock) ----------------------------------------
     ("adc-restart", None, GROUP_MOCK, True),
     ("adc-reset", None, GROUP_MOCK, True),
@@ -191,8 +118,8 @@ PLAN = [
 ]
 
 
-def run_plan(con: SerialConsole, mock: bool, include_net: bool):
-    results = []  # (cmd, status)  status in {PASS, FAIL, SKIP}
+def run_plan(con: Console, mock: bool, include_net: bool):
+    results = []  # (cmd, status, note)  status in {PASS, FAIL, SKIP}
     for cmd, expect, group, tolerate in PLAN:
         if group == GROUP_MOCK and not mock:
             results.append((cmd, "SKIP", "drives PWM/charger — needs --mock"))
@@ -202,23 +129,19 @@ def run_plan(con: SerialConsole, mock: bool, include_net: bool):
             continue
 
         reply = con.command(cmd, timeout=TIMEOUT_OVERRIDE.get(cmd, 4.0))
-        joined = "\n".join(reply)
-        got_ok = ("OK: " + cmd) in joined
-        got_reject = REJECT in joined
 
-        if got_ok:
-            # confirmed; verify expected content if any
-            if expect is not None and expect not in joined:
+        if reply.ok:
+            if expect is not None and expect not in reply.text:
                 status, note = "FAIL", f"expected {expect!r} in reply"
             else:
                 status, note = "PASS", ""
-        elif not reply:
-            status, note = "FAIL", "no response (timeout)"
         elif tolerate:
-            # explicit REJECT, or an early `return false` (warning, no OK) — both acceptable here
+            # explicit reject, or an early `return false` (warning, no OK) — both acceptable here
             status, note = "SKIP", "declined by firmware (not applicable on this setup)"
-        elif got_reject:
+        elif reply.rejected:
             status, note = "FAIL", "rejected"
+        elif reply.timed_out and not reply:
+            status, note = "FAIL", "no response (timeout)"
         else:
             status, note = "FAIL", "no OK confirmation"
 
@@ -238,7 +161,7 @@ def run_plan(con: SerialConsole, mock: bool, include_net: bool):
     return nfail
 
 
-def interactive(con: SerialConsole):
+def interactive(con: Console):
     print("interactive console — type commands, Ctrl-C / EOF to quit")
     while True:
         try:
@@ -252,10 +175,26 @@ def interactive(con: SerialConsole):
             print("  " + ln)
 
 
+def make_transport(args):
+    if args.ble:
+        print(f"scanning for BLE NUS (name contains {args.name!r}) …")
+        return BleTransport(name=args.name, address=args.address)
+    if args.ip:
+        print(f"connecting to {args.ip}:23 (telnet)")
+        return SocketTransport(args.ip)
+    port = args.port or autodetect_port()
+    print(f"opening {port} @ {args.baud}")
+    return SerialTransport(port, baud=args.baud, timeout=0.2)
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Serial console exerciser for Fugu MPPT firmware")
+    ap = argparse.ArgumentParser(description="Console exerciser for Fugu MPPT firmware")
     ap.add_argument("-p", "--port", default=None, help="serial port (default: $ESPPORT or autodetect)")
     ap.add_argument("-b", "--baud", type=int, default=115200, help="baud rate (default 115200)")
+    ap.add_argument("--ble", action="store_true", help="use the BLE NUS transport instead of serial")
+    ap.add_argument("--name", default="fugu", help="BLE advertised-name substring filter (with --ble)")
+    ap.add_argument("--address", help="BLE address to connect to (with --ble)")
+    ap.add_argument("--ip", help="use TCP/telnet to this address instead of serial")
     ap.add_argument("--mock", action="store_true",
                     help="device runs a mock setup (fake ADC, no real PWM) — enables the PWM/charger commands")
     ap.add_argument("--include-network", action="store_true",
@@ -264,9 +203,12 @@ def main():
     ap.add_argument("-i", "--interactive", action="store_true", help="interactive REPL")
     args = ap.parse_args()
 
-    port = args.port or autodetect_port()
-    print(f"opening {port} @ {args.baud} ({'MOCK' if args.mock else 'REAL-HARDWARE'} mode)")
-    con = SerialConsole(port, args.baud)
+    print(f"({'MOCK' if args.mock else 'REAL-HARDWARE'} mode)")
+    try:
+        con = Console(make_transport(args))
+    except Exception as e:
+        print(e)
+        return 1
     try:
         if args.command:
             for ln in con.command(args.command):
@@ -278,7 +220,7 @@ def main():
 
         print("waiting for device to be ready …")
         if not con.wait_ready():
-            print("device did not respond to 'mem' — wrong port, baud, or still booting?")
+            print("device did not respond to 'mem' — wrong port/address, baud, or still booting?")
             return 1
         print("device ready.\n")
         return 1 if run_plan(con, args.mock, args.include_network) else 0

@@ -191,7 +191,7 @@ You can connect to devices:
 
 - serial port (preferred)
 - telnet (discover devices on network with [discover.py](etc/fugu/discover.py))
-    - requires '\n' line termination (the optional '\r' in '\r\n' is stripped)
+    - requires '\n' line termination
 - BLE (NUS Console)
     - pushing an update over BLE can be unreliable. better to start a local server to serve the image and invoke the
       `ota <url>` command via the ble console. this will work even when the device is behind the NAT.

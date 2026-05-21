@@ -103,8 +103,12 @@ Use the `set-config <file> <key> <value>` command to upload values.
 Use `del-config <file> <key>` command to remove values that were previously set on the device.
 Send this command to either serial or Bluetooth connection, depending on which was used last.
 *Before submitting*, show a confirmation dialog to the user listing all commands that will be sent.
-Display the commands sent an the device response during upload.
+Display the commands sent and the device response during upload.
+After each upload, the input field is considered unchanged (this also propagates to the tab changed marker). 
 
 # cron
 
 scan the firmware code for ConfFile keys and update the html tool
+
+
+show all tabs for all known files, regardless of their existence in the load (allow user can create a new files).

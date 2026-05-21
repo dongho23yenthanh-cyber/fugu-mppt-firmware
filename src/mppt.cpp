@@ -1,6 +1,6 @@
 #include "mppt.h"
 
-#include "tele/line_protocol.h"
+#include "tele/telemetry.h"   // makeTelePoint / TelePoint (text or binary wire, build-time)
 
 
 /**
@@ -412,7 +412,7 @@ void MpptController::telemetry() {
     float power = sensorPhysicalI->med3.get() * sensorPhysicalU->med3.get();
 
 
-    LineProtocol point("mppt");
+    auto point = makeTelePoint("mppt");
     point.addTag("device", getHostname().c_str());
     point.addField("I", sensorPhysicalI->med3.get(), 3);
     point.addField("Ui", sensors.Vin->med3.get(), 2);

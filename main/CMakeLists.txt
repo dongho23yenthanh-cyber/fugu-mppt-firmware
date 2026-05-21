@@ -39,6 +39,7 @@ idf_component_register(SRCS
         "../src/etc/ota_ble.cpp"
         "../src/tele/HAMqttDevice.cpp"
         "../src/tele/home_assistant.cpp"
+        "../src/tele/tamp_compress.cpp"
         "../src/math/float16.cpp"
         INCLUDE_DIRS "." "../src"
         REQUIRES
@@ -62,6 +63,20 @@ endif ()
 # Must be paired with the NimBLE sdkconfig (top-level CMakeLists pulls in sdkconfig.ble).
 if ($ENV{WITH_BLE})
     component_compile_definitions("WITH_BLE=1")
+endif ()
+
+# WITH_BINARY_TELE=1 sends telemetry as the binary symbol-table wire (sym_line_protocol.h) +
+# compression (tele.conf compressor=none|tamp, default tamp) instead of text influx line protocol.
+# The receiver on UDP :8086 must then strip the 1-byte compressor id, decompress, and decode the
+# length-prefixed frames (lpDecode is the reference) — plain InfluxDB ingestion no longer works.
+if ($ENV{WITH_BINARY_TELE})
+    component_compile_definitions("WITH_BINARY_TELE=1")
+endif ()
+
+# BENCH_TELE=1 runs a one-shot encode/compress microbench at boot (benchTele, prints via
+# ESP_LOGW("bench", ...)). Requires WITH_BINARY_TELE (compares LineProtocol vs BinaryLineProtocol).
+if ($ENV{BENCH_TELE})
+    component_compile_definitions("BENCH_TELE=1")
 endif ()
 
 # WITH_SPROFILER=1 compiles in the semihosting sampling profiler (sprofiler_initialize, only useful

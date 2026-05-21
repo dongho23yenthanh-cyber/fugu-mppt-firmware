@@ -28,7 +28,26 @@ void wifiLoop(bool connect = false);
 
 #include "line_protocol.h"
 
-void telemetryAddPoint(LineProtocol &p, uint16_t maxQueue = 40);
+// Telemetry point type is chosen at build time. WITH_BINARY_TELE swaps the text
+// influx line for the binary symbol-table protocol (see sym_line_protocol.h);
+// producers stay identical because both expose the same addTag/addField surface
+// and build via makeTelePoint(). Default (unset) keeps the text path so plain
+// InfluxDB UDP ingestion is unchanged.
+#if WITH_BINARY_TELE
+#include "sym_line_protocol.h"
+extern SymbolTable g_symtab;                 // one per device (device id is fixed) -> shared table
+using TelePoint = BinaryLineProtocol;
+inline TelePoint makeTelePoint(const char *measurement) { return BinaryLineProtocol(g_symtab, measurement); }
+#else
+using TelePoint = LineProtocol;
+inline TelePoint makeTelePoint(const char *measurement) { return LineProtocol(measurement); }
+#endif
+
+void telemetryAddPoint(TelePoint &p, uint16_t maxQueue = 40);
+
+#if defined(BENCH_TELE) && WITH_BINARY_TELE
+void benchTele();   // one-shot encode/compress microbench, prints via ESP_LOGW("bench", ...)
+#endif
 
 void telemetryFlushPointsQ(const IPAddress &addr);
 

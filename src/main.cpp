@@ -299,6 +299,9 @@ void setup() {
     // so calls this after everything else has been set up
     enable_esp_log_to_telnet();
 
+#if defined(BENCH_TELE) && WITH_BINARY_TELE
+    benchTele();   // one-shot encode/compress microbench
+#endif
 
     ESP_LOGI("main", "setup() done.");
 

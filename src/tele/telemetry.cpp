@@ -19,6 +19,18 @@
 
 #include "../storage/key-value.h"
 
+#if WITH_BINARY_TELE
+#include "compress.h"
+#include "../conf.h"
+SymbolTable g_symtab;                    // shared interning table for the binary wire (telemetry.h)
+#endif
+
+// Flush is time-capped: send when the queue reaches TELE_FLUSH_COUNT points OR
+// TELE_FLUSH_MS has elapsed, so a quiet device never sits on stale telemetry.
+static constexpr uint16_t TELE_FLUSH_COUNT = 40;
+static constexpr uint32_t TELE_FLUSH_MS = 1000;
+static constexpr size_t TELE_BIN_BATCH = 3500;   // raw bytes/datagram; ~1/3 after tamp -> under MSS
+
 WiFiMulti wifiMulti;
 //WiFiUDP udp;
 AsyncUDP asyncUdp;
@@ -186,6 +198,7 @@ bool wait_for_wifi() {
     return true;
 }
 
+#if !WITH_BINARY_TELE
 static void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
     if (msg.length() > CONFIG_TCP_MSS) {
         ESP_LOGW("tele", "Payload len %d > TCP_MSS: %s", msg.length(), msg.substring(0, 200).c_str());
@@ -201,26 +214,61 @@ static void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
 
     msg.clear();
 }
+#endif
 
+
+#if WITH_BINARY_TELE
+// Compressor for the binary wire, selected once from tele.conf (default tamp).
+// Swap algorithms by changing the conf key — no code change at call sites.
+static Compressor &teleCompressor() {
+    static Compressor &c = compressorByName(ConfFile{"/littlefs/conf/tele.conf"}.c("compressor", "tamp"));
+    return c;
+}
+
+// Compress one batch of concatenated (already length-prefixed) wire frames, tag
+// it with the compressor id, and send as one self-contained UDP datagram.
+static void sendBinaryBatch(const IPAddress &dst, uint16_t port, Compressor &comp, std::string &raw) {
+    if (raw.empty()) return;
+    static std::string out;
+    std::string body;
+    if (comp.packet((const uint8_t *) raw.data(), raw.size(), body)) {
+        out.assign(1, (char) comp.id());     // 1-byte tag so the receiver picks the decompressor
+        out += body;
+        if (out.size() > CONFIG_TCP_MSS)
+            ESP_LOGW("tele", "binary datagram %u B > MSS (raw %u)", (unsigned) out.size(), (unsigned) raw.size());
+        bytesSent += asyncUdp.writeTo((const uint8_t *) out.data(), out.size(), dst, port);
+    }
+    raw.clear();
+}
+#endif
 
 static void influxWritePointsUDP(const IPAddress &dst, moodycamel::ReaderWriterQueue<std::string> &q) {
-    constexpr int MTU = CONFIG_TCP_MSS;
-    // notice that MTU is not the UDP max message size (which is >64k?), here we use MTU from ip4 as a "safe" value
-
     if (noSsid) return;
-
     constexpr auto port = 8086;
 
+#if WITH_BINARY_TELE
+    Compressor &comp = teleCompressor();
+    static std::string batch;            // raw concatenation of length-prefixed frames
+    std::string frame;
+    while (q.try_dequeue(frame)) {
+        if (!batch.empty() && batch.size() + frame.size() > TELE_BIN_BATCH)
+            sendBinaryBatch(dst, port, comp, batch);
+        batch += frame;
+    }
+    sendBinaryBatch(dst, port, comp, batch);    // flush remainder (time-capped path needs this)
+#else
+    constexpr int MTU = CONFIG_TCP_MSS;
+    // notice that MTU is not the UDP max message size (which is >64k?), here we use MTU from ip4 as a "safe" value
     static String msg;
-
     std::string lp;
     while (q.try_dequeue(lp)) {
-        if (msg.length() + lp.length() + 1 >= MTU) {
+        if (msg.length() + lp.length() + 1 >= MTU)
             udpFlushString(dst, port, msg);
-        }
         msg += lp.c_str();
         msg += '\n';
     }
+    udpFlushString(dst, port, msg);             // flush remainder so partial batches go out within TELE_FLUSH_MS
+#endif
 }
 
 const char *getChipId() {
@@ -238,27 +286,74 @@ const char *getChipId() {
 
 moodycamel::ReaderWriterQueue<std::string> pointsQ{};
 
-void telemetryAddPoint(LineProtocol &p, uint16_t maxQueue) {
+void telemetryAddPoint(TelePoint &p, uint16_t maxQueue) {
     assert(p.hasTime());
 
     if (pointsQ.size_approx() < maxQueue)
-        pointsQ.enqueue(p.takeLine());
+        pointsQ.enqueue(p.takeWire());
 }
 
 void telemetryFlushPointsQ(const IPAddress &addr) {
-    if (pointsQ.size_approx() > 40)
-        influxWritePointsUDP(addr, pointsQ);
+    static uint32_t lastFlush = 0;
+    auto n = pointsQ.size_approx();
+    if (n == 0) return;
+    uint32_t now = millis();
+    if (n < TELE_FLUSH_COUNT && (now - lastFlush) < TELE_FLUSH_MS) return;  // time-capped
+    lastFlush = now;
+    influxWritePointsUDP(addr, pointsQ);
 }
 
 extern VIinVout<const Sensor *> sensors;
 
 void dcdcDataChanged(const ADC_Sampler &dcdc, const Sensor &sensor) {
     if (timeSynced && sensor.params.rawTelemetry && !sensor.params.teleName.empty() && WiFi.isConnected()) {
-        LineProtocol point("mppt");
+        auto point = makeTelePoint("mppt");
         point.addTag("device", getHostname().c_str());
         point.addField(sensor.params.teleName.c_str(), sensor.last, 3);
         point.setTimeMs();
         telemetryAddPoint(point, 600);
     }
 }
+
+#if defined(BENCH_TELE) && WITH_BINARY_TELE
+#include <esp_timer.h>
+template<class P> static void fillBench(P &p) {       // representative mppt point (~19 fields)
+    p.addTag("device", "bench-dev");
+    p.addField("I", 12.34f, 3);     p.addField("Ui", 59.41f, 2);   p.addField("Uo", 26.80f, 2);
+    p.addField("P", 330.2f, 2);     p.addField("P_smooth", 330.5f, 2);
+    p.addField("E", 16411.5f, 1);   p.addField("E_today", 1234.5f, 1);
+    p.addField("pwm_dir_f", -0.02f, 2); p.addField("mppt_state", (int) 4);
+    p.addField("mcu_temp", 53.0f, 1);   p.addField("ntc_temp", 47.9f, 1);
+    p.addField("pwm_duty", (int) 957);  p.addField("pwm_ls_duty", (int) 1090); p.addField("pwm_ls_max", (int) 1090);
+    p.addField("pwm_dcm", false);
+    p.addField("P_filt", 330.7f, 2); p.addField("P_prev", 331.0f, 2);
+    p.addField("dP", -0.11f, 2);     p.addField("dP_thres", 0.0f, 2);
+    p.addField("cv_lim_idx", (int) 0);
+    p.setTimeMs();
+}
+
+void benchTele() {
+    constexpr int N = 2000;
+    int64_t t0 = esp_timer_get_time();
+    for (int i = 0; i < N; i++) { LineProtocol p("mppt"); fillBench(p); volatile auto s = p.takeWire().size(); (void) s; }
+    int64_t t1 = esp_timer_get_time();
+    { BinaryLineProtocol w(g_symtab, "mppt"); fillBench(w); (void) w.takeWire(); }  // warm the symbol table
+    int64_t t2 = esp_timer_get_time();
+    for (int i = 0; i < N; i++) { BinaryLineProtocol p(g_symtab, "mppt"); fillBench(p); volatile auto s = p.takeWire().size(); (void) s; }
+    int64_t t3 = esp_timer_get_time();
+
+    std::string batch;
+    for (int i = 0; i < 40; i++) { BinaryLineProtocol p(g_symtab, "mppt"); fillBench(p); batch += p.takeWire(); }
+    Compressor &comp = compressorByName("tamp");
+    std::string out; constexpr int M = 200;
+    int64_t t4 = esp_timer_get_time();
+    for (int i = 0; i < M; i++) comp.packet((const uint8_t *) batch.data(), batch.size(), out);
+    int64_t t5 = esp_timer_get_time();
+
+    double textUs = double(t1 - t0) / N, binUs = double(t3 - t2) / N, tampUs = double(t5 - t4) / M;
+    ESP_LOGW("bench", "tele encode: text %.2f us/pt | binary %.2f us/pt (%.2fx faster) | "
+                      "tamp 40-pt batch %u->%u B in %.1f us (%.2f us/pt)",
+             textUs, binUs, textUs / binUs, (unsigned) batch.size(), (unsigned) out.size(), tampUs, tampUs / 40.0);
+}
+#endif
 

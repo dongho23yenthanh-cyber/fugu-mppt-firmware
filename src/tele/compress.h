@@ -1,0 +1,50 @@
+#pragma once
+#include <string>
+#include <vector>
+#include <cstdint>
+#include <cstddef>
+
+// Pluggable byte-stream compressor for the binary line protocol. Each packet()
+// call is self-contained (fresh dictionary) so its output decompresses on its
+// own — for a lossy transport (UDP) batch many length-prefixed wire frames into
+// one buffer and call packet() once; losing a datagram never poisons the next.
+// id() is a 1-byte tag the transport prepends so the receiver picks the matching
+// decompressor. Swap algorithms by handing the transport a different instance
+// (see compressorByName), without touching the encoder or the send path.
+class Compressor {
+public:
+    virtual ~Compressor() = default;
+    virtual uint8_t id() const = 0;          // wire tag (0=none, 1=tamp, ...)
+    virtual const char *name() const = 0;
+    virtual bool packet(const uint8_t *in, size_t n, std::string &out) = 0;
+};
+
+// Identity passthrough: the wire stays raw binary. Right choice on lossy links
+// where per-packet compression doesn't pay — the symbol-table protocol already
+// strips the cross-frame redundancy an LZ window would otherwise find.
+class NoCompress : public Compressor {
+public:
+    uint8_t id() const override { return 0; }
+    const char *name() const override { return "none"; }
+    bool packet(const uint8_t *in, size_t n, std::string &out) override {
+        out.assign(reinterpret_cast<const char *>(in), n);
+        return true;
+    }
+};
+
+// Tamp (BrianPugh/tamp): DEFLATE-inspired, ~1 KB window, tiny code/RAM. Best on
+// batched packets (warm window) or a reliable stream; near break-even on single
+// tiny frames. Defined in tamp_compress.cpp so the tamp C headers stay isolated.
+class TampCompress : public Compressor {
+    std::vector<unsigned char> window_;      // 1<<windowBits_ dictionary buffer
+    uint8_t windowBits_;
+public:
+    explicit TampCompress(uint8_t windowBits = 10);
+    uint8_t id() const override { return 1; }
+    const char *name() const override { return "tamp"; }
+    bool packet(const uint8_t *in, size_t n, std::string &out) override;
+};
+
+// Shared instance by name ("none"/"tamp"); unknown -> NoCompress. Lets a conf
+// key (e.g. tele.conf compressor=tamp) pick the algorithm at startup.
+Compressor &compressorByName(const char *name);

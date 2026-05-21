@@ -2,11 +2,14 @@
 """Console client + exerciser for the Fugu MPPT firmware.
 
 Talks the device's string command protocol (the same one served on UART/USB-CDC/telnet/MQTT/BLE,
-see `doc/Console.md`) over any transport. Three modes: a single command (`-c`), an interactive
-REPL (`-i`), or — the default — a test PLAN that walks every console command in a meaningful order
-(read-only diagnostics, config round-trips and service ops, then the converter/PWM commands that
-move power) and reports PASS/FAIL/SKIP. The transport and the line-console mechanics live in the
-`fugu` package (`fugu.transport`, `fugu.console.Console`); this file is the CLI and the plan.
+see `doc/Console.md`) over any transport. Modes: a single command (`-c`), the test PLAN (`--test`,
+walks every console command in a meaningful order — read-only diagnostics, config round-trips and
+service ops, then the converter/PWM commands that move power — and reports PASS/FAIL/SKIP), or —
+given a transport but no mode flag — an interactive REPL (the default). With *no arguments at all*
+it scans every transport for reachable devices (serial port globs, mDNS scope/telnet hosts, BLE
+NUS, and — when `$MQTT_HOST` is set — hostnames seen on the broker's `pv/log/`) and prints what to
+pass to connect, without connecting. The transport and the line-console mechanics live in
+the `fugu` package (`fugu.transport`, `fugu.console.Console`); this file is the CLI and the plan.
 Defaults to serial; `--ble`/`--ip` select BLE or TCP/telnet.
 
 The PWM/charger group is gated behind `--mock`. A mock build (fake ADC, no real switching —
@@ -18,31 +21,56 @@ restart) always require an explicit opt-in flag.
 Requires `pyserial` (serial) and/or `bleak` (BLE):  pip install pyserial bleak
 
 Examples:
-    python etc/fugu_console.py --mock                  # full sweep over serial against a mock build
-    python etc/fugu_console.py                           # safe subset against real hardware
-    python etc/fugu_console.py -p /dev/cu.usbmodem1101 --mock
-    python etc/fugu_console.py --ble --mock              # same sweep over BLE
-    python etc/fugu_console.py --ip 192.168.4.2          # over TCP/telnet
+    python etc/fugu_console.py                           # discover devices on all transports
+    python etc/fugu_console.py -p /dev/cu.usbmodem1101   # interactive REPL over serial (default)
+    python etc/fugu_console.py --ip 192.168.4.2          # interactive REPL over TCP/telnet
+    python etc/fugu_console.py --ble                     # interactive REPL over BLE
+    python etc/fugu_console.py --test --mock             # run the full command PLAN on a mock build
+    python etc/fugu_console.py --ip 192.168.4.2 --test   # run the safe subset over TCP/telnet
+    python etc/fugu_console.py --mqtt 192.168.1.134 --mqtt-port 1882 -c "svc list"   # over MQTT
+    python etc/fugu_console.py --mqtt 192.168.1.134 --mqtt-readonly  # passive log monitor (REPL)
     python etc/fugu_console.py -c "svc list"             # run one command, print the reply
-    python etc/fugu_console.py -i                        # interactive REPL
 """
 
 import argparse
 import glob
 import os
 import sys
+import time
 
 try:  # works both as `python etc/fugu_console.py` and `python -m etc.fugu_console`
-    from fugu.transport import SerialTransport, SocketTransport, BleTransport
+    from fugu.transport import SerialTransport, SocketTransport, BleTransport, MqttTransport
     from fugu.console import Console
+    from fugu.discover import discover_scope_servers
 except ImportError:
-    from etc.fugu.transport import SerialTransport, SocketTransport, BleTransport
+    from etc.fugu.transport import SerialTransport, SocketTransport, BleTransport, MqttTransport
     from etc.fugu.console import Console
+    from etc.fugu.discover import discover_scope_servers
 
 _PORT_GLOBS = [
     "/dev/cu.usbmodem*", "/dev/cu.usbserial*", "/dev/cu.wchusbserial*", "/dev/cu.SLAB_USBtoUART*",
     "/dev/ttyUSB*", "/dev/ttyACM*",
 ]
+
+
+def load_env_file(path=None):
+    """Populate os.environ from a KEY=VALUE file (default `mqtt.env` beside this script).
+
+    Shell-set vars win — only keys not already in the environment are filled, so an explicit
+    `MQTT_HOST=… fugu_console.py` or exported value overrides the file.
+    """
+    if path is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mqtt.env")
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                os.environ.setdefault(key.strip(), val.strip())
+    except FileNotFoundError:
+        pass
 
 
 def autodetect_port() -> str:
@@ -53,6 +81,132 @@ def autodetect_port() -> str:
         if hits:
             return hits[0]
     sys.exit("no serial port found; pass --port or set $ESPPORT")
+
+
+def scan_serial():
+    ports = []
+    for pat in _PORT_GLOBS:
+        ports.extend(sorted(glob.glob(pat)))
+    return ports
+
+
+def scan_telnet(timeout=2.0):
+    """mDNS-advertised scope/telnet hosts; None if zeroconf isn't installed."""
+    try:
+        return sorted(set(discover_scope_servers(timeout=timeout)))
+    except ImportError:
+        return None
+
+
+def scan_ble(timeout=5.0):
+    """BLE peripherals advertising the NUS console; None if bleak isn't installed."""
+    try:
+        import asyncio
+        from bleak import BleakScanner
+    except ImportError:
+        return None
+    nus = BleTransport.NUS_SERVICE
+
+    async def _scan():
+        found = []
+        for dev, adv in (await BleakScanner.discover(timeout=timeout, return_adv=True)).values():
+            if nus in (s.lower() for s in (adv.service_uuids or [])):
+                found.append((dev.name or "?", dev.address))
+        return found
+
+    return asyncio.run(_scan())
+
+
+def scan_mqtt(timeout=5.0):
+    """Hostnames a broker has seen publishing under `pv/log/<hostname>`.
+
+    Needs a broker (no default is compiled in): `$MQTT_HOST` (`$MQTT_PORT`/`$MQTT_USER`/`$MQTT_PASS`
+    refine it). Returns None when no broker is configured or `paho-mqtt` isn't installed.
+    """
+    host = os.environ.get("MQTT_HOST")
+    if not host:
+        return None
+    try:
+        import paho.mqtt.client as mqtt
+        from paho.mqtt.enums import CallbackAPIVersion
+    except ImportError:
+        return None
+    hosts = set()
+
+    def on_message(_c, _u, msg):
+        parts = msg.topic.split("/")
+        if len(parts) == 3:  # pv/log/<hostname>, not the deeper .../cmd echo
+            hosts.add(parts[2])
+
+    c = mqtt.Client(CallbackAPIVersion.VERSION2)
+    user = os.environ.get("MQTT_USER", "pv")
+    if user:
+        c.username_pw_set(user, os.environ.get("MQTT_PASS") or "")
+    c.on_message = on_message
+    try:
+        c.connect(host, int(os.environ.get("MQTT_PORT", "1883")), 60)
+        c.subscribe(MqttTransport.LOG_ROOT + "#")
+        c.loop_start()
+        time.sleep(timeout)
+        c.loop_stop()
+        c.disconnect()
+    except OSError as e:
+        print(f"  (mqtt {host}: {e})")
+        return []
+    return sorted(hosts)
+
+
+def discover_devices():
+    """Scan every transport for reachable Fugu devices and print what to pass to connect.
+
+    The scans block for different durations (serial is instant, mDNS ~2 s, BLE/MQTT ~5 s), so
+    run them concurrently and join — total time is the slowest scan, not their sum.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    print("scanning for Fugu devices on all transports …\n")
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_serial = ex.submit(scan_serial)
+        f_telnet = ex.submit(scan_telnet)
+        f_ble = ex.submit(scan_ble)
+        f_mqtt = ex.submit(scan_mqtt)
+        ports, hosts, devs, mqtt_hosts = (
+            f_serial.result(), f_telnet.result(), f_ble.result(), f_mqtt.result())
+
+    print("serial:")
+    for p in ports:
+        print(f"  {p:<32} →  -p {p}")
+    if not ports:
+        print("  (none)")
+
+    print("\ntelnet/scope (mDNS):")
+    if hosts is None:
+        print("  (skipped — `pip install zeroconf`)")
+    else:
+        for addr, port, name in hosts:
+            print(f"  {name} {addr}:{port:<8} →  --ip {addr}")
+        if not hosts:
+            print("  (none)")
+
+    print("\nBLE (NUS):")
+    if devs is None:
+        print("  (skipped — `pip install bleak`)")
+    else:
+        for name, address in devs:
+            print(f"  {name:<24} {address}  →  --ble --address {address}")
+        if not devs:
+            print("  (none)")
+
+    print("\nMQTT (pv/log):")
+    if mqtt_hosts is None:
+        print("  (skipped — set $MQTT_HOST, or pass --mqtt to connect)")
+    else:
+        broker = os.environ.get("MQTT_HOST")
+        for h in mqtt_hosts:
+            print(f"  {h:<24} →  --mqtt {broker} --name {h}")
+        if not mqtt_hosts:
+            print("  (none)")
+    return 0
 
 
 # Test plan. Each step: (command, expect_substr | None, group, tolerate_reject)
@@ -162,23 +316,33 @@ def run_plan(con: Console, mock: bool, include_net: bool):
 
 
 def interactive(con: Console):
-    print("interactive console — type commands, Ctrl-C / EOF to quit")
-    while True:
-        try:
-            cmd = input("fugu> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-        if not cmd:
-            continue
-        for ln in con.command(cmd):
-            print("  " + ln)
+    print("interactive console — type commands, Ctrl-C / EOF to quit (live output streams below)")
+    # Tap the reader's line stream so periodic status lines (and command replies) print as they
+    # arrive, instead of being thrown away by command()'s drain() while we wait at the prompt.
+    con.on_line = lambda ln: print(ln)
+    try:
+        while True:
+            try:
+                cmd = input().strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+            if cmd:
+                con.command(cmd)  # reply lines print via on_line
+    finally:
+        con.on_line = None
 
 
 def make_transport(args):
     if args.ble:
         print(f"scanning for BLE NUS (name contains {args.name!r}) …")
         return BleTransport(name=args.name, address=args.address)
+    if args.mqtt:
+        ro = " (read-only)" if args.mqtt_readonly else ""
+        print(f"connecting to MQTT broker {args.mqtt}:{args.mqtt_port}, device ~{args.name!r}{ro}")
+        return MqttTransport(args.mqtt, port=args.mqtt_port,
+                             username=args.mqtt_user, password=args.mqtt_pass,
+                             device=args.name, writable=not args.mqtt_readonly)
     if args.ip:
         print(f"connecting to {args.ip}:23 (telnet)")
         return SocketTransport(args.ip)
@@ -188,20 +352,33 @@ def make_transport(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Console exerciser for Fugu MPPT firmware")
+    load_env_file()  # fill MQTT_* from etc/mqtt.env (shell-set vars still win)
+    ap = argparse.ArgumentParser(description="Console client + exerciser for Fugu MPPT firmware")
     ap.add_argument("-p", "--port", default=None, help="serial port (default: $ESPPORT or autodetect)")
     ap.add_argument("-b", "--baud", type=int, default=115200, help="baud rate (default 115200)")
     ap.add_argument("--ble", action="store_true", help="use the BLE NUS transport instead of serial")
-    ap.add_argument("--name", default="fugu", help="BLE advertised-name substring filter (with --ble)")
+    ap.add_argument("--name", default="fugu",
+                    help="device-name substring filter (with --ble: advertised name; with --mqtt: hostname)")
     ap.add_argument("--address", help="BLE address to connect to (with --ble)")
     ap.add_argument("--ip", help="use TCP/telnet to this address instead of serial")
+    ap.add_argument("--mqtt", metavar="BROKER", help="use MQTT via this broker host instead of serial")
+    ap.add_argument("--mqtt-port", type=int, default=int(os.environ.get("MQTT_PORT", "1883")),
+                    help="MQTT broker port (default: $MQTT_PORT or 1883)")
+    ap.add_argument("--mqtt-user", default=os.environ.get("MQTT_USER", "pv"), help="MQTT username")
+    ap.add_argument("--mqtt-pass", default=os.environ.get("MQTT_PASS"), help="MQTT password")
+    ap.add_argument("--mqtt-readonly", action="store_true",
+                    help="read-only MQTT monitor: stream output, never publish commands")
     ap.add_argument("--mock", action="store_true",
                     help="device runs a mock setup (fake ADC, no real PWM) — enables the PWM/charger commands")
     ap.add_argument("--include-network", action="store_true",
                     help="also run network/NVS-mutating commands (wifi on, hostname)")
     ap.add_argument("-c", "--command", help="send a single command, print the reply, exit")
-    ap.add_argument("-i", "--interactive", action="store_true", help="interactive REPL")
+    ap.add_argument("--test", action="store_true",
+                    help="run the PASS/FAIL/SKIP command PLAN instead of the interactive REPL")
     args = ap.parse_args()
+
+    if len(sys.argv) == 1:  # no arguments: search every transport, don't connect
+        return discover_devices()
 
     print(f"({'MOCK' if args.mock else 'REAL-HARDWARE'} mode)")
     try:
@@ -214,16 +391,16 @@ def main():
             for ln in con.command(args.command):
                 print(ln)
             return 0
-        if args.interactive:
-            interactive(con)
-            return 0
+        if args.test:
+            print("waiting for device to be ready …")
+            if not con.wait_ready():
+                print("device did not respond to 'mem' — wrong port/address, baud, or still booting?")
+                return 1
+            print("device ready.\n")
+            return 1 if run_plan(con, args.mock, args.include_network) else 0
 
-        print("waiting for device to be ready …")
-        if not con.wait_ready():
-            print("device did not respond to 'mem' — wrong port/address, baud, or still booting?")
-            return 1
-        print("device ready.\n")
-        return 1 if run_plan(con, args.mock, args.include_network) else 0
+        interactive(con)  # default
+        return 0
     finally:
         con.close()
 

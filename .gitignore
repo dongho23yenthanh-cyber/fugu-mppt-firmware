@@ -49,6 +49,8 @@ etc/scope_client/adaptive_noise_filter/__pycache__/
 
 wifi.conf
 mqtt.conf
+etc/mqtt.env
+etc/influx.env
 secrets.py
 
 etc/__pycache__/

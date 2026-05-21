@@ -33,10 +33,10 @@ Examples:
 """
 
 import argparse
+import asyncio
 import glob
 import os
 import re
-import socket
 import sys
 import time
 
@@ -94,6 +94,16 @@ def scan_serial():
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _WELCOME_RE = re.compile(r"Welcome to (\S+)")  # banner: "Welcome to <hostname> (192.168.4.2)"
+_HOSTNAME_RE = re.compile(r"Hostname:\s*(\S+)")  # reply of the bare `hostname` command
+
+
+def query_hostname(con: Console) -> str | None:
+    """Ask the device for its hostname (the bare `hostname` command), or None on failure."""
+    for ln in con.command("hostname", timeout=2.0):
+        m = _HOSTNAME_RE.search(ln)
+        if m:
+            return m.group(1)
+    return None
 
 
 def nat_endpoints():
@@ -103,6 +113,8 @@ def nat_endpoints():
     of (host, port); empty when unset.
     """
     out = []
+    if not os.environ.get("NAT_TELNET"):
+        load_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "nat.env"))  # NAT_TELNET
     for ep in (os.environ.get("NAT_TELNET") or "").split(","):
         ep = ep.strip()
         if not ep:
@@ -112,20 +124,24 @@ def nat_endpoints():
     return out
 
 
-def probe_welcome(host, port, timeout=4.0):
+async def probe_welcome(host, port, timeout=4.0):
     """Connect to a telnet endpoint and return the hostname from its welcome banner (or None)."""
     try:
-        s = socket.create_connection((host, port), timeout=timeout)
-    except OSError:
+        writer: asyncio.StreamWriter
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout)
+    except (OSError, asyncio.TimeoutError):
         return None
-    s.settimeout(timeout)
     buf = b""
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     try:
-        while time.time() < deadline:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                chunk = s.recv(1024)
-            except OSError:
+                chunk = await asyncio.wait_for(reader.read(1024), remaining)
+            except (OSError, asyncio.TimeoutError):
                 break
             if not chunk:
                 break
@@ -134,8 +150,26 @@ def probe_welcome(host, port, timeout=4.0):
             if m:
                 return m.group(1)
     finally:
-        s.close()
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
     return None
+
+
+async def scan_nat_async(timeout=4.0):
+    """asyncio twin of `scan_nat`: probe all NAT endpoints concurrently.
+
+    Returns a list of (host, port, hostname|None) for every configured endpoint (None = no
+    banner / unreachable), or None when none are configured.
+    """
+    endpoints = nat_endpoints()
+    if not endpoints:
+        return []
+    names = await asyncio.gather(
+        *(probe_welcome(host, port, timeout) for host, port in endpoints))
+    return [(host, port, name) for (host, port), name in zip(endpoints, names)]
 
 
 def scan_nat(timeout=4.0):
@@ -144,10 +178,7 @@ def scan_nat(timeout=4.0):
     Returns a list of (host, port, hostname|None) for every configured endpoint (None = no
     banner / unreachable), or None when none are configured.
     """
-    endpoints = nat_endpoints()
-    if not endpoints:
-        return None
-    return [(host, port, probe_welcome(host, port, timeout)) for host, port in endpoints]
+    return asyncio.run(scan_nat_async(timeout))
 
 
 def scan_telnet(timeout=2.0):
@@ -161,7 +192,6 @@ def scan_telnet(timeout=2.0):
 def scan_ble(timeout=5.0):
     """BLE peripherals advertising the NUS console; None if bleak isn't installed."""
     try:
-        import asyncio
         from bleak import BleakScanner
     except ImportError:
         return None
@@ -389,13 +419,15 @@ def run_plan(con: Console, mock: bool, include_net: bool):
 
 def interactive(con: Console):
     print("interactive console — type commands, Ctrl-C / EOF to quit (live output streams below)")
+    hostname = query_hostname(con)
+    prompt = f"{hostname}> " if hostname else "> "
     # Tap the reader's line stream so periodic status lines (and command replies) print as they
     # arrive, instead of being thrown away by command()'s drain() while we wait at the prompt.
     con.on_line = lambda ln: print(ln)
     try:
         while True:
             try:
-                cmd = input().strip()
+                cmd = input(prompt).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return
@@ -427,7 +459,6 @@ def make_transport(args):
 
 def main():
     load_env_file()  # fill MQTT_* from etc/mqtt.env (shell-set vars still win)
-    load_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "nat.env"))  # NAT_TELNET
     ap = argparse.ArgumentParser(description="Console client + exerciser for Fugu MPPT firmware")
     ap.add_argument("-p", "--port", default=None, help="serial port (default: $ESPPORT or autodetect)")
     ap.add_argument("-b", "--baud", type=int, default=115200, help="baud rate (default 115200)")

@@ -25,7 +25,6 @@ public:
     }
 
 private:
-
     std::array<unsigned long, 4> resetTimes;
 
     TaskNotification taskNotification{};
@@ -83,8 +82,8 @@ public:
         periodic_timer.destroy();
     }
 
-     float getSamplingRate(uint8_t channel) override{
-       return static_cast<float>(periodic_timer.freq());
+    float getSamplingRate(uint8_t channel) override {
+        return static_cast<float>(periodic_timer.freq());
     };
 
     void startReading(uint8_t channel) override {
@@ -96,25 +95,27 @@ public:
         return taskNotification.wait(10);
     }
 
-    void setMaxExpectedVoltage(uint8_t ch, float voltage) override {}
+    void setMaxExpectedVoltage(uint8_t ch, float voltage) override {
+    }
 
 
     float getSample() override {
         float x = NAN;
+        auto t = wallClockUs() - resetTimes[readingChannel];
+        auto s = sinf((float) t / 10e6f);
         if (readingChannel == 0) {
-            x = 0;
-        } else if (readingChannel == 1) {
-            x = 1;
-        } else if (readingChannel == 2) {
-            auto t = wallClockUs() - resetTimes[readingChannel];
+            x = .1f + 0.01f * s;;
+        } /*else if (readingChannel == 1) {
+            x = 0.9f + 0.1f * s;
+        } */else if (readingChannel == 2) {
             if (t > 2000000) {
                 // ramp up a 2 + sin(t)
-                x = (2.0f + sinf((float) t / 10e6f)) * min((t - 2000000.f) / 2000000.f, 1.f);
+                x = (2.0f + s) * min((t - 2000000.f) / 2000000.f, 1.f);
             } else {
                 x = 0.0f;
             }
         } else {
-            x = 1;
+            x = .9f + .1f * s;
         }
 
         if (scope)

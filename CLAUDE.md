@@ -52,6 +52,10 @@ reads its own conf file for `enabled` (0/1) and `log_level` (error/warn/info): `
 `set-config <file>.conf <key> <value>` from the serial/telnet/MQTT console edits these in place without re-flashing —
 useful when iterating. FTP is also enabled when Wi-Fi is up (Filezilla, 1 connection, no passive mode).
 
+**When you add, rename, or remove a `.conf` key**, update all three sources together so they don't drift:
+the per-file reference table in `doc/Configuration.md`, and the editor metadata in
+`etc/config-tool/conf-editor.html` (`META` + `FILE_KEYS`).
+
 ## Tests
 
 Unit tests live under `test/` and reuse the same firmware build, swapping `main.cpp` for `test/main.cpp` via

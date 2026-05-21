@@ -232,6 +232,9 @@ const META = {
   ble_security:{unit:"",desc:"BLE pairing mode: justworks or secure",type:"string"},
   ble_passkey:{unit:"",desc:"BLE static passkey for secure pairing (0 = none)",type:"int"},
 
+  // wifi.conf
+  switch_delay:{unit:"s",desc:"Keep retrying the lost AP (router reboot) before roaming to another network; 0=immediate",type:"int"},
+
   // pprof.conf
   sprofiler_hz:{unit:"Hz",desc:"Sampling profiler frequency (needs OpenOCD attached)",type:"int"},
 
@@ -291,7 +294,7 @@ const FILE_KEYS = {
   "lcd.conf":["addr","enabled","log_level"],
   "ble.conf":["ble_security","ble_passkey","enabled","log_level"],
   "pprof.conf":["sprofiler_hz"],
-  "wifi.conf":[],
+  "wifi.conf":["switch_delay"],
 };
 
 /* Data type = the ConfFile getter the firmware reads the key with

@@ -152,7 +152,7 @@ static void spin_task(void *arg)
 }
 #else
 static esp_err_t print_real_time_stats(TickType_t xTicksToWait) {
-    printf("CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS not enabled");
+    printf_mux("CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS not enabled\n");
     return ESP_FAIL;
 }
 #endif

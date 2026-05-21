@@ -1,4 +1,5 @@
 #include "telemetry.h"
+#include "telemetry_service.h"   // transport methods (flushTask/flushQueue) are defined here
 
 #include "../adc/sampling.h"
 #include "line_protocol.h"
@@ -259,11 +260,25 @@ void telemetryAddPoint(TelePoint &p, uint16_t maxQueue) {
         pointsQ.enqueue(p.takeWire());
 }
 
-// Sends AT MOST ONE datagram per call, and ONLY when the batch is full (~MSS). The flush task
-// calls this at a fixed cadence, so full datagrams leave one-at-a-time rather than bursting —
-// back-to-back UDP sends drop more, especially across NAT. A partially-filled batch waits for
-// more points (latency is acceptable); no small datagrams go on the wire.
-void telemetryFlushPointsQ(const IPAddress &addr) {
+// TelemetryService transport lives here (where the queue/UDP/compressor statics are file-local);
+// the header stays free of AsyncUDP/compress includes. Producers stay decoupled: they only call
+// the free telemetryAddPoint() above.
+
+// Drains/compresses/sends the point queue on its own core-0 task, so compression (tens of ms with
+// tamp) never stalls production. SPSC: producer = onTick thread, consumer = this task.
+void TelemetryService::flushTask(void *arg) {
+    auto *self = static_cast<TelemetryService *>(arg);
+    for (;;) {
+        self->flushQueue(mppt.tele.influxdbHost);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+// Sends AT MOST ONE datagram per call, and ONLY when the batch is full (~MSS). flushTask calls
+// this at a fixed cadence, so full datagrams leave one-at-a-time rather than bursting — back-to-
+// back UDP sends drop more, especially across NAT. A partially-filled batch waits for more points
+// (latency is acceptable); no small datagrams go on the wire.
+void TelemetryService::flushQueue(const IPAddress &addr) {
     if (noSsid) return;
     constexpr auto port = 8086;
 #if WITH_BINARY_TELE

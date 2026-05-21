@@ -49,10 +49,6 @@ void telemetryAddPoint(TelePoint &p, uint16_t maxQueue = 40);
 void benchTele();   // one-shot encode/compress microbench, prints via ESP_LOGW("bench", ...)
 #endif
 
-void telemetryFlushPointsQ(const IPAddress &addr);
-
-
-
 class ADC_Sampler;
 struct Sensor;
 

@@ -24,8 +24,7 @@ public:
 protected:
     bool onStart() override {
         if (!WiFi.isConnected()) return false;          // UDP is connectionless, nothing to open
-        xTaskCreatePinnedToCore(flushTask, "teleflush", 4096,
-                                &mppt.tele.influxdbHost, 1, &_flushTask, 0);
+        xTaskCreatePinnedToCore(flushTask, "teleflush", 4096, this, 1, &_flushTask, 0);
         return true;
     }
     void onStop() override {                            // delete the task -> frees CPU + its stack
@@ -36,15 +35,10 @@ protected:
     }
 
 private:
-    // Drains/compresses/sends the point queue on its own core-0 task, so compression (tens of ms
-    // with tamp) never stalls production. SPSC: producer = onTick thread, consumer = this task.
-    [[noreturn]] static void flushTask(void *arg) {
-        const IPAddress *host = static_cast<const IPAddress *>(arg);
-        for (;;) {
-            telemetryFlushPointsQ(*host);
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-    }
+    // Transport: the core-0 task loop and the per-tick batch+send. Defined in telemetry.cpp,
+    // where the point queue / UDP socket / compressor statics live (the header stays lean).
+    [[noreturn]] static void flushTask(void *arg);
+    void flushQueue(const IPAddress &addr);
 
     TaskHandle_t _flushTask = nullptr;
 };

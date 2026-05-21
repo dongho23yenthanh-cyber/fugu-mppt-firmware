@@ -51,6 +51,7 @@ wifi.conf
 mqtt.conf
 etc/mqtt.env
 etc/influx.env
+etc/nat.env
 secrets.py
 
 etc/__pycache__/

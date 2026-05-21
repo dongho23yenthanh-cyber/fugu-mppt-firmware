@@ -6,9 +6,9 @@ see `doc/Console.md`) over any transport. Modes: a single command (`-c`), the te
 walks every console command in a meaningful order — read-only diagnostics, config round-trips and
 service ops, then the converter/PWM commands that move power — and reports PASS/FAIL/SKIP), or —
 given a transport but no mode flag — an interactive REPL (the default). With *no arguments at all*
-it scans every transport for reachable devices (serial port globs, mDNS scope/telnet hosts, BLE
-NUS, and — when `$MQTT_HOST` is set — hostnames seen on the broker's `pv/log/`) and prints what to
-pass to connect, without connecting. The transport and the line-console mechanics live in
+it scans every transport for reachable devices (serial port globs, mDNS scope/telnet hosts, the
+NAT-forwarded telnet endpoints in `nat.env`, BLE NUS, and — when `$MQTT_HOST` is set — hostnames
+seen on the broker's `pv/log/`) and prints what to pass to connect, without connecting. The transport and the line-console mechanics live in
 the `fugu` package (`fugu.transport`, `fugu.console.Console`); this file is the CLI and the plan.
 Defaults to serial; `--ble`/`--ip` select BLE or TCP/telnet.
 
@@ -35,6 +35,8 @@ Examples:
 import argparse
 import glob
 import os
+import re
+import socket
 import sys
 import time
 
@@ -88,6 +90,64 @@ def scan_serial():
     for pat in _PORT_GLOBS:
         ports.extend(sorted(glob.glob(pat)))
     return ports
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_WELCOME_RE = re.compile(r"Welcome to (\S+)")  # banner: "Welcome to <hostname> (192.168.4.2)"
+
+
+def nat_endpoints():
+    """Telnet endpoints behind the NAT router, from `$NAT_TELNET` (comma-separated host:port).
+
+    Filled from `nat.env` beside this script (see the device table in CLAUDE.md). Returns a list
+    of (host, port); empty when unset.
+    """
+    out = []
+    for ep in (os.environ.get("NAT_TELNET") or "").split(","):
+        ep = ep.strip()
+        if not ep:
+            continue
+        host, _, port = ep.partition(":")
+        out.append((host.strip(), int(port) if port else SocketTransport.DEFAULT_PORT))
+    return out
+
+
+def probe_welcome(host, port, timeout=4.0):
+    """Connect to a telnet endpoint and return the hostname from its welcome banner (or None)."""
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+    except OSError:
+        return None
+    s.settimeout(timeout)
+    buf = b""
+    deadline = time.time() + timeout
+    try:
+        while time.time() < deadline:
+            try:
+                chunk = s.recv(1024)
+            except OSError:
+                break
+            if not chunk:
+                break
+            buf += chunk
+            m = _WELCOME_RE.search(_ANSI.sub("", buf.decode("utf-8", "replace")))
+            if m:
+                return m.group(1)
+    finally:
+        s.close()
+    return None
+
+
+def scan_nat(timeout=4.0):
+    """Probe the NAT-forwarded telnet endpoints in `nat.env`, resolving each hostname.
+
+    Returns a list of (host, port, hostname|None) for every configured endpoint (None = no
+    banner / unreachable), or None when none are configured.
+    """
+    endpoints = nat_endpoints()
+    if not endpoints:
+        return None
+    return [(host, port, probe_welcome(host, port, timeout)) for host, port in endpoints]
 
 
 def scan_telnet(timeout=2.0):
@@ -165,13 +225,15 @@ def discover_devices():
     from concurrent.futures import ThreadPoolExecutor
     print("scanning for Fugu devices on all transports …\n")
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=5) as ex:
         f_serial = ex.submit(scan_serial)
         f_telnet = ex.submit(scan_telnet)
         f_ble = ex.submit(scan_ble)
         f_mqtt = ex.submit(scan_mqtt)
-        ports, hosts, devs, mqtt_hosts = (
-            f_serial.result(), f_telnet.result(), f_ble.result(), f_mqtt.result())
+        f_nat = ex.submit(scan_nat)
+        ports, hosts, devs, mqtt_hosts, nat = (
+            f_serial.result(), f_telnet.result(), f_ble.result(), f_mqtt.result(),
+            f_nat.result())
 
     print("serial:")
     for p in ports:
@@ -186,6 +248,16 @@ def discover_devices():
         for addr, port, name in hosts:
             print(f"  {name} {addr}:{port:<8} →  --ip {addr}")
         if not hosts:
+            print("  (none)")
+
+    print("\ntelnet via NAT (nat.env):")
+    if nat is None:
+        print("  (skipped — set $NAT_TELNET, or edit etc/nat.env)")
+    else:
+        for host, port, name in nat:
+            label = name or "(unreachable)"
+            print(f"  {label:<24} {host}:{port:<8} →  --ip {host}:{port}")
+        if not nat:
             print("  (none)")
 
     print("\nBLE (NUS):")
@@ -344,8 +416,10 @@ def make_transport(args):
                              username=args.mqtt_user, password=args.mqtt_pass,
                              device=args.name, writable=not args.mqtt_readonly)
     if args.ip:
-        print(f"connecting to {args.ip}:23 (telnet)")
-        return SocketTransport(args.ip)
+        host, _, port = args.ip.partition(":")  # host:port for NAT-forwarded endpoints
+        port = int(port) if port else SocketTransport.DEFAULT_PORT
+        print(f"connecting to {host}:{port} (telnet)")
+        return SocketTransport(host, port=port)
     port = args.port or autodetect_port()
     print(f"opening {port} @ {args.baud}")
     return SerialTransport(port, baud=args.baud, timeout=0.2)
@@ -353,6 +427,7 @@ def make_transport(args):
 
 def main():
     load_env_file()  # fill MQTT_* from etc/mqtt.env (shell-set vars still win)
+    load_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "nat.env"))  # NAT_TELNET
     ap = argparse.ArgumentParser(description="Console client + exerciser for Fugu MPPT firmware")
     ap.add_argument("-p", "--port", default=None, help="serial port (default: $ESPPORT or autodetect)")
     ap.add_argument("-b", "--baud", type=int, default=115200, help="baud rate (default 115200)")
@@ -406,4 +481,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        pass

@@ -81,3 +81,6 @@ etc/bat-resistance/result.png
 build_ble/
 
 etc/bat-resistance/result60.png
+
+# fugu_scope.py local UI settings
+etc/scope_client/fugu_scope.yaml

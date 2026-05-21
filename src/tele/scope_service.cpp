@@ -4,8 +4,11 @@
 #include <ESPmDNS.h>
 #include <mdns.h>
 
+#include "telemetry.h"   // getHostname
+
 bool ScopeService::onStart() {
     if (!WiFi.isConnected()) return false;
+    scopeObj.hostname = getHostname();
     scopeObj.end();
     if (!scopeObj.begin(24)) {
         ESP_LOGE("scope", "scope setup failed");

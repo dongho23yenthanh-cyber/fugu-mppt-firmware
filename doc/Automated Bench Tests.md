@@ -59,7 +59,7 @@ they are not compiled in.
 Each test should assert **a single trip event**, not a repeating storm. Capture the console for N
 seconds and count `shutdown` / `Converter enabled` lines.
 
-### 1.1 Vout > Vin shutdown in manual mode  *(regression for the fade-storm bug)*
+### 1.1 Vout > Vin shutdown in manual mode
 - **Setup**: Vin low or absent (e.g. PSU 8 V), output sink CV at 26 V (Vout > Vin).
 - **Action**: `dc 10`.
 - **Expected**: converter enables once, `protect()` trips on `Vout > 1.25·Vin`, logs one
@@ -67,7 +67,7 @@ seconds and count `shutdown` / `Converter enabled` lines.
   prevents re-fade.
 - **Pass**: exactly one enable/trip/disable cycle; no repeating warnings; unit stays in manual mode,
   converter disabled.
-- **Fail mode this guards**: pre-fix it re-faded every few ms (warning flood).
+- **Fail mode this guards**: pre-fix it re-faded every few ms (warning flood)
 
 ### 1.2 Output over-voltage (OV)
 - **Setup**: charging normally, then drive output sink **voltage** above

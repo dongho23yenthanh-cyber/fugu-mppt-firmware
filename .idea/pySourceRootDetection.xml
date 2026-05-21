@@ -4,6 +4,8 @@
     <option name="sourcePathsSet">
       <set>
         <option value="$PROJECT_DIR$/etc" />
+        <option value="$PROJECT_DIR$/etc/scope_client" />
+        <option value="$PROJECT_DIR$/.git/refs/heads/main" />
       </set>
     </option>
   </component>

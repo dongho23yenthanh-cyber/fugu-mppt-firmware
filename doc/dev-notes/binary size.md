@@ -64,3 +64,9 @@ VFS / FAT / SPIFFS / SD: Disable if only using LittleFS.
 - 
 Console / UART: If you only use your own console, disable CONFIG_ESP_CONSOLE_UART_DEFAULT.
 ```
+
+file size:
+- For more headroom you could switch to CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL (lets the 40 MHz crystal sleep too) — but only if the
+  Fugu2 actually has a 32.768 kHz crystal populated. I left it on main-XTAL since that's safe regardless.
+
+  

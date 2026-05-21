@@ -222,7 +222,7 @@ void flush_async_uart_log() {
  * @return
  */
 static int vprintf_mux(const char *fmt, va_list argptr) {
-    static char loc_buf[300];
+    char loc_buf[300]; // stack-local: vprintf_mux re-enters across core-0 tasks (net loop + mqtt), a static races
 
     int r = old_vprintf(fmt, argptr);
 

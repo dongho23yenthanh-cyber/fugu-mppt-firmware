@@ -232,3 +232,50 @@ Example:
 python etc/measure_coil.py --ip 192.168.4.2 --i-max 1.0
 python etc/measure_coil.py -p /dev/cu.usbmodem1101 --steps 12 --dwell 6
 ```
+
+## 6. Synchronous-rectifier timing and the `Iout` peak
+
+The DCM relation (§1) assumes the *ideal* triangle: the inductor discharges at exactly `−Vout`,
+reaches zero, and idles. The synchronous-rectifier (low-side) turn-off timing is what makes the
+real waveform match — or deviate, biasing `Iout` and therefore `L`:
+
+- **LS off / too short** — the body diode finishes the discharge at `−(Vout+Vf)`: steeper decay,
+  shorter `t2`, less charge delivered per cycle → `Iout` *below* ideal → `L` over-estimated (and
+  the formula's `Vout` is really `Vout+Vf`).
+- **LS too long** — held past the zero crossing, the inductor current goes negative and pulls
+  charge back to the input → net `Iout` *reduced* → `L` over-estimated. This reverse-current notch,
+  beating against the duty as it sweeps, is what makes `L` oscillate in a fine duty sweep.
+
+Hold a fixed HS duty in DCM and sweep the LS on-time up from zero: `Iout` **rises** (the FET
+replaces the body diode, recovering the `Vf` loss and lengthening `t2`), **peaks** when LS turns
+off exactly at the zero crossing, then **falls** as reverse current sets in.
+
+```
+ Iout                      peak = LS off exactly at i_L=0  (clean ideal triangle)
+   |                       .--''''--.
+   |                  .--''          ''--.
+   |              .-''                    ''-.        reverse current:
+   | body-diode .-'                          '-.     LS held past zero,
+   |  only   _.-'                                '   i_L goes negative,
+   |     _.-'                                         charge pulled back
+   +----+-----------------------+-------------------> LS on-time (rect counts)
+      LS=0                  t2 = (Vin-Vout)/Vout * t1
+   (Vf loss, low Iout)         = rectCtrlRatio(M) * pwmCtrl
+```
+
+Why this matters for measuring `L`:
+
+- **The DCM formula is exact only at the peak.** Off-peak the waveform is no longer the clean
+  triangle the formula assumes, so `Iout` is biased and `L` with it. Measuring at (or near) the
+  per-point LS optimum gives the least-biased `L` and removes the SR-timing oscillation.
+  `etc/measure_coil.py --ls-sweep --hs N` brackets this peak (it reads the LS count back from the
+  status line — `getRectOnPwmCnt`).
+- **The peak location does *not* give `L`.** At the optimum `t2/t1 = (Vin−Vout)/Vout = 1/M − 1 =`
+  `rectCtrlRatio(M)`, with `L` cancelling out (`t2 = Ipk·L/Vout`, `Ipk = (Vin−Vout)·t1/L`). So this
+  calibrates the *timing*: it confirms the firmware's `rectCtrlRatio` (§4) and exposes any fixed
+  dead-time / gate-delay offset between the commanded LS count and the true zero crossing. It is a
+  companion to the inductance measurement, not a substitute.
+- **Peak curvature is an alternative `L` handle.** Just past the peak,
+  `Iout ≈ Iout_peak − Vout·δt² / (2·L·T)`, so `L = −Vout·fsw / (d²Iout/dδt²)`. This extraction uses
+  the LS-time counts instead of `D`/`pwmMax`, so it cross-checks the duty scale — but it still
+  scales with the `Iout` gain (§3), so it does not cross-check the sensor.

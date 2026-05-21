@@ -12,7 +12,7 @@ Before any `idf.py` invocation, source ESP-IDF into the shell. The repo ships a 
 ```bash
 . ./idf-export.sh          # sources ../../esp/idf5.5/export.sh, sets IDF_TARGET=esp32s3, autodetects $ESPPORT
 idf.py set-target esp32s3  # only needed once per build dir
-idf.py build
+WITH_BINARY_TELE=1 WITH_BLE=1 idf.py build
 idf.py -p $ESPPORT flash monitor
 ```
 
@@ -182,6 +182,30 @@ for noise debugging.
   `# CONFIG_PARTITION_TABLE_TWO_OTA is not set`. The values in `sdkconfig.defaults` are correct — only the regenerated
   `sdkconfig` drifts.
 - if you want to `git revert` but there are local dirty files, do a `git stash` before and `git stash pop` after
+- **Never ever run `git reset --hard`**
+- if you cannot find the `timeout` command, run `brew install coreutils` and try again
+
+# Connecting to devices
+
+You can connect to devices:
+
+- serial port (preferred)
+- telnet (discover devices on network with [discover.py](etc/fugu/discover.py))
+    - requires '\n' line termination (the optional '\r' in '\r\n' is stripped)
+- BLE (NUS Console)
+    - pushing an update over BLE can be unreliable. better to start a local server to serve the image and invoke the
+      `ota <url>` command via the ble console. this will work even when the device is behind the NAT.
+
+When connected to the 192.168.1.x network, these devices might be behind a NAT router:
+
+| hostname | IP          | telnet reachable via |
+|----------|-------------|----------------------|
+| fry      | 192.168.4.2 | 192.168.1.173:232    |
+| flat     | 192.168.4.3 | 192.168.1.173:233    |
+
+Confirm the hostname in the welcome message (`Welcome to <hostname> (192.168.4.2)`), as IPs are not static.
+
+You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200` 
 
 # Important
 
@@ -197,4 +221,8 @@ for noise debugging.
 - if your identity is 'Claude Code, Anthropic's official CLI for Claude', et your git username to "claude" and always
   commit with this name
 - a mock-ADC configuration for physical devices is in [dry_mock](config/lab/dry_mock)
-  - [wokwi_mock](config/lab/wokwi_mock) is for work with the Wokwi simulator
+    - [wokwi_mock](config/lab/wokwi_mock) is for work with the Wokwi simulator
+- in commit messages, try to be short, it's not necessary to point out which functions are called, just an abstract
+  summary. for example instead of
+  `keep retrying that same network via WiFi.reconnect() for wifi.conf::switch_delay seconds (default 30, 0=off)` write
+  `keep retrying that same network for switch_delay seconds`

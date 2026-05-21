@@ -295,24 +295,6 @@ void telemetryFlushPointsQ(const IPAddress &addr) {
 #endif
 }
 
-// The flush compresses a whole batch (~tens of ms with tamp); running it inline in the
-// producer's onTick stalls point production for that long, gapping the data every ~flush.
-// Run it on its own core-0 task so production (the queue's single producer) stays steady.
-// SPSC holds: producer = onTick thread, consumer = this task.
-[[noreturn]] static void teleFlushTask(void *arg) {
-    const IPAddress *host = static_cast<const IPAddress *>(arg);
-    for (;;) {
-        telemetryFlushPointsQ(*host);
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-}
-
-void startTeleFlushTask(const IPAddress *host) {
-    static bool started = false;
-    if (started) return;
-    started = true;
-    xTaskCreatePinnedToCore(teleFlushTask, "teleflush", 4096, (void *) host, 1, nullptr, 0);
-}
 
 extern VIinVout<const Sensor *> sensors;
 

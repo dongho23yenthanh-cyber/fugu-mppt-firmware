@@ -303,7 +303,7 @@ void setup() {
     benchTele();   // one-shot encode/compress microbench
 #endif
 
-    startTeleFlushTask(&mppt.tele.influxdbHost);   // compress+send off the producer thread
+    // the compress+send task is now spawned by TelemetryService::onStart (and deleted on stop)
 
     ESP_LOGI("main", "setup() done.");
 

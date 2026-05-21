@@ -6,6 +6,7 @@ gdbServerPort=3333
 
 [net]
 gateway="ws://localhost:9011"
+# gateway binary in ~/Downloads/wokwigw_v2.0.1_macOS_ARM64/wokwigw-darwin_arm64
 
 # Forward http://localhost:2323 to port 23 on the simulated ESP32:
 [[net.forward]]

@@ -38,3 +38,27 @@ public:
     const std::string &line() const { return buf_; }
     std::string &&takeLine() { return std::move(buf_); }
 };
+
+
+/**
+ *
+
+Create an optimized version of the line protocol:
+* measurement names and tag names are encoded as VARINT with symbol table.
+* for symbol tables up to ~253, this would be only 1 byte
+* symbol code word 0 doesn't exist, 0 is used as a delimiter in the binary wire protocol (see below)
+* when a new symbol is seen, before it lands on the wire it is added to the table, and its actual string value and symbol table index is transmitted
+* subsequent messages use the value from the symbol table
+* the full symbol table is transmitted every 2 minutes or every 200 points
+* The wire format is similar to influxdb v1 line protocol (https://docs.influxdata.com/influxdb/v1/write_protocols/line_protocol_tutorial/)
+    * `<measurement>,<tag0>=<tagVal0>,... <field0>=<fieldVal0> <timestamp>
+* the binary frame would be: <SID(measurement)><SID(tag0)><SID(tag1)>...\0<SID(field0)><SID(fieldVal0)>\0<timestampMs>
+* 0 is the delimiter between tags,fields and timestamp. it can be seen as a list termination signal.
+* tags and fields are read until we hit the 0
+* SID is the varint-encoded symbol lookup value
+* field values are encoded as 32-bit float (IEEE)
+* the lookup table frame: <sym0><sym1><sym2>...
+*   symN being the string name of the symbol with the code word N.
+# TODO bools? int8? int16, in32?,
+ *
+ */

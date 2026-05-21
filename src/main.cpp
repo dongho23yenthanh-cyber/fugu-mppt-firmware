@@ -701,17 +701,6 @@ static void loopNetwork_task(void *arg) {
         vTaskDelay(pdMS_TO_TICKS(1));
 }
 
-/*
-void loopCore0_LF(void *arg) {
-    // do everything with poor real-time performance @ 1Hz
-
-    while (1) {
-        // nothing here yet
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
- */
-
 void systemRestart() {
     converter.disable();
     UART_LOG("Rebooting in 200ms");

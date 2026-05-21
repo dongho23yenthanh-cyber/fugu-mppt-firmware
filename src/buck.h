@@ -53,6 +53,7 @@ class SynchronousConverter {
     uint16_t pwmCtrl = 0; // buck: HS
     uint16_t pwmRect = 0; // buck: LS
     uint16_t pwmRectMax = 0;
+    int32_t manualRect = -1; // >=0: hold LS at this count (bench), -1: auto diode emulation
     float pwmRectRatioDCM = 0; // t_onRect/t_onCtrl when in DCM
 
     float outInVoltageRatio = 0; // M
@@ -103,6 +104,23 @@ public:
     [[nodiscard]] uint16_t getRectOnPwmMin() const { return pwmRectMin; }
 
     [[nodiscard]] float voltageRatio() const { return outInVoltageRatio; } // M
+
+    [[nodiscard]] bool manualRect_() const { return manualRect >= 0; }
+
+    // Bench: pin the low-side on-count to `ls`, held against the auto diode-emulation logic
+    // (lets you sweep LS timing by hand). `ls<0` restores automatic control. Clamped to
+    // [pwmRectMin, complementary max]. NOTE: exceeding the natural zero-crossing draws reverse
+    // current - same envelope as forced PWM; protections stay active.
+    void setManualRect(int ls) {
+        if (ls < 0) {
+            manualRect = -1;
+            return;
+        }
+        manualRect = constrain(ls, (int) pwmRectMin, (int) (pwmDriver.pwmMax - pwmCtrl));
+        pwmRect = (uint16_t) manualRect;
+        if (pwmEnLogic) pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl + pwmRect);
+        else pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl, pwmRect);
+    }
 
     void init(const ConfFile &converterConf, const ConfFile &boardConf, const ConfFile &coilConf) {
         auto topo = converterConf.getString("topo", "buck");
@@ -210,7 +228,11 @@ public:
         bool largerDecrease = (-direction > pwmDriver.pwmMax / 50);
 
         // update pwmRect block
-        {
+        if (manualRect >= 0) {
+            // bench: hold LS at the requested count (clamped to the complementary max)
+            pwmRect = (uint16_t) constrain(manualRect, (int) pwmRectMin,
+                                           (int) (pwmDriver.pwmMax - pwmCtrl));
+        } else {
             if (largerDecrease && !forcedPwm)
                 // assume DCM as it will always give equal or less pwmRectMax
                 dcmHysteresis = true;
@@ -418,6 +440,7 @@ public:
         auto &vl(isBoost ? vin : vout);
 
         computeSyncRectRatio(vh, vl, il);
+        if (manualRect >= 0) return outInVoltageRatio; // bench: hold manual LS, skip clamp
         computePwmRectMax();
 
         if (pwmRect > pwmRectMax) {

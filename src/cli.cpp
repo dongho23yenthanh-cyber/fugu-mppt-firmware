@@ -89,13 +89,17 @@ static void cmdRestart(cmd *) { systemRestart(); }
 static void cmdMppt(cmd *) {
     if (!manualPwm) CMD_FAIL("MPPT already enabled");
     ESP_LOGI("main", "MPPT re-enabled");
+    converter.setManualRect(-1); // drop any bench LS hold
     manualPwm = false;
 }
 
+// dc <hs> [ls]  — manual PWM. With no [ls] the low side is automatic (diode emulation); with
+// [ls] the low-side on-count is pinned to that value (bench LS-timing sweep). ls<0 -> auto.
 static void cmdDc(cmd *c) {
     if (adcSampler.isCalibrating()) CMD_FAIL("dc: busy calibrating");
-    auto v = Command(c).getArg(0).getValue();
-    if (v.length() == 0) CMD_FAIL("dc: expected duty cycle");
+    Command cc(c);
+    auto v = cc.getArg(0).getValue();
+    if (v.length() == 0) CMD_FAIL("dc: expected <hs> [ls]");
     auto dc = v.toInt();
     if (dc < 0 || dc > converter.pwmCtrlMax) CMD_FAIL("dc: out of range [0,%i]", (int) converter.pwmCtrlMax);
 
@@ -108,6 +112,15 @@ static void cmdDc(cmd *c) {
     }
     manualPwm = true;
     mppt.setTargetDutyCycle(dc);
+
+    if (cc.countArgs() >= 2 && dc > 0) {
+        int ls = cc.getArg(1).getValue().toInt();
+        converter.setManualRect(ls);
+        if (ls >= 0)
+            UART_LOG("Manual LS=%i held (HS=%i); reverse-current risk, bench only", ls, (int) dc);
+    } else {
+        converter.setManualRect(-1); // auto LS
+    }
 }
 
 static void cmdShortLs(cmd *) {
@@ -374,7 +387,7 @@ void setupCli() {
     cli.addCommand("adc-restart", cmdAdcRestart);
     cli.addCommand("adc-reset", cmdAdcReset);
 
-    cli.addSingleArgCmd("dc", cmdDc);
+    cli.addBoundlessCmd("dc", cmdDc); // dc <hs> [ls]
     cli.addSingleArgCmd("sync", cmdSync);
     cli.addSingleArgCmd("bf,panel", cmdBflow);
     cli.addSingleArgCmd("speed", cmdSpeed);

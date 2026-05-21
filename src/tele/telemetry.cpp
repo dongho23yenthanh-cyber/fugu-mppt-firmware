@@ -192,28 +192,15 @@ bool wait_for_wifi() {
     bool stick = wifiSwitchDelayMs and !prevSsid.empty()
                  and (millis() - disconnectedSince < wifiSwitchDelayMs);
 
+    ESP_LOGI("tele", "Connecting WiFi...");
     auto t_start = millis();
-    if (stick) {
-        ESP_LOGI("tele", "Reconnecting WiFi %s (sticky)...", prevSsid.c_str());
-        WiFi.reconnect();
-        while (WiFi.status() != WL_CONNECTED) {
-            delay(50);
-            if (millis() - t_start > 6000) {
-                ESP_LOGW("tele", "WiFi reconnect timeout (%s)", prevSsid.c_str());
-                lastTimeout = micros();
-                return false;
-            }
-        }
-    } else {
-        ESP_LOGI("tele", "Connecting WiFi...");
-        while (wifiMulti.run() != WL_CONNECTED) {
-            delay(50);
-            //Serial.print(".");
-            if (millis() - t_start > 6000) {
-                ESP_LOGW("tele", "WiFi connection timeout");
-                lastTimeout = micros();
-                return false;
-            }
+    if (stick) WiFi.reconnect();
+    while ((stick ? WiFi.status() : wifiMulti.run()) != WL_CONNECTED) {
+        delay(50);
+        if (millis() - t_start > 6000) {
+            ESP_LOGW("tele", "WiFi connection timeout");
+            lastTimeout = micros();
+            return false;
         }
     }
 

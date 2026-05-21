@@ -15,6 +15,25 @@ unsigned long loopWallClockUs_ = 0;
 // build) references it, so define it here too.
 KeyValueStorage nvs{};
 
+// telemetry.cpp references the global `mppt`; mqtt.cpp references handleCommand() (cmd_input).
+// Both live in src/main.cpp / src/cli.cpp in the normal build, which RUN_TESTS excludes — so
+// stub them here to link. The ctor args use internal linkage to avoid clashing with any test
+// TU's own globals; construction mirrors the real static-init (null sensors, empty LCD).
+#include "adc/sampling.h"
+#include "buck.h"
+#include "viz/lcd.h"
+#include "mppt.h"
+static ADC_Sampler s_adcSampler{};
+static VIinVout<const Sensor *> s_sensors{nullptr, nullptr, nullptr, nullptr};
+static SynchronousConverter s_converter{};
+static LCD s_lcd{};
+MpptController mppt{s_adcSampler, s_sensors, s_converter, s_lcd};
+
+// RT/ADC path (temperature.h, mppt) reaches the scope streamer through this pointer; null = off.
+Scope *scope = nullptr;
+
+bool handleCommand(const String &) { return false; }
+
 void test_meter();
 
 void test_meter_storage();

@@ -1,7 +1,11 @@
+import datetime
+
+import requests
+
 fallback_hosts = [
     # (ip, port, name),
-    ('192.168.4.3', 0, 'flat'),
-    ('192.168.4.2', 0, 'fry'), # 192.168.4.3
+    # ('192.168.4.3', 0, 'flat'),
+    # ('192.168.4.2', 0, 'fry'), # 192.168.4.3
 ]
 
 """
@@ -28,6 +32,7 @@ import time
 from etc.fugu.discover import discover_scope_servers
 from etc.fugu.fugu import FuguDevice
 from etc.fugu.transport import SocketTransport
+from etc.fugu_console import scan_nat_async
 
 HTTP_PORT = 9000
 
@@ -44,8 +49,9 @@ def ensure_http_server():
     atexit.register(proc.terminate)
     time.sleep(.5)
 
-hosts = discover_scope_servers()
 
+hosts = [(h, 23, n) for h, _, n in discover_scope_servers()]
+hosts += asyncio.run(scan_nat_async())
 hosts = hosts or fallback_hosts
 
 if not hosts:
@@ -55,9 +61,9 @@ if not hosts:
 print(hosts)
 
 
-async def send_ota_command(addr, name):
+async def send_ota_command(addr, port, name):
     print('\n', name)
-    st = SocketTransport(addr, timeout=10)
+    st = SocketTransport(addr, port=port or SocketTransport.DEFAULT_PORT, timeout=10)
     fd = FuguDevice(st, block=True, prefix=name)
     fd.verbose = True
     ota_progress = 0
@@ -81,7 +87,11 @@ async def send_ota_command(addr, name):
     # fd.wait_for_pwm_state()
     fd.write(f"ping\n")  # clear command buffer on device
     time.sleep(.1)
-    fd.write(f"ota http://{private_ip}:9000/build/fugu-firmware.bin\n")
+
+    url = f"http://{private_ip}:9000/build/fugu-firmware.bin"
+    import email.utils
+    print('firmware mtime', email.utils.parsedate_to_datetime(requests.head(url).headers['Last-Modified']).astimezone().isoformat())
+    fd.write(f"ota {url}\n")
     # fd.write(f"reset\n")
     # print(fd.prefix, fd.pwm_state)
     while ota_progress < 100:
@@ -107,7 +117,7 @@ async def send_ota_command(addr, name):
     print(fd.prefix, 'waiting for device to come online again')
     for _ in range(10):
         time.sleep(1)
-        st = SocketTransport(addr)
+        st = SocketTransport(addr, port=port or SocketTransport.DEFAULT_PORT)
         try:
             fd = FuguDevice(st, block=True, prefix=name)
         except (ConnectionRefusedError, TimeoutError):
@@ -123,7 +133,8 @@ async def send_ota_command(addr, name):
 
 async def main():
     ensure_http_server()
-    res = await asyncio.gather(*[send_ota_command(ip, name) for ip, port, name in hosts])
+    time.sleep(1)
+    res = await asyncio.gather(*[send_ota_command(ip, port, name) for ip, port, name in hosts])
     res = dict(zip((name for _, _, name in hosts), res))
     for name, ok in res.items():
         print('%20s: %s' % (name, '✅' if ok else '❌'))

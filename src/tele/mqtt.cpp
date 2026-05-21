@@ -157,6 +157,7 @@ void MqttService::close() {
         client = nullptr; // else a restart with empty broker_uri (init() early-returns) leaves it dangling
     }
     removeLogCallback(mqttLogCallback); // drop the sink; stop may not fire MQTT_EVENT_DISCONNECTED
+    mqttMsgHandlers.clear(); // onStart/preStart rebuilds subscriptions, so a restart honors conf (e.g. cmd_input)
 }
 
 bool MqttService::onStart() {
@@ -168,9 +169,6 @@ bool MqttService::onStart() {
     if (preStart) preStart(conf); // charger BMS subscriptions + onConnected (wired by main.cpp)
 
     // Console-command input over MQTT (output is mirrored to pv/log/<hostname> by mqttLogCallback).
-    // Feeds handleCommand like telnet/BLE; the OK/ERR marker goes through UART_LOG -> the log mux,
-    // so it reaches the host on pv/log/<hostname>. UART_LOG carries no tag, so mqttLogCallback's
-    // ") mqtt:" self-filter doesn't drop it. Gated by cmd_input (default off).
     if (conf.getByte("cmd_input", 0)) {
         subscribeTopic("pv/log/" + getHostname(true) + "/cmd", [](const char *data, int len) {
             String inp(std::string(data, len).c_str());

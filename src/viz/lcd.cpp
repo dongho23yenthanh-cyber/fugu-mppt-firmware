@@ -23,7 +23,6 @@ bool LCD::init(uint8_t configuredAddr) {
     if (lcd)
         return false;
 
-    std::array<uint8_t, 2> addresses{0x27, 0x3F};
     uint8_t addr = 0;
 
     if (configuredAddr && testAddress(configuredAddr)) {
@@ -31,7 +30,8 @@ bool LCD::init(uint8_t configuredAddr) {
     }
 
     if (!addr) {
-        for (auto a: std::array<uint8_t, 2>{0x27, 0x3F}) {
+        std::array<uint8_t, 2> addresses{0x27, 0x3F};
+        for (auto a: addresses) {
             if (testAddress(a)) {
                 addr = a;
                 break;

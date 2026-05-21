@@ -222,3 +222,14 @@ ble_passkey
 ble_security
 passkey
 ×	string	BLE security mode (justworks, passkey, etc.)
+
+
+
+⏺ The console needs \r\n (my helper sent \n, so the commands never executed — that's why nothing changed). Now I can see flat's host is 192.168.1.200
+(confirmed restore target). Let me redo properly with CRLF: redirect → verify → restart → capture.
+
+
+
+in etc/fugu there is a dedicated library for communication with the chip over different transports.
+now we have  etc/ble_console.py and etc/console_test.py, which both cook their own console invocation code.
+Can we normalize this into etc/fugu? We need to at the BLE transport layer there.

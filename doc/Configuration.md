@@ -48,6 +48,7 @@ Conventions used in the tables below:
 | `pwm_sd`                     | GPIO | int    | —       | Gate driver shutdown/DIS pin (HiLi mode)       |
 | `pwm_in`                     | GPIO | int    | —       | Gate driver IN pin (InEn mode)                 |
 | `pwm_en`                     | GPIO | int    | —       | Gate driver EN pin (InEn mode)                 |
+| `boot_refresh_ns`            | ns   | float  | 1500    | Min LS on-time to refresh HS bootstrap cap     |
 | `panel_en`                   | GPIO | int    | —       | Panel/input backflow enable switch pin         |
 | `panel_sd`                   | GPIO | int    | —       | Panel/input backflow shutdown switch pin       |
 | `led_WS2812` / `led_WS2812B` | GPIO | int    | —       | WS2812 status LED data pin (alt key)           |

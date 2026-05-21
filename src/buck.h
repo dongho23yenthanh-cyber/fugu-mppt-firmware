@@ -29,14 +29,31 @@ class SynchronousConverter {
     static constexpr uint8_t pwmCh_Ctrl = 0; // Ctrl FET; buck: IN, HI (HS signal)
     static constexpr uint8_t pwmCh_Rect = 1; // Rect FET; buck: EN or LO, depending on `pwmEnLogic`
 
-    static constexpr float MinDutyCycleLS = 0.06f; // to keep the HS bootstrap circuit running
-
     /**
      * instead of the %µi-curve we simply use a constant drop factor
      * this appears to be sufficient for CCM/DCM decision
      * notice that the more accurate we model coil current, the higher the efficiency in DCM and near-DCM condition
      */
     static constexpr float InductivityDcBias = 0.95f;
+
+    // --- diode-emulation tuning (see doc/Diode Emulation.md) ---
+    // DCM is entered when half the ripple exceeds the dc current (ΔI/2 > Io, i.e. ir > 2·Io).
+    // Hysteresis: once in DCM, stay there until ir drops below 1.8·Io to avoid mode chatter.
+    static constexpr float DcmEnterRippleRatio = 2.0f;
+    static constexpr float DcmExitRippleRatio = 1.8f;
+    // Below this dc current the converter is treated as DCM regardless of the ripple comparison.
+    static constexpr float DcmForceCurrent = 0.1f; // A
+    // In DCM, fully disable sync rectification below these: the body diode handles the small
+    // discharge and this avoids reverse current at near-zero load / output.
+    static constexpr float SyncRectOffCurrent = 0.01f; // A
+    static constexpr float SyncRectOffVoltage = 1.0f; // V
+    // Minimum side voltage for the M=vl/vh (buck) / vh/vl (boost) ratio to be trustworthy.
+    static constexpr float MinRatioVoltage = 0.1f; // V
+    // M clamp: floor keeps rectCtrlRatio() finite (no div-by-zero); UnityRatioMargin keeps M off
+    // 1.0 so rectCtrlRatio() stays finite and positive on both sides.
+    static constexpr float MinVoltageRatio = 1e-2f;
+    static constexpr float MaxBoostRatio = 10.f;
+    static constexpr float UnityRatioMargin = 1e-2f;
 
 
 #ifdef ARDUINO
@@ -193,8 +210,13 @@ public:
             digitalWrite(pinSd, 1);
         }
 
-        pwmRectMin = std::ceil(
-            (float) pwmDriver.pwmMax * (isBoost ? 0.f : MinDutyCycleLS)); // keeping the bootstrap circuit powered
+        // Minimum LS on-time refreshing the HS gate-driver bootstrap cap when the switch node is
+        // not otherwise pulled low (high duty, or DCM/zero coil current). Fixed time, not a duty
+        // fraction: the recharge need is set by HS gate charge, independent of fsw. During normal
+        // conversion the LS body diode refreshes the cap, so this only binds in those corners.
+        auto bootRefreshNs = boardConf.getFloat("boot_refresh_ns", 1500.f);
+        pwmRectMin = isBoost ? 0 : (uint16_t) std::ceil(
+                         bootRefreshNs * 1e-9f * (float) pwmFrequency * (float) pwmDriver.pwmMax);
         pwmCtrlMax = (uint16_t) (pwmDriver.pwmMax - pwmRectMin);
         pwmCtrlMin = 1; //isBoost ? 0 : 0;
         // note that mosfets have different Vg(th) and switching times worst case is Vi/o=80/12
@@ -355,7 +377,8 @@ public:
      */
     [[nodiscard]] bool computeDCM(float vh, float vl, float il) {
         auto ir = rippleCurrent(vh, vl);
-        auto dcm = ir > il * (dcmHysteresis ? 1.8f : 2.f) || il < 0.1f; // TODO: il < 0.1f
+        auto dcm = ir > il * (dcmHysteresis ? DcmExitRippleRatio : DcmEnterRippleRatio)
+                   || il < DcmForceCurrent;
         if (forcedPwm) dcm = false;
         if (dcm != dcmHysteresis) {
             dcmHysteresis = dcm;
@@ -413,17 +436,21 @@ public:
         constexpr float voltageRatioWCEF = (1.f - voltageMaxErr) / (1.f + voltageMaxErr); // < 1.0
 
 
-        const float convRatioWCE =
+        float convRatioWCE =
         (isBoost
-             ? ((vh > vl && vl > 0.1f) ? constrain(vh / vl, 1e-2f, 10.f) : 10.0f) // boost
-             : ((vh > vl && vh > 0.1f) ? constrain(vl / vh, 1e-2f, 1.f - 1e-2f) : 1.0f) //buck
+             ? ((vh > vl && vl > MinRatioVoltage) ? constrain(vh / vl, MinVoltageRatio, MaxBoostRatio) : MaxBoostRatio) // boost
+             : ((vh > vl && vh > MinRatioVoltage) ? constrain(vl / vh, MinVoltageRatio, 1.f - UnityRatioMargin) : 1.0f) //buck
         ) / voltageRatioWCEF;
+
+        // the WCEF division can push M past its physical bound (buck: <1, boost: >1),
+        // which would make rectCtrlRatio() negative; clamp back
+        convRatioWCE = isBoost ? std::max(convRatioWCE, 1.f + UnityRatioMargin)
+                               : std::min(convRatioWCE, 1.f - UnityRatioMargin);
 
         outInVoltageRatio = convRatioWCE;
 
         if (computeDCM(vh, vl, il)) {
-            if (il < 0.01f || vl < 1.0f) // TODO get rid of magic constants
-            {
+            if (il < SyncRectOffCurrent || vl < SyncRectOffVoltage) {
                 if (pwmRectRatioDCM > 0.2f && pwmRect > pwmRectMin)
                     ESP_LOGI("converter", "Disable sync rect, low I(%.2f)/V(%.2f) pwm=%hu|%hu", il,
                          vl, pwmCtrl, pwmRect);

@@ -414,8 +414,14 @@ bool handleCommand(const String &inp) {
     if ((inp[0] == '+' or inp[0] == '-') && !adcSampler.isCalibrating() && inp.length() < 6 &&
         inp.toInt() != 0 && std::abs(inp.toInt()) < converter.pwmCtrlMax) {
         int pwmStep = inp.toInt();
-        converter.pwmPerturb((int16_t) pwmStep);
-        ESP_LOGI("main", "Manual PWM step %i -> %i", pwmStep, (int) converter.getCtrlOnPwmCnt());
+        // route through the duty target so only the RT core writes PWM (no cross-core race);
+        // implies manual mode, same as 'dc'
+        if (!manualPwm) ESP_LOGI("main", "Switched to manual PWM");
+        manualPwm = true;
+        int target = (int) converter.getCtrlOnPwmCnt() + pwmStep;
+        if (target < 0) target = 0;
+        mppt.setTargetDutyCycle((uint16_t) target);
+        ESP_LOGI("main", "Manual PWM step %i -> target %i", pwmStep, target);
         loopLF(wallClockUs());
         return true;
     }

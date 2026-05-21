@@ -166,6 +166,21 @@ bool MqttService::onStart() {
         return true; // nothing configured: idle is OK, not Failed
     }
     if (preStart) preStart(conf); // charger BMS subscriptions + onConnected (wired by main.cpp)
+
+    // Console-command input over MQTT (output is mirrored to pv/log/<hostname> by mqttLogCallback).
+    // Feeds handleCommand like telnet/BLE; the OK/ERR marker goes through UART_LOG -> the log mux,
+    // so it reaches the host on pv/log/<hostname>. UART_LOG carries no tag, so mqttLogCallback's
+    // ") mqtt:" self-filter doesn't drop it. Gated by cmd_input (default off).
+    if (conf.getByte("cmd_input", 0)) {
+        subscribeTopic("pv/log/" + getHostname(true) + "/cmd", [](const char *data, int len) {
+            String inp(std::string(data, len).c_str());
+            inp.trim();
+            if (!inp.length()) return;
+            bool ok = handleCommand(inp);
+            UART_LOG("%s: %s", ok ? "OK" : "ERR", inp.c_str());
+        });
+    }
+
     init(conf);                   // connection is async; client task runs on its own
     return true;
 }

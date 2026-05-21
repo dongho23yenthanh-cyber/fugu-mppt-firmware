@@ -14,7 +14,7 @@
 class BleConsoleService : public Service {
 public:
     BleConsoleService() : Service("ble", "/littlefs/conf/ble.conf", /*requiresNetwork*/ false,
-                                  /*enabledDefault*/ false) {}
+                                  /*enabledDefault*/ true) {}
 
     std::string statusDetail() const override { return bleConsoleConnected() ? "connected" : ""; }
 

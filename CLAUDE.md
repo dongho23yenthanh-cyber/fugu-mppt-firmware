@@ -203,9 +203,12 @@ When connected to the 192.168.1.x network, these devices might be behind a NAT r
 | fry      | 192.168.4.2 | 192.168.1.173:232    |
 | flat     | 192.168.4.3 | 192.168.1.173:233    |
 
+**IMPORTANT: fry & flat are both real power converters connected to solar panels and a battery.
+Driving their Half-Bridge must be taken with care!**
+
 Confirm the hostname in the welcome message (`Welcome to <hostname> (192.168.4.2)`), as IPs are not static.
 
-You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200` 
+You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200`
 
 # Important
 
@@ -214,7 +217,9 @@ You have a device log history available through `ssh havan.local` `tail pv/fugu_
 - no `#include <>` hints
 - when describing a function, interface or class, describe it with a local scope, not how it is used in the application
 - when writing code, focus on low memory usage and small code size. re-use data that is available and when in non-
-  time-critical code write a transformation or cast if necessary. think twice before creating a new member variable.
+  time-critical code write a transformation or cast if necessary. think twice before creating a new member variable. if
+  you could use a non-accessible (private) member, expose this with a getter. for vendor libraries ask for confirmation
+  to change.
 - keep code comments at a minimum and short
 - if your identity is 'OpenCode (powered by moonshotai/kimi-k2.6)', set your git username to "kimi" and always commit
   with this name

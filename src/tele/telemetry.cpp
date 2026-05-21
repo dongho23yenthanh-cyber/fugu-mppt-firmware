@@ -25,11 +25,6 @@
 SymbolTable g_symtab;                    // shared interning table for the binary wire (telemetry.h)
 #endif
 
-// Flush is time-capped: send when the queue reaches TELE_FLUSH_COUNT points OR
-// TELE_FLUSH_MS has elapsed, so a quiet device never sits on stale telemetry.
-static constexpr uint16_t TELE_FLUSH_COUNT = 40;
-static constexpr uint32_t TELE_FLUSH_MS = 1000;
-static constexpr size_t TELE_BIN_BATCH = 3500;   // raw bytes/datagram; ~1/3 after tamp -> under MSS
 
 WiFiMulti wifiMulti;
 //WiFiUDP udp;
@@ -242,35 +237,6 @@ static void sendBinaryBatch(const IPAddress &dst, uint16_t port, Compressor &com
 }
 #endif
 
-static void influxWritePointsUDP(const IPAddress &dst, moodycamel::ReaderWriterQueue<std::string> &q) {
-    if (noSsid) return;
-    constexpr auto port = 8086;
-
-#if WITH_BINARY_TELE
-    Compressor &comp = teleCompressor();
-    static std::string batch;            // raw concatenation of length-prefixed frames
-    std::string frame;
-    while (q.try_dequeue(frame)) {
-        if (!batch.empty() && batch.size() + frame.size() > TELE_BIN_BATCH)
-            sendBinaryBatch(dst, port, comp, batch);
-        batch += frame;
-    }
-    sendBinaryBatch(dst, port, comp, batch);    // flush remainder (time-capped path needs this)
-#else
-    constexpr int MTU = CONFIG_TCP_MSS;
-    // notice that MTU is not the UDP max message size (which is >64k?), here we use MTU from ip4 as a "safe" value
-    static String msg;
-    std::string lp;
-    while (q.try_dequeue(lp)) {
-        if (msg.length() + lp.length() + 1 >= MTU)
-            udpFlushString(dst, port, msg);
-        msg += lp.c_str();
-        msg += '\n';
-    }
-    udpFlushString(dst, port, msg);             // flush remainder so partial batches go out within TELE_FLUSH_MS
-#endif
-}
-
 const char *getChipId() {
     static char ssid[25]{0};
     if (!strlen(ssid)) {
@@ -293,14 +259,59 @@ void telemetryAddPoint(TelePoint &p, uint16_t maxQueue) {
         pointsQ.enqueue(p.takeWire());
 }
 
+// Sends AT MOST ONE datagram per call, and ONLY when the batch is full (~MSS). The flush task
+// calls this at a fixed cadence, so full datagrams leave one-at-a-time rather than bursting —
+// back-to-back UDP sends drop more, especially across NAT. A partially-filled batch waits for
+// more points (latency is acceptable); no small datagrams go on the wire.
 void telemetryFlushPointsQ(const IPAddress &addr) {
-    static uint32_t lastFlush = 0;
-    auto n = pointsQ.size_approx();
-    if (n == 0) return;
-    uint32_t now = millis();
-    if (n < TELE_FLUSH_COUNT && (now - lastFlush) < TELE_FLUSH_MS) return;  // time-capped
-    lastFlush = now;
-    influxWritePointsUDP(addr, pointsQ);
+    if (noSsid) return;
+    constexpr auto port = 8086;
+#if WITH_BINARY_TELE
+    Compressor &comp = teleCompressor();
+    const size_t cap = comp.maxBatchRaw(CONFIG_TCP_MSS);
+    static std::string batch;
+    std::string frame;
+    while (pointsQ.try_dequeue(frame)) {
+        if (!batch.empty() && batch.size() + frame.size() > cap) {  // batch full -> send, carry frame over
+            sendBinaryBatch(addr, port, comp, batch);                // one full datagram per call
+            batch = std::move(frame);
+            return;
+        }
+        batch += frame;
+    }
+    // batch not full -> hold for more points
+#else
+    constexpr size_t MTU = CONFIG_TCP_MSS;
+    static String msg;
+    std::string lp;
+    while (pointsQ.try_dequeue(lp)) {
+        if (msg.length() && msg.length() + lp.length() + 1 > MTU) {  // full -> send, carry line over
+            udpFlushString(addr, port, msg);
+            msg = String(lp.c_str()); msg += '\n';
+            return;
+        }
+        msg += lp.c_str(); msg += '\n';
+    }
+#endif
+}
+
+// The flush compresses a whole batch (~tens of ms with tamp); running it inline in the
+// producer's onTick stalls point production for that long, gapping the data every ~flush.
+// Run it on its own core-0 task so production (the queue's single producer) stays steady.
+// SPSC holds: producer = onTick thread, consumer = this task.
+[[noreturn]] static void teleFlushTask(void *arg) {
+    const IPAddress *host = static_cast<const IPAddress *>(arg);
+    for (;;) {
+        telemetryFlushPointsQ(*host);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+void startTeleFlushTask(const IPAddress *host) {
+    static bool started = false;
+    if (started) return;
+    started = true;
+    xTaskCreatePinnedToCore(teleFlushTask, "teleflush", 4096, (void *) host, 1, nullptr, 0);
 }
 
 extern VIinVout<const Sensor *> sensors;

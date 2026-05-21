@@ -25,8 +25,7 @@ protected:
     bool onStart() override { return WiFi.isConnected(); } // UDP is connectionless, nothing to open
     void onStop() override {}
     void onTick() override {
-        mppt.telemetry();
-        telemetryFlushPointsQ(mppt.tele.influxdbHost);
+        mppt.telemetry();   // produce only; the flush task (startTeleFlushTask) does compress+send
     }
 };
 

@@ -17,6 +17,9 @@ public:
     virtual uint8_t id() const = 0;          // wire tag (0=none, 1=tamp, ...)
     virtual const char *name() const = 0;
     virtual bool packet(const uint8_t *in, size_t n, std::string &out) = 0;
+    // Raw input size that keeps one compressed packet within `mtu` (minus the id
+    // byte). The transport batches up to this many raw bytes per datagram.
+    virtual size_t maxBatchRaw(size_t mtu) const = 0;
 };
 
 // Identity passthrough: the wire stays raw binary. Right choice on lossy links
@@ -30,6 +33,7 @@ public:
         out.assign(reinterpret_cast<const char *>(in), n);
         return true;
     }
+    size_t maxBatchRaw(size_t mtu) const override { return mtu > 1 ? mtu - 1 : 0; }  // raw == datagram
 };
 
 // Tamp (BrianPugh/tamp): DEFLATE-inspired, ~1 KB window, tiny code/RAM. Best on
@@ -43,6 +47,7 @@ public:
     uint8_t id() const override { return 1; }
     const char *name() const override { return "tamp"; }
     bool packet(const uint8_t *in, size_t n, std::string &out) override;
+    size_t maxBatchRaw(size_t mtu) const override { return mtu * 3 / 2; }  // ~1.5x; telemetry tamps ~2x, margin for variance
 };
 
 // Shared instance by name ("none"/"tamp"); unknown -> NoCompress. Lets a conf

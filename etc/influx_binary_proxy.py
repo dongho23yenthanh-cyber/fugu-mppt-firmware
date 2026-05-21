@@ -132,7 +132,7 @@ def serve(args):
     while True:
         dg, src = sock.recvfrom(65535)
         try:
-            lines = list(decode_datagram(dg, tables, src[0]))
+            lines = list(decode_datagram(dg, tables, src))   # full (ip,port): NAT shares ip, distinct ports
         except Exception as e:
             print(f"decode error from {src}: {e}", file=sys.stderr); continue
         if fwd: fwd(lines)

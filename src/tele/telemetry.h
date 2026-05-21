@@ -51,6 +51,10 @@ void benchTele();   // one-shot encode/compress microbench, prints via ESP_LOGW(
 
 void telemetryFlushPointsQ(const IPAddress &addr);
 
+// Start the core-0 task that drains/compresses/sends the point queue, decoupled from
+// production so compression never stalls point generation. Idempotent.
+void startTeleFlushTask(const IPAddress *host);
+
 
 class ADC_Sampler;
 struct Sensor;

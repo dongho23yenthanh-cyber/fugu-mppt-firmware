@@ -303,6 +303,8 @@ void setup() {
     benchTele();   // one-shot encode/compress microbench
 #endif
 
+    startTeleFlushTask(&mppt.tele.influxdbHost);   // compress+send off the producer thread
+
     ESP_LOGI("main", "setup() done.");
 
     /*manualPwm = true;

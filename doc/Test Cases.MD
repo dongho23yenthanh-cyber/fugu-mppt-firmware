@@ -1,16 +1,10 @@
-# CV not Bat
+*this document is an LLM generated placeholder*
 
-- Connect PV only, no bat.
-- Expected: V_out_max at output
+# Test Cases
 
-# Battery Interrupt
+These manual cases have been folded into the automated bench test matrix —
+see [Automated Bench Tests.md](Automated%20Bench%20Tests.md):
 
-- Connect PV and Bat
-- During charge, disconnect battery
-- Expected: Output voltage spikes max +10%, then falls back to V_out_max
-- Current: Total shutdown, then slow recovery
-
-# UV
-
-- V_in = 10.5V
-- Expected: shutdown
+- **CV not Bat** (PV only, no battery → output at `Vout_max`) → §4.0
+- **Battery Interrupt** (disconnect battery during charge) → §1.3
+- **UV** (`Vin = vin_min` → shutdown) → §1.7

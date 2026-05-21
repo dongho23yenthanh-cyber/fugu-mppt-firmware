@@ -34,6 +34,10 @@ AsyncUDP asyncUdp;
 bool noSsid = true;
 bool timeSynced = false;
 
+// Grace period to keep retrying the AP we lost before roaming to another configured network
+// (the router might just be rebooting). 0 disables. Set via wifi.conf::switch_delay (seconds).
+static uint32_t wifiSwitchDelayMs = 30 * 1000;
+
 IPAddress ha_host{};
 
 extern KeyValueStorage nvs;
@@ -45,6 +49,8 @@ void wifi_load_conf() {
     auto ends_with = [](const std::string &s, const std::string &t) { return s.substr(s.length() - t.length()) == t; };
 
     noSsid = true;
+
+    wifiSwitchDelayMs = (uint32_t) wifiConf.getLong("switch_delay", 30) * 1000;
 
     nvs.open();
     auto ssid_def = nvs.readString("wifi_ssid", "");
@@ -172,22 +178,49 @@ void wifiLoop(bool connect) {
 
 bool wait_for_wifi() {
     static unsigned long lastTimeout = 0;
+    static unsigned long disconnectedSince = 0;
+    static std::string prevSsid;
 
     if (noSsid) return false;
     if (lastTimeout and (micros() - lastTimeout < 30 * 1000 * 1000)) return false;
 
-    ESP_LOGI("tele", "Connecting WiFi...");
+    if (!disconnectedSince) disconnectedSince = millis();
+
+    // While the AP we last held may just be rebooting, keep retrying that same network (via the
+    // station's stored config) instead of roaming to another configured AP. wifiMulti.run() rescans
+    // and picks the strongest visible AP, so only fall back to it once switch_delay has elapsed.
+    bool stick = wifiSwitchDelayMs and !prevSsid.empty()
+                 and (millis() - disconnectedSince < wifiSwitchDelayMs);
+
     auto t_start = millis();
-    while (wifiMulti.run() != WL_CONNECTED) {
-        delay(50);
-        //Serial.print(".");
-        if (millis() - t_start > 6000) {
-            ESP_LOGW("tele", "WiFi connection timeout");
-            lastTimeout = micros();
-            return false;
+    if (stick) {
+        ESP_LOGI("tele", "Reconnecting WiFi %s (sticky)...", prevSsid.c_str());
+        WiFi.reconnect();
+        while (WiFi.status() != WL_CONNECTED) {
+            delay(50);
+            if (millis() - t_start > 6000) {
+                ESP_LOGW("tele", "WiFi reconnect timeout (%s)", prevSsid.c_str());
+                lastTimeout = micros();
+                return false;
+            }
+        }
+    } else {
+        ESP_LOGI("tele", "Connecting WiFi...");
+        while (wifiMulti.run() != WL_CONNECTED) {
+            delay(50);
+            //Serial.print(".");
+            if (millis() - t_start > 6000) {
+                ESP_LOGW("tele", "WiFi connection timeout");
+                lastTimeout = micros();
+                return false;
+            }
         }
     }
-    ESP_LOGI("tele", "Connected to WiFi, RSSI %d IP %s", (int) WiFi.RSSI(), WiFi.localIP().toString().c_str());
+
+    disconnectedSince = 0;
+    prevSsid = WiFi.SSID().c_str();
+    ESP_LOGI("tele", "Connected to WiFi %s, RSSI %d IP %s", prevSsid.c_str(), (int) WiFi.RSSI(),
+             WiFi.localIP().toString().c_str());
 
     _wifiConnected();
 

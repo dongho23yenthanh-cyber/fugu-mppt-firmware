@@ -51,7 +51,7 @@ def ensure_http_server():
 
 
 hosts = [(h, 23, n) for h, _, n in discover_scope_servers()]
-hosts += asyncio.run(scan_nat_async())
+hosts += asyncio.run(scan_nat_async(reachable_only=True))
 hosts = hosts or fallback_hosts
 
 if not hosts:
@@ -59,6 +59,7 @@ if not hosts:
     sys.exit(1)
 
 print(hosts)
+
 
 
 async def send_ota_command(addr, port, name):
@@ -130,11 +131,19 @@ async def send_ota_command(addr, port, name):
 
     return True
 
+async def send_ota_command_try(addr, port, name):
+    try:
+        return await send_ota_command(addr,port,name)
+    except Exception as e:
+        print('err', addr, name, e)
+        return False
+
+
 
 async def main():
     ensure_http_server()
     time.sleep(1)
-    res = await asyncio.gather(*[send_ota_command(ip, port, name) for ip, port, name in hosts])
+    res = await asyncio.gather(*[send_ota_command_try(ip, port, name) for ip, port, name in hosts])
     res = dict(zip((name for _, _, name in hosts), res))
     for name, ok in res.items():
         print('%20s: %s' % (name, '✅' if ok else '❌'))

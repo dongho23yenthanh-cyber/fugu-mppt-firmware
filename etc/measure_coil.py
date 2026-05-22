@@ -78,6 +78,34 @@ def median(xs):
     return statistics.median(xs) if xs else float("nan")
 
 
+def ascii_plot(rows, width=58, height=15):
+    """Print an L(uH)-vs-H scatter of the DCM rows collected so far."""
+    pts = [(r[0], r[6] * 1e6) for r in rows if r[5] == "DCM" and r[6] == r[6]]
+    if len(pts) < 2:
+        return
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
+    if x1 == x0 or y1 == y0:
+        return
+    grid = [[" "] * width for _ in range(height)]
+    for h, l in pts:
+        cx = round((h - x0) / (x1 - x0) * (width - 1))
+        cy = round((l - y0) / (y1 - y0) * (height - 1))
+        grid[height - 1 - cy][cx] = "*"
+    med = median(ys)
+    my = height - 1 - round((med - y0) / (y1 - y0) * (height - 1))
+    for c in range(width):
+        if grid[my][c] == " ":
+            grid[my][c] = "-"
+    print(f"\n  L/uH        ({len(pts)} DCM pts, median {med:.1f} uH dashed)")
+    for r in range(height):
+        lab = y1 - (y1 - y0) * r / (height - 1)
+        print(f"{lab:6.1f} |" + "".join(grid[r]))
+    print("       +" + "-" * width)
+    print(f"        {x0:<6}" + " " * (width - 12) + f"{x1:>6}   H (PWM ct)\n")
+
+
 def connect(args):
     if args.ip:
         host, _, port = args.ip.partition(":")
@@ -125,7 +153,23 @@ def steady_read(con, tap, dwell):
                 mode=pts[-1][5], rect=int(median([p[6] for p in pts])), n=len(pts))
 
 
-def run_sweep(con, tap, hvals, pwm_max, fsw, i_max, dwell, label=""):
+RECOVER_BUDGET = 120.0  # seconds to keep retrying a dropped console before giving up
+
+
+def safe_command(con, cmd, timeout=4.0):
+    """con.command() with the lib's fast retries plus a long reconnect budget, reduced to a bool.
+
+    Returns True if the command went through, False if the device stays unreachable (caller should
+    end the run gracefully on the data collected so far)."""
+    try:
+        con.command(cmd, timeout=timeout, retry=True, recover=RECOVER_BUDGET)
+        return True
+    except Exception as e:
+        print(f"  device unreachable on {cmd!r}: {e}")
+        return False
+
+
+def run_sweep(con, tap, hvals, pwm_max, fsw, i_max, dwell, label="", plot_every=0):
     """Step the duty over `hvals`, measure L at each, return (rows, last_safe_H).
 
     Each row is (H, D, vin, vout, iout, mode, L, label). Stops on Iout exceeding `i_max` or on
@@ -134,7 +178,9 @@ def run_sweep(con, tap, hvals, pwm_max, fsw, i_max, dwell, label=""):
     """
     rows, safe_h = [], None
     for H in hvals:
-        con.command(f"dc {H}", timeout=4.0, retry=True)
+        if not safe_command(con, f"dc {H}"):
+            print(f"  device unreachable at H={H}; ending {label} sweep with data so far")
+            break
         s = steady_read(con, tap, dwell)
         if not s:
             continue
@@ -146,6 +192,8 @@ def run_sweep(con, tap, hvals, pwm_max, fsw, i_max, dwell, label=""):
         luh = "" if L != L else f"{L * 1e6:7.2f}"
         print(f"  {label[:1] or ' '}{s['H']:>5} {D:>6.3f} {vi:>6.2f} {vo:>6.2f} {io:>6.3f} "
               f"{s['mode']:>4} {luh:>7}")
+        if plot_every and len(rows) % plot_every == 0:
+            ascii_plot(rows)
         if io > i_max:
             print(f"  Iout {io:.2f} > i-max {i_max}; stopping {label} sweep")
             break
@@ -218,7 +266,9 @@ def ls_sweep(con, tap, hs, pwm_max, fsw, args):
     still scales with the Iout gain).
     """
     pwm_rect_min = round(pwm_max * MIN_DUTY_LS)
-    con.command(f"dc {hs}", timeout=4.0, retry=True)  # settle HS with automatic LS
+    if not safe_command(con, f"dc {hs}"):  # settle HS with automatic LS
+        print("device unreachable while setting HS")
+        return
     s = steady_read(con, tap, max(args.dwell, 4.0))
     if not s:
         print("no status while setting HS")
@@ -238,7 +288,9 @@ def ls_sweep(con, tap, hs, pwm_max, fsw, args):
 
     rows, peak_io = [], -1e9
     for ls in range(ls_lo, ls_hi + 1, step):
-        con.command(f"dc {hs} {ls}", timeout=4.0, retry=True)
+        if not safe_command(con, f"dc {hs} {ls}"):
+            print("  device unreachable; ending LS sweep with data so far")
+            break
         s = steady_read(con, tap, args.dwell)
         if not s:
             continue
@@ -258,24 +310,51 @@ def ls_sweep(con, tap, hs, pwm_max, fsw, args):
         return
     xs, ys = [r[0] for r in rows], [r[1] for r in rows]
     pk = max(range(len(ys)), key=lambda i: ys[i])
-    win = [(x, y) for x, y in zip(xs, ys) if y >= 0.6 * ys[pk]]
+    # Fit only the *contiguous* near-peak run: walk out from the argmax while still within 10 % of
+    # the peak. The low-LS plateau (body-diode floor) and the reverse-current cliff break the
+    # parabola's symmetry and otherwise push the vertex far outside the swept range.
+    thr = 0.9 * ys[pk]
+    lo_i = pk
+    while lo_i > 0 and ys[lo_i - 1] >= thr:
+        lo_i -= 1
+    hi_i = pk
+    while hi_i < len(ys) - 1 and ys[hi_i + 1] >= thr:
+        hi_i += 1
+    wx, wy = xs[lo_i:hi_i + 1], ys[lo_i:hi_i + 1]
     ls_peak, Lc = float(xs[pk]), None
-    if len(win) >= 3:
-        mx = sum(x for x, _ in win) / len(win)
-        fit = quadfit([x - mx for x, _ in win], [y for _, y in win])
+    if len(wx) >= 5:
+        mx = sum(wx) / len(wx)
+        fit = quadfit([x - mx for x in wx], wy)
         if fit and fit[2] < 0:
             _, b, c = fit
-            ls_peak = mx - b / (2 * c)
-            Lc = vo / (2 * (-c) * fsw * pwm_max ** 2)
+            vtx = mx - b / (2 * c)
+            if wx[0] <= vtx <= wx[-1]:  # reject an extrapolated vertex (curve not parabolic)
+                ls_peak, Lc = vtx, vo / (2 * (-c) * fsw * pwm_max ** 2)
     print()
-    print(f"peak LS  : {ls_peak:.0f}   (Iout_peak {ys[pk]:.3f} A)")
+    print(f"peak LS  : {ls_peak:.0f}   (Iout_peak {ys[pk]:.3f} A, "
+          f"{'parabola on %d pts' % len(wx) if Lc else 'raw argmax, fit rejected'})")
     print(f"ideal LS : {ideal_ls:.0f}   (rectCtrlRatio*HS from measured M)")
     print(f"auto  LS : {auto_ls}   (firmware applied)")
     print(f"offset   : peak-ideal {ls_peak - ideal_ls:+.0f} ct ({(ls_peak - ideal_ls) / hs * 100:+.1f}% of HS)"
           f"   peak-auto {ls_peak - auto_ls:+.0f} ct")
     if Lc:
         print(f"L (peak curvature) = {Lc * 1e6:.1f} uH   (cross-check; carries Iout gain like the duty sweep)")
+    else:
+        print("  (curvature L skipped: peak too broad/asymmetric for a reliable fit)")
     print("  nonzero peak-ideal = fixed timing offset (dead-time / gate delay) for rectCtrlRatio")
+
+    if getattr(args, "apply", False):
+        if not (0 < pk < len(ys) - 1):
+            print("  --apply skipped: peak at a sweep edge (never rolled over); widen --ls-hi")
+            return
+        cur = round(float(get_conf(con, "coil.conf", "rect_offset") or 0))
+        residual = ls_peak - auto_ls  # how far below the true peak the firmware's LS currently sits
+        lim = pwm_max // 8
+        new_off = max(-lim, min(lim, round(cur + residual - args.apply_margin)))
+        print(f"  --apply: coil.conf rect_offset {cur} -> {new_off}  "
+              f"(residual {residual:+.0f} ct - margin {args.apply_margin} ct; effective next boot)")
+        safe_command(con, f"set-config coil.conf rect_offset {new_off}")
+        print(f"  readback rect_offset = {get_conf(con, 'coil.conf', 'rect_offset')}")
 
 
 def main():
@@ -294,12 +373,18 @@ def main():
     ap.add_argument("--dwell", type=float, default=5.0, help="seconds to settle per step (>3 s)")
     ap.add_argument("--bidir", action="store_true",
                     help="sweep up then back down; compare L at matched duties (settle-check)")
+    ap.add_argument("--plot-every", type=int, default=0,
+                    help="print an ASCII L-vs-H plot every N points during the sweep")
     ap.add_argument("--ls-sweep", action="store_true",
                     help="hold HS, sweep low-side count; find the Iout peak (optimal LS timing)")
     ap.add_argument("--hs", type=int, help="[--ls-sweep] HS count to hold (default: --lo*M*pwmMax)")
     ap.add_argument("--ls-steps", type=int, default=24, help="[--ls-sweep] number of LS steps")
     ap.add_argument("--ls-lo", type=float, default=0.5, help="[--ls-sweep] start LS / ideal_LS")
     ap.add_argument("--ls-hi", type=float, default=1.4, help="[--ls-sweep] end LS / ideal_LS")
+    ap.add_argument("--apply", action="store_true",
+                    help="[--ls-sweep] write the measured offset to coil.conf::rect_offset (effective next boot)")
+    ap.add_argument("--apply-margin", type=int, default=12,
+                    help="[--ls-sweep --apply] counts to keep below the Iout peak (reverse-current safety)")
     ap.add_argument("--restore", choices=["mppt", "off"], default="mppt",
                     help="what to do when done (default: re-enable MPPT)")
     ap.add_argument("--yes", action="store_true", help="skip the 'this moves power' confirmation")
@@ -316,6 +401,7 @@ def main():
         pwm_ctrl_max = query_pwm_ctrl_max(con)
         if not pwm_ctrl_max:
             sys.exit("could not read pwmCtrlMax (dc range)")
+        print('args=', ', '.join(f'{k}={v}' for k, v in args.__dict__.items() if v))
         pwm_max = args.pwm_max or round(pwm_ctrl_max / (1.0 - MIN_DUTY_LS))
         l0 = get_conf(con, "coil.conf", "L0")
         print(f"fsw={fsw:.0f} Hz  pwmCtrlMax={pwm_ctrl_max}  pwmMax={pwm_max}"
@@ -339,7 +425,7 @@ def main():
             try:
                 ls_sweep(con, tap, hs, pwm_max, fsw, args)
             finally:
-                con.command("mppt" if args.restore == "mppt" else "dc 0", timeout=4.0, retry=True)
+                safe_command(con, "mppt" if args.restore == "mppt" else "dc 0")
             return
 
         m0 = vout / vin
@@ -354,14 +440,15 @@ def main():
         try:
             up_lbl = "up" if args.bidir else ""
             rows_up, safe_h = run_sweep(con, tap, range(h_lo, h_hi + 1, step),
-                                        pwm_max, fsw, args.i_max, args.dwell, up_lbl)
+                                        pwm_max, fsw, args.i_max, args.dwell, up_lbl,
+                                        args.plot_every)
             rows += rows_up
             if args.bidir and safe_h:
                 rows_dn, _ = run_sweep(con, tap, range(safe_h, h_lo - 1, -step),
                                        pwm_max, fsw, args.i_max, args.dwell, "dn")
                 rows += rows_dn
         finally:
-            con.command("mppt" if args.restore == "mppt" else "dc 0", timeout=4.0, retry=True)
+            safe_command(con, "mppt" if args.restore == "mppt" else "dc 0")
 
         # fit only points whose current is well above the Iout offset/quantization floor; near
         # zero current a small sensor offset blows the estimate up (L proportional to 1/Iout).

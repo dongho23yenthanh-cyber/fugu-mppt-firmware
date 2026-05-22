@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Measure the buck inductor L without a current probe, using only Vin/Vout/Iout.
 
-Drives the firmware console (`dc`, `get-config`, the streamed status line) over serial/TCP/BLE
-via the `fugu` package. With the output on a battery (Vout clamped) the only DC-observable that
-depends on L is the discontinuous-conduction-mode (DCM) transfer relation. Running the converter
-at a series of low duty cycles (deep in DCM) and reading the averaged sensors back, each point
-yields
+Drives the firmware console (`dc`, `get-config`, `sensor`, the streamed status line) over
+serial/TCP/BLE via the `fugu` package. With the output on a battery (Vout clamped) the only
+DC-observable that depends on L is the discontinuous-conduction-mode (DCM) transfer relation.
+Running the converter at a series of low duty cycles (deep in DCM) and reading the averaged
+sensors back, each point yields
 
     L = (Vin - Vout) * Vin * D**2 / (2 * Vout * fsw * Iout)        [buck, DCM, Vout clamped]
 
@@ -49,6 +49,9 @@ _I_RE = re.compile(r"I=\s*(-?\d+\.?\d*)/\s*(-?\d+\.?\d*)A")
 _HLM_RE = re.compile(r"(CCM|DCM)\(H\|L\|Lm\)=\s*(\d+)\|\s*(\d+)\|\s*(\d+)")
 _RANGE_RE = re.compile(r"out of range \[0,(\d+)\]")
 _CONF_RE = re.compile(r"=\s*'([^']*)'\s*$")
+# `sensor avg` (src/cli.cpp cmdSensor) prints one compact line: "sens: vin=24.5000 iout=1.2300 ...":
+_SENS_LINE_RE = re.compile(r"sens:\s")
+_SENS_PAIR_RE = re.compile(r"(\w+)=(-?\d+\.?\d*)")
 
 MIN_DUTY_LS = 0.06  # src/buck.h MinDutyCycleLS -> pwmCtrlMax = pwmMax*(1-0.06) for a buck
 
@@ -141,16 +144,43 @@ def query_pwm_ctrl_max(con):
     return None
 
 
+def read_sensor_avgs(con, timeout=1.0):
+    """Parse the `sensor avg` compact line into {name: ewm.avg} — the firmware's
+    notch+median+EWMA DC average (offset-corrected for current), one line, cheap to poll at
+    ~10 Hz (unlike the status line, which prints raw `last` for Vin/Vout). {} on a transport
+    error or if the line is absent."""
+    try:
+        lines = con.command("sensor avg", timeout=timeout)
+    except Exception:
+        return {}
+    for ln in lines:
+        if _SENS_LINE_RE.search(ln):
+            return {k: float(v) for k, v in _SENS_PAIR_RE.findall(ln)}
+    return {}
+
+
 def steady_read(con, tap, dwell):
-    """Hold the current operating point for `dwell` s, return medians of fresh status lines."""
+    """Hold the operating point for `dwell` s. Average Vin/Vout/Iout from the firmware EWMA
+    (poll `sensor` across the dwell, median the snapshots — the status line only carries raw
+    `last` voltages); take H/mode/rect from the status line (exact control state)."""
     t0 = time.monotonic()
-    time.sleep(dwell)
-    pts = tap.collect(t0 + 0.5)  # drop the first ~0.5 s (still settling)
-    if not pts:
+    settle = min(2.0, 0.4 * dwell)  # let the EWMA catch up after the duty step
+    deadline = t0 + dwell
+    vins, vouts, iouts = [], [], []
+    while time.monotonic() < deadline:
+        a = read_sensor_avgs(con)
+        if time.monotonic() >= t0 + settle and all(k in a for k in ("vin", "vout", "iout")):
+            vins.append(a["vin"]); vouts.append(a["vout"]); iouts.append(a["iout"])
+        time.sleep(0.1)  # ~10 Hz poll
+    pts, waited = tap.collect(t0 + 0.5), 0.0
+    while not pts and waited < 4.0:  # ensure >=1 status line for H/mode/rect (lfPeriod ~3 s)
+        time.sleep(0.5); waited += 0.5
+        pts = tap.collect(t0 + 0.5)
+    if not (vins and pts):
         return None
-    return dict(vin=median([p[1] for p in pts]), vout=median([p[2] for p in pts]),
-                iout=median([p[3] for p in pts]), H=int(median([p[4] for p in pts])),
-                mode=pts[-1][5], rect=int(median([p[6] for p in pts])), n=len(pts))
+    return dict(vin=median(vins), vout=median(vouts), iout=median(iouts),
+                H=int(median([p[4] for p in pts])), mode=pts[-1][5],
+                rect=int(median([p[6] for p in pts])), n=len(vins))
 
 
 RECOVER_BUDGET = 120.0  # seconds to keep retrying a dropped console before giving up

@@ -185,10 +185,14 @@ Procedure:
    `coil.conf::L0` for reference.
 2. Read an idle status line for `M = Vout/Vin`; require `Vin > Vout` (buck headroom / sun).
 3. Sweep the high-side duty count `H` upward across the DCM band (`--lo`..`--hi` × `M·pwmMax`),
-   holding each step `--dwell` seconds and median-averaging the streamed status line
-   (`Vin`, `Vout`, `Iout`, the actual applied `H`, and the firmware CCM/DCM flag). Staying below
-   `M` keeps the converter in DCM and the current bounded; the sweep stops on the firmware
-   reporting CCM or `Iout` exceeding `--i-max`.
+   holding each step `--dwell` seconds. `Vin`, `Vout`, `Iout` are read from the `sensor avg`
+   compact line (`ewm.avg`) — the firmware's notch+median+EWMA DC average, offset-corrected for
+   current — polled at ~10 Hz across the dwell and medianed. The status line is *not* used for these: it
+   prints the raw instantaneous `last` for the voltages (no averaging, no notch) and is emitted
+   only every `lfPeriod` (~3 s), too sparse to average a 100 Hz-rippled bus. The status line still
+   provides the exact control state — the applied `H`, the CCM/DCM flag, and the LS rect count.
+   Staying below `M` keeps the converter in DCM and the current bounded; the sweep stops on the
+   firmware reporting CCM or `Iout` exceeding `--i-max`.
 4. Per point compute `D = H/pwmMax` and `L = (Vin−Vout)·Vin·D² / (2·Vout·fsw·Iout)`.
 5. Discard points below an `Iout` floor (sensor offset territory, §3) and report the median of the
    rest, plus an IQR spread. Restore MPPT (or `dc 0`) on exit.

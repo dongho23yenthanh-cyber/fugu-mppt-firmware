@@ -38,6 +38,7 @@
          white-space:nowrap; font-size:13px; }
   .tab:hover { color:var(--fg); }
   .tab.active { color:var(--fg); border-bottom-color:var(--accent); }
+  .tab.new:not(.active) { opacity:.55; font-style:italic; }
   .tab .dot { color:var(--warn); margin-left:6px; }
   #panes { padding:18px 22px 60px; }
   .pane { display:none; }
@@ -94,6 +95,14 @@
   #uploadlog .resp { color:var(--muted); }
   #uploadlog .resp.ok { color:var(--accent2); }
   #uploadlog .resp.err { color:var(--warn); }
+  @media (max-width:640px) {
+    header { padding:12px 14px; gap:10px; }
+    #panes { padding:14px 14px 60px; }
+    .row { grid-template-columns:1fr; gap:6px; }
+    .row .val, .row .val input { max-width:none; }
+    #tabs { padding:0 8px; }
+    #uploadlog { left:8px; right:8px; bottom:8px; width:auto; max-height:60vh; }
+  }
 </style>
 </head>
 <body>
@@ -192,6 +201,7 @@ const META = {
 
   // coil.conf
   L0:{unit:"H",desc:"Coil inductance (for ripple-current computation)",type:"float"},
+  rect_offset:{unit:"count",desc:"DCM low-side turn-off offset (dead-time/gate-delay comp; >0 = LS off later). See measure_coil.py --ls-sweep",type:"int"},
 
   // converter.conf
   topo:{unit:"",desc:"Converter topology: buck or boost",type:"enum"},
@@ -218,6 +228,7 @@ const META = {
   cell_voltages_max_topic:{unit:"",desc:"Topic for BMS highest cell voltage",type:"string"},
   ibat_topic:{unit:"",desc:"Topic for battery current from BMS",type:"string"},
   ibat_lim_topic:{unit:"",desc:"Topic for battery charge current limit",type:"string"},
+  cmd_input:{unit:"",desc:"Accept console commands over MQTT (pv/log/<host>/cmd)",type:"bool"},
 
   // tele.conf
   influxdb_host:{unit:"",desc:"InfluxDB host IP for UDP telemetry (port 8086)",type:"string"},
@@ -282,12 +293,12 @@ const FILE_KEYS = {
     "ntc_adc","ntc_ch","ntc_filt_len"],
   "limits.conf":["vin_max","vin_min","vout_max","iin_max","iout_max","iout_short",
     "p_max","temp_max","temp_derate","reverse_current_paranoia"],
-  "coil.conf":["L0"],
+  "coil.conf":["L0","rect_offset"],
   "converter.conf":["topo","forced_pwm"],
   "charger.conf":["vout_max","cv_eoc","cv_float","vout_max_fallback","ibat_max",
     "bat_c","tail_c_rate","recharge_dod"],
   "tracker.conf":["target_duty_cycle"],
-  "mqtt.conf":["broker_uri","username","password","cell_voltages_max_topic","ibat_topic","ibat_lim_topic","enabled","log_level"],
+  "mqtt.conf":["broker_uri","username","password","cell_voltages_max_topic","ibat_topic","ibat_lim_topic","cmd_input","enabled","log_level"],
   "tele.conf":["influxdb_host","enabled","log_level"],
   "ftp.conf":["ftp_user","ftp_pass","enabled","log_level"],
   "telnet.conf":["enabled","log_level"],
@@ -491,7 +502,17 @@ function load(files, sourceName){
   }
   const confPaths = Object.keys(map).filter(p=>map[p].isConf).sort(confSort);
   if (!confPaths.length) throw new Error("no .conf files found in the upload");
-  state = { sourceName, files:map, confPaths, active:confPaths[0] };
+  // show a tab for every firmware-known conf file, even if absent from the
+  // source: synthetic files start empty + isNew, so the user can fill keys and
+  // create the file on save. Reuse the source's conf/ prefix.
+  const prefix = confPaths[0].slice(0, -confPaths[0].split("/").pop().length);
+  const have = new Set(confPaths.map(p=>p.split("/").pop()));
+  for (const base of Object.keys(FILE_KEYS)){
+    if (have.has(base)) continue;
+    map[prefix+base] = { isConf:true, model:parseConf(""), extras:{}, order:[...FILE_KEYS[base]], original:{}, isNew:true };
+  }
+  const allPaths = Object.keys(map).filter(p=>map[p].isConf).sort(confSort);
+  state = { sourceName, files:map, confPaths:allPaths, active:allPaths[0] };
   renderApp();
 }
 
@@ -510,8 +531,8 @@ function renderApp(){
   const tabs=document.getElementById("tabs"); tabs.innerHTML="";
   for (const path of state.confPaths){
     const t=document.createElement("div");
-    t.className="tab"+(path===state.active?" active":"");
-    t.title=path;
+    t.className="tab"+(path===state.active?" active":"")+(state.files[path].isNew?" new":"");
+    t.title=path+(state.files[path].isNew?" (not on device — fill a key to create)":"");
     t.innerHTML = path.split("/").pop() + '<span class="dot" data-path="'+path+'" style="display:none">●</span>';
     t.onclick=()=>{ state.active=path; renderApp(); };
     tabs.appendChild(t);
@@ -658,6 +679,7 @@ async function download(){
   const enc=new TextEncoder(); const out={};
   for (const path of Object.keys(state.files)){
     const f=state.files[path];
+    if (f.isNew && !isFileDirty(f)) continue;   // don't export untouched synthetic files
     out[path] = f.isConf ? enc.encode(serializeFile(f)) : f.bytes;
   }
   const blob=writeZip(out);
@@ -771,23 +793,28 @@ const lineListeners = new Set();
 const CONF_LINE = /Conf '\/littlefs\/conf\/([^:']+):([^']+)' = '(.*)'\s*$/;
 
 async function serialReadLoop(port){
-  const reader = port.readable.getReader();
-  serialReader = reader;
   const dec = new TextDecoder(); let buf="";
-  try {
-    while (true){
-      const {value,done} = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, {stream:true});
-      let i;
-      while ((i=buf.indexOf("\n")) >= 0){
-        const ln = buf.slice(0,i).replace(/\r$/,"");
-        buf = buf.slice(i+1);
-        lineListeners.forEach(fn=>fn(ln));
+  // Re-acquire the reader after a recoverable read error so a transient glitch
+  // mid-session doesn't silently kill reception (writes would still work, but
+  // every command would then time out waiting for a reply).
+  while (port.readable && serialPort===port){
+    const reader = port.readable.getReader();
+    serialReader = reader;
+    try {
+      while (true){
+        const {value,done} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {stream:true});
+        let i;
+        while ((i=buf.indexOf("\n")) >= 0){
+          const ln = buf.slice(0,i).replace(/\r$/,"");
+          buf = buf.slice(i+1);
+          lineListeners.forEach(fn=>fn(ln));
+        }
       }
-    }
-  } catch(e){ /* port closed/cancelled */ }
-  finally { try { reader.releaseLock(); } catch(_){} }
+    } catch(e){ /* recoverable: drop reader and let the outer loop re-acquire */ }
+    finally { try { reader.releaseLock(); } catch(_){} }
+  }
 }
 
 async function serialWrite(str){
@@ -813,19 +840,17 @@ function getConfig(file, timeoutMs=3000){
   });
 }
 
-// Send one console command. Collects the device's reply lines and resolves
-// {ok, lines} when it echoes the result marker: console.cpp writes
-// "OK: <cmd>" / "ERR: <cmd>" once handleCommand() returns.
-function sendCommand(cmdStr, timeoutMs=4000){
+// Send one console command. Streams every reply line to onRx as it arrives and
+// resolves true/false when the device echoes its result marker: console.cpp
+// writes "OK: <cmd>" / "ERR: <cmd>" once handleCommand() returns.
+function sendCommand(cmdStr, onRx, timeoutMs=4000){
   return new Promise((resolve,reject)=>{
-    const lines = [];
     const onLine = (ln)=>{
-      const ok = ln.endsWith("OK: "+cmdStr), err = ln.endsWith("ERR: "+cmdStr);
-      // drop the device's char-by-char echo of the command we just typed ("> <cmd>")
-      if (!ok && !err && ln.replace(/^>\s*/,"").trim()===cmdStr) return;
-      lines.push(ln);
-      if (ok){ done(); resolve({ok:true, lines}); }
-      else if (err){ done(); resolve({ok:false, lines}); }
+      if (onRx) onRx(ln);
+      // match by substring (like getConfig): the marker line can carry a
+      // trailing char that would defeat endsWith.
+      if (ln.includes("OK: "+cmdStr)){ done(); resolve(true); }
+      else if (ln.includes("ERR: "+cmdStr)){ done(); resolve(false); }
     };
     const timer = setTimeout(()=>{ done(); reject(new Error("timeout")); }, timeoutMs);
     const done = ()=>{ clearTimeout(timer); lineListeners.delete(onLine); };
@@ -865,11 +890,11 @@ async function importFromDevice(sourceLabel){
 }
 
 async function disconnectSerial(){
+  const port = serialPort;
+  serialPort=null; activeWrite=null;            // stop the read loop re-acquiring before we close
   try { if (serialReader) await serialReader.cancel(); } catch(_){}
   serialReader=null;
-  try { if (serialPort) await serialPort.close(); } catch(_){}
-  serialPort=null;
-  activeWrite=null;
+  try { if (port) await port.close(); } catch(_){}
 }
 
 async function connectSerial(){
@@ -880,6 +905,7 @@ async function connectSerial(){
   let port;
   try { port = await navigator.serial.requestPort(); }
   catch(e){ return; }   // user dismissed the chooser
+  await disconnectSerial(); await disconnectBluetooth();   // drop any prior connection
   grantedSerialPort = port; lastTransport = "serial";
   try {
     await port.open({ baudRate:115200 });
@@ -889,9 +915,10 @@ async function connectSerial(){
     showStatus("connected — reading config from device …");
     await importFromDevice("serial-device");
     document.getElementById("upload").style.display="";
+    // Stay connected: reopening the port can reset the device (DTR/RTS), so the
+    // upload reuses this live connection instead of closing and reopening.
   } catch(e){
     showErr("Serial: "+e.message);
-  } finally {
     await disconnectSerial();
   }
 }
@@ -962,9 +989,11 @@ async function connectBluetooth(){
     showErr("Web Bluetooth isn't available — use Chrome or Edge over localhost or https (not Safari/Firefox/iOS).");
     return;
   }
-  try { bleDevice = await navigator.bluetooth.requestDevice({ filters:[{services:[NUS_SVC]}], optionalServices:[NUS_SVC] }); }
+  let dev;
+  try { dev = await navigator.bluetooth.requestDevice({ filters:[{services:[NUS_SVC]}], optionalServices:[NUS_SVC] }); }
   catch(e){ return; }   // user dismissed the chooser
-  grantedBleDevice = bleDevice; lastTransport = "ble";
+  await disconnectSerial(); await disconnectBluetooth();   // drop any prior connection (clears bleDevice)
+  bleDevice = dev; grantedBleDevice = dev; lastTransport = "ble";
   try {
     const { server, rx, tx } = await bleConnectAndDiscover(bleDevice);
     bleServer = server; bleRxChar = rx; bleTxChar = tx;
@@ -975,9 +1004,9 @@ async function connectBluetooth(){
     showStatus("connected — reading config from device …");
     await importFromDevice("ble-device");
     document.getElementById("upload").style.display="";
+    // Stay connected so the upload reuses this live link (reconnecting can miss the reply).
   } catch(e){
     showErr("Bluetooth: "+e.message+" — if it was paired before, remove the device in your OS Bluetooth settings; make sure no phone or other browser tab holds the connection, then retry.");
-  } finally {
     await disconnectBluetooth();
   }
 }
@@ -1032,13 +1061,17 @@ async function uploadChanged(){
     for (let i=0;i<cmds.length;i++){
       const c = cmds[i];
       showStatus(`uploading ${i+1}/${cmds.length}: ${c.label} …`);
-      ulLine("sent", "> "+c.str);
+      ulLine("sent", "» "+c.str);
+      let got = 0;
+      const onRx = (ln)=>{ got++; ulLine("resp"+(/\bOK: /.test(ln)?" ok":/\bERR: /.test(ln)?" err":""), ln); };
       try {
-        const r = await sendCommand(c.str);
-        for (const ln of r.lines) ulLine("resp"+(r.ok?" ok":" err"), ln);
-        if (r.ok){ ok++; if (c.del) delete c.f.original[c.key]; else c.f.original[c.key] = c.cur; }  // now matches device → clears the mark
+        const r = await sendCommand(c.str, onRx);
+        if (r){ ok++; if (c.del) delete c.f.original[c.key]; else c.f.original[c.key] = c.cur; }  // now matches device → clears the mark
         else failed.push(c.label);
-      } catch(e){ ulLine("resp err", "(no response: "+e.message+")"); failed.push(c.label+" ("+e.message+")"); }
+      } catch(e){
+        ulLine("resp err", `(no marker after ${e.message}; ${got} line(s) received)`);
+        failed.push(c.label+" ("+e.message+")");
+      }
     }
   } catch(e){
     showErr("Upload: "+e.message); ulLine("resp err", "connection failed: "+e.message); aborted=true;

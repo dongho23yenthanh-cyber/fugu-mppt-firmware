@@ -206,6 +206,8 @@ When connected to the 192.168.1.x network, these devices might be behind a NAT r
 **IMPORTANT: fry & flat are both real power converters connected to solar panels and a battery.
 Driving their Half-Bridge must be taken with care!**
 
+Devices with hostnames like `fugu-esp32s3-*` are bench devices, not real power converters.
+
 Confirm the hostname in the welcome message (`Welcome to <hostname> (192.168.4.2)`), as IPs are not static.
 Confirm the device ip address with the `ip` command.
 You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200`

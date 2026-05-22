@@ -14,18 +14,20 @@
 class BleConsoleService : public Service {
 public:
     BleConsoleService() : Service("ble", "/littlefs/conf/ble.conf", /*requiresNetwork*/ false,
-                                  /*enabledDefault*/ true) {}
+                                  /*enabledDefault*/ true) {
+    }
 
     std::string statusDetail() const override { return bleConsoleConnected() ? "connected" : ""; }
 
 protected:
     bool onStart() override {
         ConfFile c{"/littlefs/conf/ble.conf", /*no_warn_if_not_open*/ true};
-        bleConsoleBegin(getHostname(),
+        bleConsoleBegin("fugu-" + getHostname(),
                         c.getString("ble_security", "justworks"),
                         (uint32_t) c.getLong("ble_passkey", 0));
         return true;
     }
+
     void onStop() override { bleConsoleEnd(); }
     void onTick() override { bleConsoleLoop(wallClockMs()); }
 };

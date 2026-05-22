@@ -182,7 +182,6 @@ bool wait_for_wifi() {
     static std::string prevSsid;
 
     if (noSsid) return false;
-    if (lastTimeout and (micros() - lastTimeout < 30 * 1000 * 1000)) return false;
 
     if (!disconnectedSince) disconnectedSince = millis();
 
@@ -192,6 +191,10 @@ bool wait_for_wifi() {
     bool stick = wifiSwitchDelayMs and !prevSsid.empty()
                  and (millis() - disconnectedSince < wifiSwitchDelayMs);
 
+    // 30 s backoff after a failed attempt before rescanning/roaming - but while sticking, skip it so
+    // we keep retrying the lost AP and re-acquire it the moment it finishes rebooting.
+    if (lastTimeout and !stick and (micros() - lastTimeout < 30 * 1000 * 1000)) return false;
+
     ESP_LOGI("tele", "Connecting WiFi...");
     auto t_start = millis();
     if (stick) WiFi.reconnect();
@@ -199,7 +202,7 @@ bool wait_for_wifi() {
         delay(50);
         if (millis() - t_start > 6000) {
             ESP_LOGW("tele", "WiFi connection timeout");
-            lastTimeout = micros();
+            if (!stick) lastTimeout = micros();
             return false;
         }
     }

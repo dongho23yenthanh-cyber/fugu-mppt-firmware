@@ -229,42 +229,19 @@ real waveform match — or deviate, biasing `Iout` and therefore `L`:
   charge back to the input → net `Iout` *reduced* → `L` over-estimated. This reverse-current notch,
   beating against the duty as it sweeps, is what makes `L` oscillate in a fine duty sweep.
 
-Hold a fixed HS duty in DCM and sweep the LS on-time up from zero: `Iout` **rises** (the FET
-replaces the body diode, recovering the `Vf` loss and lengthening `t2`), **peaks** when LS turns
-off exactly at the zero crossing, then **falls** as reverse current sets in.
+So `Iout` — and the `L` derived from it — is least biased when LS turns off exactly at the zero
+crossing, the peak of an LS sweep at fixed duty; measuring at or near that per-point optimum removes
+the SR-timing oscillation. **That peak calibrates *timing*, not `L`** (at the optimum
+`t2/t1 = (Vin−Vout)/Vout = 1/M − 1 = rectCtrlRatio(M)`, with `L` cancelling out). The `--ls-sweep`
+peak-bracketing and the `coil.conf::rect_offset` dead-time calibration it drives (`--apply`) are
+rectifier-timing concerns, covered with the timing theory in
+[Diode Emulation.md](Diode%20Emulation.md) — a companion to the inductance measurement, not a
+substitute.
 
-```
- Iout                      peak = LS off exactly at i_L=0  (clean ideal triangle)
-   |                       .--''''--.
-   |                  .--''          ''--.
-   |              .-''                    ''-.        reverse current:
-   | body-diode .-'                          '-.     LS held past zero,
-   |  only   _.-'                                '   i_L goes negative,
-   |     _.-'                                         charge pulled back
-   +----+-----------------------+-------------------> LS on-time (rect counts)
-      LS=0                  t2 = (Vin-Vout)/Vout * t1
-   (Vf loss, low Iout)         = rectCtrlRatio(M) * pwmCtrl
-```
-
-Why this matters for measuring `L`:
-
-- **The DCM formula is exact only at the peak.** Off-peak the waveform is no longer the clean
-  triangle the formula assumes, so `Iout` is biased and `L` with it. Measuring at (or near) the
-  per-point LS optimum gives the least-biased `L` and removes the SR-timing oscillation.
-  `etc/measure_coil.py --ls-sweep --hs N` brackets this peak (it reads the LS count back from the
-  status line — `getRectOnPwmCnt`).
-- **The peak location does *not* give `L`.** At the optimum `t2/t1 = (Vin−Vout)/Vout = 1/M − 1 =`
-  `rectCtrlRatio(M)`, with `L` cancelling out (`t2 = Ipk·L/Vout`, `Ipk = (Vin−Vout)·t1/L`). So this
-  calibrates the *timing*: it confirms the firmware's `rectCtrlRatio` (§4) and exposes any fixed
-  dead-time / gate-delay offset between the commanded LS count and the true zero crossing. It is a
-  companion to the inductance measurement, not a substitute. `--apply` writes that offset to
-  `coil.conf::rect_offset` (peak − ideal − `--apply-margin`, convergent across re-runs), which the
-  firmware adds to the DCM low-side count at boot; a positive value turns LS off later, recovering
-  body-diode loss while eating reverse-current margin, so the margin keeps it on the safe side.
-- **Peak curvature is an alternative `L` handle.** Just past the peak,
-  `Iout ≈ Iout_peak − Vout·δt² / (2·L·T)`, so `L = −Vout·fsw / (d²Iout/dδt²)`. This extraction uses
-  the LS-time counts instead of `D`/`pwmMax`, so it cross-checks the duty scale — but it still
-  scales with the `Iout` gain (§3), so it does not cross-check the sensor.
+The peak *curvature*, though, is a genuine alternative `L` handle. Just past the peak,
+`Iout ≈ Iout_peak − Vout·δt² / (2·L·T)`, so `L = −Vout·fsw / (d²Iout/dδt²)`. This extraction uses the
+LS-time counts instead of `D`/`pwmMax`, so it cross-checks the duty scale — but it still scales with
+the `Iout` gain (§3), so it does not cross-check the sensor.
 
 ## 7. Case study: `fry` vs `flat` (two different coils)
 

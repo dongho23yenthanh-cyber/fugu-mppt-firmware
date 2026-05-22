@@ -170,6 +170,46 @@ PWM or FPWM)
 If we measure V_out with -1% error and V_out +1%, the rectification time
 will be 4% too short.
 
+### Fixed dead-time offset (`rect_offset`)
+
+The timing above is the *ideal* zero crossing. In hardware a fixed delay sits between the commanded
+LS count and the moment the FET actually stops conducting: gate-driver propagation, dead-time and
+FET turn-off. This delay is constant in time (a fixed number of LEDC counts, ~12.5 ns/count), so —
+unlike the voltage errors above — it does **not** scale with M or D, and it is **independent of
+`L0`** (both the ideal and the true zero crossing obey the same L-cancelling ratio `1/M − 1`). It is
+a per-board constant of the gate driver / FETs / layout.
+
+To measure it, hold a fixed HS duty in DCM and sweep the LS on-time up from zero. `Iout` **rises**
+(the FET replaces the body diode, recovering its `Vf` loss and lengthening the conduction),
+**peaks** when LS turns off exactly at the zero crossing, then **falls** as reverse current sets in:
+
+```
+ Iout                      peak = LS off exactly at i_L=0  (clean ideal triangle)
+   |                       .--''''--.
+   |                  .--''          ''--.
+   |              .-''                    ''-.        reverse current:
+   | body-diode .-'                          '-.     LS held past zero,
+   |  only   _.-'                                '   i_L goes negative,
+   |     _.-'                                         charge pulled back
+   +----+-----------------------+-------------------> LS on-time (rect counts)
+      LS=0                  t_on,LS = (1/M - 1) * t_on,HS
+   (Vf loss, low Iout)         = rectCtrlRatio(M) * pwmCtrl
+```
+
+The body-diode side is a broad plateau — turning LS off early just hands conduction to the diode (a
+small `Vf` loss, no `Iout` cliff) — so the informative feature is the sharp reverse-current edge
+just past the peak. The peak's offset from the firmware's predicted `rectCtrlRatio(M)·pwmCtrl` is
+the dead-time offset.
+
+`etc/measure_coil.py --ls-sweep --hs N` brackets this peak (it reads the applied LS count back from
+the status line). `--apply` writes `peak − ideal − --apply-margin` to `coil.conf::rect_offset`,
+which the firmware adds to the DCM low-side count at boot (`>0` = LS off later, toward the zero
+crossing). A positive offset recovers body-diode loss but eats reverse-current margin, so the margin
+(default 12 counts) keeps the applied point safely below the cliff. Use a steep-edge HS where the
+peak is genuinely locatable (a flat plateau yields no reliable peak). Measured field values: `fry`
++100, `flat` +57 counts — different boards, different gate delays, as expected for an
+`L`-independent constant.
+
 # Boost Converter
 
 $$M_{CCM} = \frac{1}{1-D}$$

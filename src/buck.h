@@ -103,7 +103,10 @@ public:
 
     [[nodiscard]] const uint16_t &pwmMaxDriver() const { return pwmDriver.pwmMax; };
 
+    [[nodiscard]] uint32_t getPwmFrequency() const { return pwmFrequency; }
+
     uint16_t pwmCtrlMax{}, pwmRectMin{}, pwmCtrlMin{};
+    uint32_t pwmFrequency{};
 
     [[nodiscard]] bool disabled() const { return pwmCtrl == 0; }
 
@@ -160,7 +163,7 @@ public:
 
         ESP_LOGI("converter", "Coil L0=%.1f µH rect_offset=%d", L0 * 1e6f, rectOnOffset);
 
-        uint32_t pwmFrequency = boardConf.getLong("pwm_freq"); //39000; //  converter switching frequency
+        pwmFrequency = boardConf.getLong("pwm_freq"); //39000; //  converter switching frequency
         assert_throw(pwmFrequency > 5e3 && pwmFrequency < 5e5, "");
 
         fL = (float) pwmFrequency * L0 * InductivityDcBias; // for ripple current computation

@@ -10,6 +10,7 @@
 #include "util.h"               // scan_i2c, wallClockUs
 #include "buck.h"               // SynchronousConverter
 #include "mppt.h"               // MpptController
+#include "measure_coil.h"       // measureCoilStart
 #include "adc/sampling.h"       // ADC_Sampler, Sensor, VIinVout
 #include "service.h"            // g_services, stateStr/levelToStr/strToLevel
 #include "viz/led.h"            // LedIndicator
@@ -381,6 +382,25 @@ static void cmdService(cmd *c) {
     }
 }
 
+// measure-coil l0|ls [steps|hs] [dwell_ms] [apply]  — the sweep logic lives in measure_coil.cpp.
+static void cmdMeasureCoil(cmd *c) {
+    if (adcSampler.isCalibrating()) CMD_FAIL("measure-coil: busy calibrating");
+    Command cc(c);
+    auto mode = cc.getArg(0).getValue();
+    bool ls;
+    if (mode == "l0") ls = false;
+    else if (mode == "ls") ls = true;
+    else CMD_FAIL("measure-coil: expected l0|ls [args]");
+
+    int nArgs = cc.countArgs();
+    bool apply = nArgs >= 2 && cc.getArg(nArgs - 1).getValue() == "apply";
+    int numArgs = apply ? nArgs - 1 : nArgs;     // positional count excluding trailing 'apply'
+    int arg1 = numArgs >= 2 ? cc.getArg(1).getValue().toInt() : 0;
+    uint32_t dwellMs = numArgs >= 3 ? (uint32_t) cc.getArg(2).getValue().toInt() : 3000;
+    if (dwellMs < 200) dwellMs = 200;
+    if (!measureCoilStart(ls, apply, arg1, dwellMs)) CMD_FAIL("measure-coil: already running");
+}
+
 static void cmdHelp(cmd *) { UART_LOG("%s", cli.toString().c_str()); }
 
 void setupCli() {
@@ -417,6 +437,7 @@ void setupCli() {
     cli.addBoundlessCmd("get-config", cmdGetConfig);
     cli.addBoundlessCmd("svc", cmdService);
     cli.addBoundlessCmd("otab", cmdOtaBle);
+    cli.addBoundlessCmd("measure-coil", cmdMeasureCoil); // measure-coil l0|ls [steps|hs] [dwell_ms] [apply]
 }
 
 bool handleCommand(const String &inp) {

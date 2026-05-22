@@ -216,6 +216,24 @@ python etc/measure_coil.py --ip 192.168.4.2 --i-max 1.0
 python etc/measure_coil.py -p /dev/cu.usbmodem1101 --steps 12 --dwell 6
 ```
 
+### On-device equivalent (`measure-coil`)
+
+The same two sweeps run **on the device** with no host, via the console command (`src/measure_coil.cpp`,
+a spawned non-RT-core task):
+
+```
+measure-coil l0 [steps] [dwell_ms] [apply]     # the §5 inductance sweep
+measure-coil ls [hs]    [dwell_ms] [apply]     # the §6 LS-timing / rect_offset sweep
+```
+
+It reads `Vin`/`Vout`/`Iout` directly from each sensor's `ewm.avg` (the same DC average the host
+medians off the `sensor avg` line), uses `pwmMaxDriver()` for the exact PWM period (no
+`MinDutyCycleLS` reconstruction), and applies the identical formula, `Iout` floor, and median/IQR.
+`apply` writes `coil.conf::L0` (next boot) or `rect_offset` (also live). The result is the *physical*
+inductance, same as the script. Validated against the script on `flat` to within ~2 % (≈50 µH).
+For a tight result use many small steps (the i-max abort otherwise leaves only the low end of the
+band sampled).
+
 ## 6. Synchronous-rectifier timing and the `Iout` peak
 
 The DCM relation (§1) assumes the *ideal* triangle: the inductor discharges at exactly `−Vout`,

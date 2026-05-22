@@ -33,8 +33,9 @@ rejection message for invalid arguments / wrong context.
 | --- | --- |
 | `fan <float>` | Set fan speed, 0–100. |
 | `led <RRGGBB>`, `led <RGB>` | Set the LED color in hex or short hex (e.g. `led 33ff33` or `led 3f3`). |
-| `sensor` | Dump per-sensor state (last/raw value, EWM average and std, adaptive notch filter stats). |
+| `sensor` | Dump per-sensor state (last/raw value, EWM average and std, adaptive notch filter stats). `sensor avg` prints one compact line of EWM averages (`sens: vin=… iout=… …`) for fast polling. |
 | `mem` | Display heap and PSRAM size (total and free). |
+| `uptime` | Print seconds since boot (monotonic; resets only on reboot) and the running app description (name, version, build date/time, IDF version). |
 | `rt-stats` | Print FreeRTOS per-task runtime statistics (sampled over 1 s). |
 | `reset-lag` | Reset the max-lag statistic and print [rtcount](Real-time%20Counter.md) timings. |
 | `scan-i2c` | Run an I²C bus scan. |

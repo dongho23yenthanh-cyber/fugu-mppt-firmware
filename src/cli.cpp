@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <cmath>
+#include <esp_timer.h>
+#include <esp_app_desc.h>
 #include <SimpleCLI.h>
 
 #include "logging.h"
@@ -237,6 +239,14 @@ static void cmdRtStats(cmd *) {
     xTaskCreatePinnedToCore(print_real_time_stats_1s_task, "rtstats", 4096, NULL, 1, NULL, NON_RT_CORE /*core*/);
 }
 
+// monotonic seconds since boot; resets only on reboot (unlike status N, which zeroes on each sweep)
+static void cmdUptime(cmd *) {
+    const esp_app_desc_t *app = esp_app_get_description();
+    UART_LOG("Uptime: %lu s", (uint32_t) (esp_timer_get_time() / 1000000));
+    UART_LOG("App: %s %s (built %s %s, IDF %s)", app->project_name, app->version, app->date, app->time,
+             app->idf_ver);
+}
+
 static void cmdMem(cmd *) {
     UART_LOG("Total heap:  %9ld", ESP.getHeapSize());
     UART_LOG("Free heap:   %9ld", ESP.getFreeHeap());
@@ -244,7 +254,17 @@ static void cmdMem(cmd *) {
     UART_LOG("Free PSRAM:  %9ld", ESP.getFreePsram());
 }
 
-static void cmdSensor(cmd *) {
+static void cmdSensor(cmd *c) {
+    if (Command(c).countArgs() >= 1) { // `sensor avg`: one compact line of EWM averages, for fast polling
+        char line[160];
+        int n = 0;
+        for (auto s: adcSampler.sensors) {
+            if (n < 0 || n >= (int) sizeof(line)) break;
+            n += snprintf(line + n, sizeof(line) - n, "%s=%.4f ", s->params.teleName.c_str(), s->ewm.avg.get());
+        }
+        UART_LOG("sens: %s", line);
+        return;
+    }
     for (auto s: adcSampler.sensors) {
         auto u = s->params.unit;
         UART_LOG("\nSensor `%s` (ch%d, %s):", s->params.teleName.c_str(), s->params.adcCh,
@@ -414,7 +434,8 @@ void setupCli() {
     cli.addCommand("ls", cmdLs);
     cli.addCommand("rt-stats", cmdRtStats);
     cli.addCommand("mem", cmdMem);
-    cli.addCommand("sensor", cmdSensor);
+    cli.addCommand("uptime", cmdUptime);
+    cli.addBoundlessCmd("sensor", cmdSensor); // `sensor` full dump; `sensor avg` compact EWM line
     cli.addCommand("ip", cmdIp);
     cli.addCommand("adc-restart", cmdAdcRestart);
     cli.addCommand("adc-reset", cmdAdcReset);

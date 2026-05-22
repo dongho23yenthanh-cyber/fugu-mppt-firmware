@@ -348,11 +348,13 @@ def ls_sweep(con, tap, hs, pwm_max, fsw, args):
             print("  --apply skipped: peak at a sweep edge (never rolled over); widen --ls-hi")
             return
         cur = round(float(get_conf(con, "coil.conf", "rect_offset") or 0))
-        residual = ls_peak - auto_ls  # how far below the true peak the firmware's LS currently sits
+        # rect_offset is added to the offset-free firmware formula (pwmCtrl*rectCtrlRatio == ideal_ls),
+        # so the target is absolute: don't fold in cur or the applied auto_ls (the latter is perturbed
+        # by reverse-current pullback / transients and misreads as the min-LS floor).
         lim = pwm_max // 8
-        new_off = max(-lim, min(lim, round(cur + residual - args.apply_margin)))
+        new_off = max(-lim, min(lim, round(ls_peak - ideal_ls - args.apply_margin)))
         print(f"  --apply: coil.conf rect_offset {cur} -> {new_off}  "
-              f"(residual {residual:+.0f} ct - margin {args.apply_margin} ct; effective next boot)")
+              f"(peak-ideal {ls_peak - ideal_ls:+.0f} ct - margin {args.apply_margin} ct; effective next boot)")
         safe_command(con, f"set-config coil.conf rect_offset {new_off}")
         print(f"  readback rect_offset = {get_conf(con, 'coil.conf', 'rect_offset')}")
 

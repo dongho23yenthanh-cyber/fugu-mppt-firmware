@@ -158,7 +158,7 @@ async def probe_welcome(host, port, timeout=4.0):
     return None
 
 
-async def scan_nat_async(timeout=4.0):
+async def scan_nat_async(timeout=4.0, reachable_only=False):
     """asyncio twin of `scan_nat`: probe all NAT endpoints concurrently.
 
     Returns a list of (host, port, hostname|None) for every configured endpoint (None = no
@@ -169,7 +169,8 @@ async def scan_nat_async(timeout=4.0):
         return []
     names = await asyncio.gather(
         *(probe_welcome(host, port, timeout) for host, port in endpoints))
-    return [(host, port, name) for (host, port), name in zip(endpoints, names)]
+    return [(host, port, name) for (host, port), name in zip(endpoints, names) if
+            not reachable_only or name is not None]
 
 
 def scan_nat(timeout=4.0):
@@ -331,7 +332,7 @@ PLAN = [
     ("rt-stats", None, GROUP_ALWAYS, False),
     ("reset-lag", None, GROUP_ALWAYS, False),
     ("ip", "IP Address", GROUP_ALWAYS, False),
-    ("scan-i2c", None, GROUP_ALWAYS, True),       # may report no devices on a mock
+    ("scan-i2c", None, GROUP_ALWAYS, True),  # may report no devices on a mock
     ("svc list", "NAME", GROUP_ALWAYS, False),
     # --- config: dump, then a non-destructive round-trip on a scratch file ------------------
     ("get-config board.conf", "board.conf", GROUP_ALWAYS, False),
@@ -340,7 +341,7 @@ PLAN = [
     ("get-config selftest.conf probe", "4242", GROUP_ALWAYS, False),
     # --- harmless actuators ------------------------------------------------------------------
     ("led 030", None, GROUP_ALWAYS, False),
-    ("fan 30", None, GROUP_ALWAYS, True),         # declined if no fan is configured (e.g. mock)
+    ("fan 30", None, GROUP_ALWAYS, True),  # declined if no fan is configured (e.g. mock)
     ("fan 0", None, GROUP_ALWAYS, True),
     ("led 000", None, GROUP_ALWAYS, False),
     # --- service management: log level + restart (reversible; skip if the service isn't built) -
@@ -354,18 +355,18 @@ PLAN = [
     ("iset 10", None, GROUP_MOCK, False),
     ("speed 1.0", None, GROUP_MOCK, False),
     # --- PWM / converter: enter manual mode, exercise switches, return to tracking ----------
-    ("dc 0", None, GROUP_MOCK, False),            # switches to manual PWM at zero duty
+    ("dc 0", None, GROUP_MOCK, False),  # switches to manual PWM at zero duty
     ("+5", None, GROUP_MOCK, False),
     ("-5", None, GROUP_MOCK, False),
     ("sync on", None, GROUP_MOCK, False),
     ("sync off", None, GROUP_MOCK, False),
     ("sync forced", None, GROUP_MOCK, False),
     ("sync off", None, GROUP_MOCK, False),
-    ("bf 1", None, GROUP_MOCK, True),             # rejected if no backflow switch configured
+    ("bf 1", None, GROUP_MOCK, True),  # rejected if no backflow switch configured
     ("bf 0", None, GROUP_MOCK, True),
-    ("short-ls", None, GROUP_MOCK, True),         # only valid in boost with Vin~0
+    ("short-ls", None, GROUP_MOCK, True),  # only valid in boost with Vin~0
     ("dc 0", None, GROUP_MOCK, False),
-    ("mppt", None, GROUP_MOCK, False),            # back to tracking (valid only in manual mode)
+    ("mppt", None, GROUP_MOCK, False),  # back to tracking (valid only in manual mode)
     ("sweep", None, GROUP_MOCK, False),
     # --- network / NVS / reboot (opt-in only) -----------------------------------------------
     ("wifi on", None, GROUP_NET, False),

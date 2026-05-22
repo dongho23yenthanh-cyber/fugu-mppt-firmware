@@ -372,6 +372,7 @@ PLAN = [
     ("wifi on", None, GROUP_NET, False),
     ("hostname fugu-test", None, GROUP_NET, False),
     # `ota <url>` and `wifi off`/`wifi-add` intentionally omitted: they flash/reboot or wipe NVS.
+    # `wifi off <minutes>` (temporary, keeps the SSID) has its own test: e2e-test/test_wifi_off_timeout.py
 ]
 
 

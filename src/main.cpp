@@ -2,6 +2,7 @@
 #include "logging.h"
 
 #include <Arduino.h>
+#include <esp_app_desc.h>
 #include <Wire.h>
 #include <USB.h>
 
@@ -25,6 +26,7 @@
 #include "viz/lcd_service.h"
 #include "viz/led.h"
 #include "console_ble_service.h"
+#include "measure_coil.h"
 #include "etc/ota.h"
 
 #include "etc/version.h"
@@ -96,8 +98,6 @@ static void loopRT(void *arg); // this is the critical one
 static void loopRTNewData(unsigned long nowMs);
 
 
-const char* VER_STRING = "*** Fugu Firmware Version " FIRMWARE_VERSION " (" __DATE__ " " __TIME__ ")";
-
 // Single reused log literal for the repeated "failed to read <conf>.conf" catch blocks in setup().
 static void logConfErr(const char *name, const std::exception &e) {
     ESP_LOGE("main", "conf %s: %s", name, e.what());
@@ -106,7 +106,9 @@ static void logConfErr(const char *name, const std::exception &e) {
 void setup() {
     consoleInit();
     setupCli();
-    ESP_LOGI("main", "%s", VER_STRING);
+    auto app = esp_app_get_description();
+    ESP_LOGI("main", "*** Fugu Firmware Version " FIRMWARE_VERSION " %s %s (built %s %s, IDF %s)",
+             app->project_name, app->version, app->date, app->time, app->idf_ver);
 
     rtcount_test_cycle_counter();
 
@@ -301,7 +303,7 @@ void setup() {
     enable_esp_log_to_telnet();
 
 #if defined(BENCH_TELE) && WITH_BINARY_TELE
-    benchTele();   // one-shot encode/compress microbench
+    benchTele(); // one-shot encode/compress microbench
 #endif
 
     // the compress+send task is now spawned by TelemetryService::onStart (and deleted on stop)
@@ -527,7 +529,7 @@ void loopLF(const unsigned long &nowUs) {
         WiFi.disconnect(true);
     }
 
-    if (sensors.Vin)
+    if (sensors.Vin && !isMeasuring())
         UART_LOG(
             "V=%4.*f/%5.*f I=%4.*f/%5.*fA %5.1fW %.0f℃%.0f℃ %2lusps %2lu㎅/s %s(H|L|Lm)=%4hu|%4hu|%4hu"
             " st=%5s,%i lag=%lu㎲ N=%lu rssi=%hi",
@@ -719,7 +721,7 @@ void systemRestart() {
     converter.disable();
     UART_LOG("Rebooting in 200ms");
     g_services.stopAll(); // tear down MQTT/telnet/etc. while WiFi is still up (see mqtt_task overflow)
-    delay(200);
+    delay(300);
     ESP.restart();
 }
 

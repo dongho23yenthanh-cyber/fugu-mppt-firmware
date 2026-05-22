@@ -266,3 +266,5 @@ bool measureCoilStart(bool ls, bool apply, int arg1, uint32_t dwellMs) {
     xTaskCreatePinnedToCore(measureCoilTask, "meas-coil", 6144, &s_measArgs, 1, nullptr, NON_RT_CORE);
     return true;
 }
+
+bool isMeasuring() { return s_measureBusy; }

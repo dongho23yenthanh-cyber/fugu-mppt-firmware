@@ -72,6 +72,9 @@ class SynchronousConverter {
     uint16_t pwmRectMax = 0;
     int32_t manualRect = -1; // >=0: hold LS at this count (bench), -1: auto diode emulation
     float pwmRectRatioDCM = 0; // t_onRect/t_onCtrl when in DCM
+    float rectDitherErr = 0; // carried LS-count rounding remainder (DCM error-feedback dither)
+    bool rectDither = true; // false: plain round() (fallback)
+    int16_t rectOnOffset = 0; // DCM LS-count dead-time/gate-delay offset (counts; >0 = LS off later, toward zero crossing)
 
     float outInVoltageRatio = 0; // M
     float directionFloatBuffer = 0.0f; // fractional perturbation buffer
@@ -120,6 +123,10 @@ public:
 
     [[nodiscard]] uint16_t getRectOnPwmMin() const { return pwmRectMin; }
 
+    [[nodiscard]] int16_t getRectOnOffset() const { return rectOnOffset; }
+
+    void setRectOnOffset(int o) { rectOnOffset = (int16_t) o; } // DCM LS dead-time offset, counts
+
     [[nodiscard]] float voltageRatio() const { return outInVoltageRatio; } // M
 
     [[nodiscard]] bool manualRect_() const { return manualRect >= 0; }
@@ -149,8 +156,9 @@ public:
             ESP_LOGW("converter", "%s", "forced_pwm");
 
         auto L0 = coilConf.getFloat("L0");
+        rectOnOffset = (int16_t) coilConf.getLong("rect_offset", 0);
 
-        ESP_LOGI("converter", "Coil L0=%.1f µH", L0 * 1e6f);
+        ESP_LOGI("converter", "Coil L0=%.1f µH rect_offset=%d", L0 * 1e6f, rectOnOffset);
 
         uint32_t pwmFrequency = boardConf.getLong("pwm_freq"); //39000; //  converter switching frequency
         assert_throw(pwmFrequency > 5e3 && pwmFrequency < 5e5, "");
@@ -229,8 +237,24 @@ public:
     void computePwmRectMax() {
         // update pwmRectMax for DCM or DCM case
         if (dcmHysteresis) {
-            // DCM
-            pwmRectMax = (uint16_t) std::round((float) pwmCtrl * pwmRectRatioDCM);
+            // DCM: the LS turn-off count is the fractional ideal pwmCtrl*ratio quantized to whole
+            // PWM ticks. Plain round() stair-steps it, so as duty sweeps the turn-off lands a tick
+            // before/after the inductor zero crossing, modulating delivered charge (the duty-pinned
+            // SR reverse-current oscillation). First-order error feedback carries the rounding
+            // remainder forward so the time-average turn-off tracks the ideal and the beat averages
+            // out. Same conservative target (convRatioWCE), so no extra reverse-current bias.
+            // rectOnOffset compensates a fixed dead-time/gate-delay between the commanded LS count
+            // and the true zero crossing (measure_coil.py --ls-sweep). >0 turns LS off later,
+            // recovering body-diode loss but eating reverse-current margin; default 0 = unchanged.
+            float ideal = (float) pwmCtrl * pwmRectRatioDCM + (float) rectOnOffset;
+            if (rectDither) {
+                float v = ideal + rectDitherErr;
+                long ls = std::lround(v);
+                rectDitherErr = v - (float) ls;
+                pwmRectMax = (uint16_t) std::max<long>(0, ls);
+            } else {
+                pwmRectMax = (uint16_t) std::round(ideal);
+            }
         } else {
             // CCM
             pwmRectMax = pwmDriver.pwmMax - pwmCtrl;

@@ -101,9 +101,10 @@ See [Topology notes & examples](#topology-notes--examples) below for worked ACS7
 
 ## coil.conf — inductor
 
-| key  | unit | type  | default | description                                                                |
-|------|------|-------|---------|----------------------------------------------------------------------------|
-| `L0` | H    | float | —       | Coil inductance (for ripple-current computation; undershot 5% for DC bias) |
+| key           | unit  | type  | default | description                                                                                                            |
+|---------------|-------|-------|---------|------------------------------------------------------------------------------------------------------------------------|
+| `L0`          | H     | float | —       | Coil inductance (for ripple-current computation; undershot 5% for DC bias)                                             |
+| `rect_offset` | count | int   | 0       | DCM low-side turn-off offset in PWM counts (dead-time/gate-delay comp; >0 = LS off later, toward the zero crossing). See `etc/measure_coil.py --ls-sweep`. |
 
 ## converter.conf — topology
 

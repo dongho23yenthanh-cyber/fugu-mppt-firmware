@@ -21,6 +21,10 @@ void wifi_load_conf();
 
 void connect_wifi_async();
 
+// Tear down WiFi. Ends mDNS first (while the netif is still up) so its tcpip-thread group-leave
+// doesn't run against a freed netif when `off` deinits the stack. `off` mirrors WiFi.disconnect().
+void disconnect_wifi(bool off);
+
 bool wait_for_wifi();
 
 void wifiLoop(bool connect = false);

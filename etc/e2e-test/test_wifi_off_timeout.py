@@ -40,8 +40,12 @@ The test:
   2. ``wifi off <minutes>`` is accepted and logs ``WiFi off for <minutes> min``;
   3. the link actually drops (rssi -> 0) — the disable took effect;
   4. it stays down for most of the window (the timeout is honoured, not an instant bounce);
-  5. it logs ``WiFi re-enabled after timeout`` within ``minutes*60 + slack``, **without rebooting**;
-  6. reassociation (soft, load-aware) — and with ``--ssid`` the reconnect must land on it.
+  5. it logs ``WiFi re-enabled after timeout`` within ``minutes*60 + slack``;
+  6. it does **not crash or reboot** through the off -> re-enable -> reconnect sequence — the
+     crash this test guards against fires *during* the reconnect, a dozen seconds after the
+     timer line, so we keep watching for ``--settle`` seconds past it (panic banners are matched
+     directly, as is an N-counter reset / boot banner);
+  7. reassociation (soft, load-aware) — and with ``--ssid`` the reconnect must land on it.
 
 Then a fast cancel check: ``wifi off <minutes>`` immediately followed by ``wifi on`` must
 cancel the pending re-enable — no ``WiFi re-enabled after timeout`` line is allowed to fire.
@@ -71,6 +75,9 @@ _POWER = re.compile(r"(-?\d+(?:\.\d+)?)W\s")
 _CONNECT = re.compile(r"Connected to WiFi (.+?), RSSI (-?\d+) IP (\S+)")
 _BOOT = "setup() done"
 REBOOT_MARGIN = 100  # N may jitter by a sample or two between reads; a real reboot drops it to ~0
+# a panic prints these before the device resets; catch them directly so we don't rely on N alone
+_PANIC = re.compile(r"Guru Meditation|panic'?ed|Backtrace:|abort\(\) was called|"
+                    r"StoreProhibited|LoadProhibited|assert failed|rst:0x")
 
 
 class Tap:
@@ -103,6 +110,9 @@ class Tap:
                 self.events.append((t, "reenable", None))
             if _BOOT in line:
                 self.events.append((t, "boot", None))
+            m = _PANIC.search(line)
+            if m:
+                self.events.append((t, "panic", m.group(0)))
 
     def _of(self, kind, since=0.0):
         with self._lock:
@@ -119,7 +129,12 @@ class Tap:
     def saw_boot(self, since):
         return bool(self._of("boot", since))
 
-    def rebooted(self, since, baseline_n):
+    def crashed(self, since, baseline_n):
+        """A reboot/panic since `since`, described, or None. Catches panics directly (before the
+        reset) and an N-counter reset / boot banner (after it)."""
+        p = self._of("panic", since)
+        if p:
+            return f"panic: {p[0][1]!r}"
         if self.saw_boot(since):
             return "setup() banner"
         peak = baseline_n
@@ -197,39 +212,51 @@ def test_timeout(con: Console, tap: Tap, args, res: Results):
 
     # the timeout is honoured: the re-enable line must not fire in the first half of the window.
     early_deadline = t_fire + window * 0.5
-    reboot_reason = None
     while time.monotonic() < early_deadline:
-        reboot_reason = tap.rebooted(t_fire, n0)
-        if reboot_reason or tap.first_t("reenable", t_fire):
+        if tap.crashed(t_fire, n0) or tap.first_t("reenable", t_fire):
             break
         time.sleep(0.5)
     early = tap.first_t("reenable", t_fire)
     res.check("stayed off for most of the window (timeout honoured)",
-              early is None and reboot_reason is None,
-              reboot_reason or (f"re-enabled after only {early - t_fire:.0f}s" if early else
-                                f"still off at {time.monotonic() - t_fire:.0f}s"))
+              early is None and tap.crashed(t_fire, n0) is None,
+              tap.crashed(t_fire, n0) or (f"re-enabled after only {early - t_fire:.0f}s" if early else
+                                          f"still off at {time.monotonic() - t_fire:.0f}s"))
 
-    # the timer fires: "WiFi re-enabled after timeout" within window + slack, no reboot.
+    # the timer fires: "WiFi re-enabled after timeout" within window + slack.
     deadline = t_fire + window + args.slack
     while time.monotonic() < deadline:
-        reboot_reason = tap.rebooted(t_fire, n0)
-        if reboot_reason or tap.first_t("reenable", t_fire):
+        if tap.crashed(t_fire, n0) or tap.first_t("reenable", t_fire):
             break
         time.sleep(0.5)
-    res.check("did NOT reboot through the off window", reboot_reason is None,
-              reboot_reason or f"N continuous (now {tap.last('N')})")
     reenabled = tap.first_t("reenable", t_fire)
     res.check(f"re-enable timer fired within {window + args.slack:.0f}s",
-              reenabled is not None and not reboot_reason,
+              reenabled is not None and tap.crashed(t_fire, n0) is None,
               f"after {reenabled - t_fire:.0f}s" if reenabled else "no 'WiFi re-enabled after timeout'")
+
+    # after re-enable the device reconnects; the crash this test exists for happens THERE, a dozen
+    # seconds after the timer line. Keep watching for a crash and for reassociation.
+    landed = None
+    settle_end = (reenabled or time.monotonic()) + args.settle
+    while time.monotonic() < settle_end:
+        if tap.crashed(t_fire, n0):
+            break
+        if landed is None and (tap.last("connect", t_fire) is not None
+                               or (tap.last("rssi", t_fire) or 0) != 0):
+            landed = tap.last("connect", t_fire) or ""  # keep watching: crash may follow reconnect
+        time.sleep(0.5)
+
+    # headline: the whole off -> re-enable -> reconnect sequence must not crash or reboot.
+    crash = tap.crashed(t_fire, n0)
+    res.check("did NOT crash/reboot through off + re-enable + reconnect", crash is None,
+              crash or f"N continuous (now {tap.last('N')})")
 
     # reassociation: soft + load-aware. The firmware only attempts a connect while the converter
     # is idle/<~10 W, so a loaded device legitimately stays off until the load drops.
-    landed = wait_for(lambda: tap.last("connect", t_fire) if (tap.last("connect", t_fire) is not None
-                      or (tap.last("rssi", t_fire) or 0) != 0) else None, args.slack) if reenabled else None
     connected = landed is not None or (reenabled and (tap.last("rssi", t_fire) or 0) != 0)
     peak_w = _loaded(tap, t_fire)
-    if connected:
+    if crash:
+        res.skip("reassociated after re-enable", "crashed — see above")
+    elif connected:
         if args.ssid and landed:
             res.check("reconnected to the same AP (SSID kept)", landed == args.ssid,
                       f"landed on {landed!r}, expected {args.ssid!r}")
@@ -270,8 +297,8 @@ def test_cancel(con: Console, tap: Tap, args, res: Results):
     res.check("`wifi on` cancelled the pending re-enable", fired is None,
               "saw 'WiFi re-enabled after timeout' — timer not cancelled" if fired else
               "no timer line after the window elapsed")
-    res.check("no reboot during cancel", tap.rebooted(t_fire, n0) is None,
-              tap.rebooted(t_fire, n0) or "")
+    res.check("no crash/reboot during cancel", tap.crashed(t_fire, n0) is None,
+              tap.crashed(t_fire, n0) or "")
 
 
 def main():
@@ -284,6 +311,8 @@ def main():
     ap.add_argument("--ssid", help="expected SSID after re-enable; asserts the SSID was kept")
     ap.add_argument("--drop-timeout", type=float, default=20.0, help="how long to wait for the link to drop (s)")
     ap.add_argument("--slack", type=float, default=45.0, help="grace beyond minutes*60 for re-enable (s)")
+    ap.add_argument("--settle", type=float, default=30.0,
+                    help="after the re-enable line, keep watching this long for the reconnect crash (s)")
     ap.add_argument("--skip-cancel", action="store_true", help="run only the timeout test")
     args = ap.parse_args()
 

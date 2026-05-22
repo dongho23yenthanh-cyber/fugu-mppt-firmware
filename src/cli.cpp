@@ -171,7 +171,7 @@ static void cmdWifi(cmd *c) {
         // "off <minutes>" disables temporarily and keeps the saved ssid for reconnect;
         // bare "off" disables for good and forgets the sticky ssid.
         long mins = cc.countArgs() >= 2 ? cc.getArg(1).getValue().toInt() : 0;
-        WiFi.disconnect(true);
+        disconnect_wifi(true);
         disableWifi = true;
         if (mins > 0) {
             wifiReenableMs = wallClockMs() + (uint32_t) mins * 60000;

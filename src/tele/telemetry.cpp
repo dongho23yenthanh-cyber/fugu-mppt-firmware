@@ -110,6 +110,11 @@ void connect_wifi_async() {
     }
 }
 
+void disconnect_wifi(bool off) {
+    MDNS.end(); // unregister netif hooks + leave the mcast group while the netif is still valid
+    WiFi.disconnect(off);
+}
+
 
 static bool timeSyncAsync(const char *tzInfo, const char *ntpServer1, const char *ntpServer2 = nullptr,
                    const char *ntpServer3 = nullptr) {

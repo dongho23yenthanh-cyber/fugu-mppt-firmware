@@ -76,6 +76,7 @@ unsigned long lastMpptUpdateNumSamples = 0;
 // todo bit fields
 bool manualPwm = false;
 bool disableWifi = false;
+uint32_t wifiReenableMs = 0; // wallClockMs() deadline to auto re-enable WiFi (0 = never)
 bool usbConnected = false;
 bool setupErr = false;
 
@@ -676,6 +677,13 @@ static void loopNetwork_task(void *arg) {
     loopUart(nowMs);
     flush_async_uart_log();
     process_queued_tasks();
+
+    if (disableWifi && wifiReenableMs && (int32_t) (wallClockMs() - wifiReenableMs) >= 0) {
+        wifiReenableMs = 0;
+        disableWifi = false;
+        UART_LOG("WiFi re-enabled after timeout");
+        connect_wifi_async();
+    }
 
     if (!disableWifi) {
         /* only connect with disabled power conversion

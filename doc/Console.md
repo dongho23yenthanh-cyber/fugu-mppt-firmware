@@ -20,7 +20,7 @@ rejection message for invalid arguments / wrong context.
 
 | Command | Description |
 | --- | --- |
-| `wifi on`, `wifi off` | Enable / disable Wi-Fi (and with it all network services). Disabling Wi-Fi usually increases the control-loop rate. `wifi off` also clears the stored SSID in NVS. |
+| `wifi on`, `wifi off [minutes]` | Enable / disable Wi-Fi (and with it all network services). Disabling Wi-Fi usually increases the control-loop rate. Bare `wifi off` disables for good and clears the stored SSID in NVS; `wifi off <minutes>` disables temporarily and re-enables after the timeout, keeping the stored SSID. |
 | `wifi add <ssid>:<password>` | Store a new Wi-Fi network. |
 | `ip` | Show the local IP address. |
 | `hostname <hostname>` | Set the device hostname (persisted in NVS, applied on next boot). |

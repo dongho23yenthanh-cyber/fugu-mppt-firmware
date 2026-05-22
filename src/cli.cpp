@@ -28,6 +28,7 @@ void print_real_time_stats_1s_task(void *);
 // public interface. Types come from the includes above, so these match main.cpp's definitions.
 extern bool manualPwm;
 extern bool disableWifi;
+extern uint32_t wifiReenableMs;
 extern SynchronousConverter converter;
 extern MpptController mppt;
 extern ADC_Sampler adcSampler;
@@ -160,19 +161,30 @@ static void cmdResetLag(cmd *) {
 }
 
 static void cmdWifi(cmd *c) {
-    auto arg = Command(c).getArg(0).getValue();
+    Command cc(c);
+    auto arg = cc.getArg(0).getValue();
     if (arg == "on") {
+        wifiReenableMs = 0;
         disableWifi = false;
         connect_wifi_async();
     } else if (arg == "off") {
+        // "off <minutes>" disables temporarily and keeps the saved ssid for reconnect;
+        // bare "off" disables for good and forgets the sticky ssid.
+        long mins = cc.countArgs() >= 2 ? cc.getArg(1).getValue().toInt() : 0;
         WiFi.disconnect(true);
         disableWifi = true;
-        nvs.open();
-        if (!nvs.readString("wifi_ssid", "").empty())
-            nvs.writeString("wifi_ssid", "");
-        nvs.close();
+        if (mins > 0) {
+            wifiReenableMs = wallClockMs() + (uint32_t) mins * 60000;
+            UART_LOG("WiFi off for %ld min", mins);
+        } else {
+            wifiReenableMs = 0;
+            nvs.open();
+            if (!nvs.readString("wifi_ssid", "").empty())
+                nvs.writeString("wifi_ssid", "");
+            nvs.close();
+        }
     } else {
-        CMD_FAIL("wifi: expected on|off");
+        CMD_FAIL("wifi: expected on|off [minutes]");
     }
 }
 
@@ -393,7 +405,7 @@ void setupCli() {
     cli.addSingleArgCmd("speed", cmdSpeed);
     cli.addSingleArgCmd("fan", cmdFan);
     cli.addSingleArgCmd("led", cmdLed);
-    cli.addSingleArgCmd("wifi", cmdWifi);
+    cli.addBoundlessCmd("wifi", cmdWifi); // wifi on | off [minutes]
     cli.addSingleArgCmd("wifi-add", cmdWifiAdd);
     cli.addSingleArgCmd("ota", cmdOta);
     cli.addSingleArgCmd("vset", cmdVset);

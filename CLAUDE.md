@@ -207,7 +207,7 @@ When connected to the 192.168.1.x network, these devices might be behind a NAT r
 Driving their Half-Bridge must be taken with care!**
 
 Confirm the hostname in the welcome message (`Welcome to <hostname> (192.168.4.2)`), as IPs are not static.
-
+Confirm the device ip address with the `ip` command.
 You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200`
 
 # Important

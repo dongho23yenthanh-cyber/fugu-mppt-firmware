@@ -2,10 +2,8 @@
 
 #include <array>
 #include "driver/mcpwm_prelude.h"
-#include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_log.h"
-#include "soc/gpio_reg.h"
 #include "mcpwm_timing.h"
 
 // One GPIO fault per group, shared by all legs. OST brake latches gates LOW in HW.
@@ -93,33 +91,17 @@ public:
 
         mcpwm_comparator_config_t cc = {
             .intr_priority = 0,
-            .flags = {.update_cmp_on_tez = 1, .update_cmp_on_tep = 0, .update_cmp_on_sync = 0},
+            .flags = {.update_cmp_on_tez = 0, .update_cmp_on_tep = 0, .update_cmp_on_sync = 0},
         };
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpHS_));
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpLS_));
-        // Non-zero initial values: cmpHS=0 + cmpLS=0 would collapse TEZ-HIGH and cmp-LOW onto
-        // the same instant, leaving the generator stuck low on the first period.
         ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpHS_, pwmMax / 4));
         ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpLS_, pwmMax / 2));
-
-        // ESP32-S3: enable GPIO output BEFORE mcpwm_new_generator (the IDF only sets GPIO_ENABLE
-        // in esp_rom_gpio_connect_out_signal for ESP32/S2). INPUT_OUTPUT (not plain OUTPUT)
-        // keeps FUN_IE=1 in IO_MUX -- with FUN_IE=0 the pad's output path isn't actually driven
-        // out, despite enable=1 and a valid OUT_SEL. Note gpio_set_direction also resets OUT_SEL
-        // to GPIO-direct, so mcpwm_new_generator must run AFTER to re-route the peripheral signal.
-        ESP_ERROR_CHECK(gpio_set_direction((gpio_num_t) pinHS, GPIO_MODE_INPUT_OUTPUT));
-        ESP_ERROR_CHECK(gpio_set_direction((gpio_num_t) pinLS, GPIO_MODE_INPUT_OUTPUT));
 
         mcpwm_generator_config_t gHS = {.gen_gpio_num = pinHS, .flags = {}};
         mcpwm_generator_config_t gLS = {.gen_gpio_num = pinLS, .flags = {}};
         ESP_ERROR_CHECK(mcpwm_new_generator(oper_, &gHS, &genHS_));
         ESP_ERROR_CHECK(mcpwm_new_generator(oper_, &gLS, &genLS_));
-
-        // ESP32-S3: MCPWM's peripheral-OEN signal isn't asserted, so OEN_SEL=0 (default) leaves
-        // the pin high-Z. Set OEN_SEL=1 (bit 10) on the OUT_SEL_CFG register so output enable
-        // comes from GPIO_ENABLE (which we set above via gpio_set_direction).
-        REG_SET_BIT(GPIO_FUNC0_OUT_SEL_CFG_REG + (pinHS * 4), BIT(10));
-        REG_SET_BIT(GPIO_FUNC0_OUT_SEL_CFG_REG + (pinLS * 4), BIT(10));
 
         // HS: HIGH at TEZ, LOW at cmpHS  ->  on [0, hsOff]
         ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(genHS_,
@@ -154,25 +136,22 @@ public:
     }
 
     inline void setHsOff(uint16_t c) { mcpwm_comparator_set_compare_value(cmpHS_, c); }
-    inline void setLsOff(uint16_t c) { mcpwm_comparator_set_compare_value(cmpLS_, c); }
+    inline void setLsOff(uint16_t c) { if (cmpLS_) mcpwm_comparator_set_compare_value(cmpLS_, c); }
 
     void start() {
-        // Defense in depth: clear any latched force-level state from a prior brake/shutdown.
-        mcpwm_generator_set_force_level(genHS_, -1, true);
-        mcpwm_generator_set_force_level(genLS_, -1, true);
         ESP_ERROR_CHECK(mcpwm_timer_enable(timer_));
         ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer_, MCPWM_TIMER_START_NO_STOP));
     }
 
     // Immediate, register-only: force both gates LOW (safe), hold until cleared.
     void forceShutdown() {
-        mcpwm_generator_set_force_level(genHS_, 0, true);
-        mcpwm_generator_set_force_level(genLS_, 0, true);
+        if (genHS_) mcpwm_generator_set_force_level(genHS_, 0, true);
+        if (genLS_) mcpwm_generator_set_force_level(genLS_, 0, true);
     }
     // Remove the forced level, returning control to timer/comparator actions.
     void clearForce() {
-        mcpwm_generator_set_force_level(genHS_, -1, true);
-        mcpwm_generator_set_force_level(genLS_, -1, true);
+        if (genHS_) mcpwm_generator_set_force_level(genHS_, -1, true);
+        if (genLS_) mcpwm_generator_set_force_level(genLS_, -1, true);
     }
     // Note: clearing a latched OST brake requires the originating fault handle;
     // call MCPWM_FaultBrake::recover(leg.oper()) on the brake that bound this leg.

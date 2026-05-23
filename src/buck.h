@@ -294,6 +294,11 @@ public:
         if (unlikely(disabled() and direction > 0 and pinSd != 255)) {
             UART_LOG("Converter enabled");
             digitalWrite(pinSd, 0);
+#if WITH_MCPWM
+            // disable() latched the gens LOW via forceShutdown; release them now so the
+            // generator actions resume driving the pins.
+            pwmDriver.clearForce();
+#endif
         }
 
         pwmCtrl = constrain(pwmCtrl + direction, pwmCtrlMin, pwmCtrlMax);

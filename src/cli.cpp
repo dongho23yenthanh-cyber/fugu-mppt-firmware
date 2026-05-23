@@ -176,16 +176,16 @@ static void cmdMcpwmTest(cmd *c) {
     static mcpwm_cmpr_handle_t  cmp   = nullptr;
     static mcpwm_gen_handle_t   gen   = nullptr;
     if (timer) { CMD_FAIL("already created; reboot to re-test"); return; }
-    mcpwm_timer_config_t tc = {.group_id=1, .clk_src=MCPWM_TIMER_CLK_SRC_DEFAULT,
-        .resolution_hz=1'000'000, .count_mode=MCPWM_TIMER_COUNT_MODE_UP,
-        .period_ticks=1000, .intr_priority=0, .flags={}};
+    mcpwm_timer_config_t tc = {.group_id=0, .clk_src=MCPWM_TIMER_CLK_SRC_DEFAULT,
+        .resolution_hz=80'000'000, .count_mode=MCPWM_TIMER_COUNT_MODE_UP,
+        .period_ticks=2048, .intr_priority=0, .flags={}};
     ESP_ERROR_CHECK(mcpwm_new_timer(&tc, &timer));
-    mcpwm_operator_config_t oc = {.group_id=1, .intr_priority=0, .flags={}};
+    mcpwm_operator_config_t oc = {.group_id=0, .intr_priority=0, .flags={}};
     ESP_ERROR_CHECK(mcpwm_new_operator(&oc, &oper));
     ESP_ERROR_CHECK(mcpwm_operator_connect_timer(oper, timer));
     mcpwm_comparator_config_t cc2 = {.intr_priority=0, .flags={}};
     ESP_ERROR_CHECK(mcpwm_new_comparator(oper, &cc2, &cmp));
-    ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmp, 500));
+    ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmp, 1024));
     mcpwm_generator_config_t gc = {.gen_gpio_num=pin, .flags={}};
     ESP_ERROR_CHECK(mcpwm_new_generator(oper, &gc, &gen));
     ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(gen,

@@ -66,6 +66,15 @@ CONFIG_ESPTOOLPY_FLASH_MODE_AUTO_DETECT=n
 # https://docs.espressif.com/projects/esp-idf/en/stable/esp32h2/api-guides/performance/speed.html#speed-targeted-optimizations
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x0
+
+# Drop IPv6: nothing in firmware uses AF_INET6 / getaddrinfo on v6; saves ~20 KB flash.
+CONFIG_LWIP_IPV6=n
+
+# Drop PPP: only used for cellular/dial-up modems over UART; we only do IP over WiFi.
+# arduino-esp32 pulls in esp_modem, whose ESP_MODEM_USE_PPP_MODE `select`s LWIP_PPP_SUPPORT.
+# Flip both off here so esp_modem stops forcing PPP on.
+CONFIG_ESP_MODEM_USE_PPP_MODE=n
+CONFIG_LWIP_PPP_SUPPORT=n
 CONFIG_MDNS_TASK_AFFINITY_CPU0=y
 CONFIG_MDNS_TASK_AFFINITY=0x0
 CONFIG_PTHREAD_DEFAULT_CORE_NO_AFFINITY=0x0

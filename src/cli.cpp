@@ -48,44 +48,44 @@ extern unsigned long maxLoopDT;
 
 // Defined in main.cpp (non-static so we can reach them from here).
 void systemRestart();
-void stopAndBackoff(uint32_t secondsDelay);
-void loopLF(const unsigned long &nowUs);
 
-#define NON_RT_CORE 0  // mirrors main.cpp: cmdRtStats spawns its task off the RT core
+void stopAndBackoff(uint32_t secondsDelay);
+
+void loopLF(const unsigned long &nowUs);
 
 static SimpleCLI cli;
 
 // --- Console command callbacks ---------------------------------------------------------------
-// One handler per command, registered in setupCli(). SimpleCLI dispatches by the first token and
-// hands us a `cmd*`; wrap it in Command to read arguments. Validation that used to live in the
-// old if-chain conditions now lives in the handler body. The callbacks are void, so a handler
-// can't return a bool — instead bad input goes through CMD_FAIL(), which logs a warning, sets
-// s_cmdFailed, and returns. handleCommand() clears the flag before dispatch and reports ERR when
-// it's set, so the console's OK/ERR marker matches the warning instead of contradicting it.
-// (SimpleCLI's own errored() only catches parser-level errors like an unknown command.)
-// Output still goes through the global ESP_LOG/UART_LOG path.
+// use CMD_FAIL() in command dispatchers to flag that command as failed
+// SimpleCLI's dispatch API has no return value
+
 static bool s_cmdFailed = false;
-#define CMD_FAIL(...) do { ESP_LOGW("main", __VA_ARGS__); s_cmdFailed = true; return; } while (0)
+#define CMD_FAIL_RETURN(...) do { ESP_LOGW("main", __VA_ARGS__); s_cmdFailed = true; return; } while (0)
 
 static void cmdSync(cmd *c) {
-    if (!manualPwm) CMD_FAIL("sync: only in manual PWM (use 'dc N' first)");
+    if (!manualPwm)
+        CMD_FAIL_RETURN("sync: only in manual PWM (use 'dc N' first)");
     auto arg = Command(c).getArg(0).getValue();
-    if (arg == "on" or arg == "1" or arg == "off" or arg == "0") {
+    auto on = arg == "on" or arg == "1";
+    if (on or arg == "off" or arg == "0") {
         converter.forcedPwm_(false);
-        converter.enableSyncRect(arg == "on" or arg == "1", true);
+        converter.enableSyncRect(on, true);
     } else if (arg == "forced") {
         converter.enableSyncRect(true);
         converter.forcedPwm_(true);
     } else {
-        CMD_FAIL("sync: expected on|off|forced");
+        CMD_FAIL_RETURN("sync: expected on|off|forced");
     }
 }
 
 static void cmdBflow(cmd *c) {
-    if (!manualPwm) CMD_FAIL("bf: only in manual PWM (use 'dc N' first)");
-    if (!mppt.bflow) CMD_FAIL("panel switch not configured");
+    if (!manualPwm)
+        CMD_FAIL_RETURN("bf: only in manual PWM (use 'dc N' first)");
+    if (!mppt.bflow)
+        CMD_FAIL_RETURN("panel switch not configured");
     auto newState = Command(c).getArg(0).getValue().toInt();
-    if (newState != 0 and newState != 1) CMD_FAIL("bf: expected 0|1");
+    if (newState != 0 and newState != 1)
+        CMD_FAIL_RETURN("bf: expected 0|1");
     if (mppt.bflow.state() != newState)
         ESP_LOGI("main", "Set bflow state %i", (int) newState);
     mppt.bflow.enable(newState);
@@ -94,7 +94,8 @@ static void cmdBflow(cmd *c) {
 static void cmdRestart(cmd *) { systemRestart(); }
 
 static void cmdMppt(cmd *) {
-    if (!manualPwm) CMD_FAIL("MPPT already enabled");
+    if (!manualPwm)
+        CMD_FAIL_RETURN("MPPT already enabled");
     ESP_LOGI("main", "MPPT re-enabled");
     converter.setManualRect(-1); // drop any bench LS hold
     manualPwm = false;
@@ -104,14 +105,17 @@ static void cmdMppt(cmd *) {
 // [ls] the low-side on-count is pinned to that value (bench LS-timing sweep). ls<0 -> auto.
 
 static void cmdDc(cmd *c) {
-    if (adcSampler.isCalibrating() || isMeasuring()) CMD_FAIL("dc: busy calibrating");
-    if (isMeasuring()) CMD_FAIL("dc: busy measuring");
+    if (adcSampler.isCalibrating() || isMeasuring())
+        CMD_FAIL_RETURN("dc: busy calibrating");
+    if (isMeasuring())
+        CMD_FAIL_RETURN("dc: busy measuring");
     Command cc(c);
     auto v = cc.getArg(0).getValue();
-    if (v.length() == 0) CMD_FAIL("dc: expected <hs> [ls]");
+    if (v.length() == 0)
+        CMD_FAIL_RETURN("dc: expected <hs> [ls]");
     auto dc = v.toInt();
     if (dc < 0 || dc > converter.pwmCtrlMax || v.indexOf(',') != -1)
-        CMD_FAIL("dc: out of range [0,%i]", (int) converter.pwmCtrlMax);
+        CMD_FAIL_RETURN("dc: out of range [0,%i]", (int) converter.pwmCtrlMax);
 
     if (!manualPwm || converter.disabled()) {
         ESP_LOGI("main", "Switched to manual PWM");
@@ -138,7 +142,7 @@ static void cmdShortLs(cmd *) {
         manualPwm = true;
         converter.shortLs();
     } else {
-        CMD_FAIL("short-ls: requires boost mode and Vin~0");
+        CMD_FAIL_RETURN("short-ls: requires boost mode and Vin~0");
     }
 }
 
@@ -148,13 +152,13 @@ static void cmdSpeed(cmd *c) {
         mppt.speedScale = speedScale;
         ESP_LOGI("main", "Set tracker speed scale %.4f", speedScale);
     } else {
-        CMD_FAIL("speed: out of range [0,10)");
+        CMD_FAIL_RETURN("speed: out of range [0,10)");
     }
 }
 
 static void cmdFan(cmd *c) {
     if (!mppt.fan.fanSet(Command(c).getArg(0).getValue().toFloat() * 0.01f))
-        CMD_FAIL("fan: set failed");
+        CMD_FAIL_RETURN("fan: set failed");
 }
 
 static void cmdLed(cmd *c) { led.setRGB(Command(c).getArg(0).getValue().c_str()); }
@@ -175,24 +179,30 @@ static void cmdGpio(cmd *c) {
 #include "soc/gpio_reg.h"
 #include "soc/io_mux_reg.h"
 #include "soc/mcpwm_reg.h"
+
 static void cmdMcpwmTest(cmd *c) {
     int pin = Command(c).getArg(0).getValue().toInt();
     static mcpwm_timer_handle_t timer = nullptr;
-    static mcpwm_oper_handle_t  oper  = nullptr;
-    static mcpwm_cmpr_handle_t  cmp   = nullptr;
-    static mcpwm_gen_handle_t   gen   = nullptr;
-    if (timer) { CMD_FAIL("already created; reboot to re-test"); return; }
-    mcpwm_timer_config_t tc = {.group_id=0, .clk_src=MCPWM_TIMER_CLK_SRC_DEFAULT,
-        .resolution_hz=80'000'000, .count_mode=MCPWM_TIMER_COUNT_MODE_UP,
-        .period_ticks=2048, .intr_priority=0, .flags={}};
+    static mcpwm_oper_handle_t oper = nullptr;
+    static mcpwm_cmpr_handle_t cmp = nullptr;
+    static mcpwm_gen_handle_t gen = nullptr;
+    if (timer) {
+        CMD_FAIL_RETURN("already created; reboot to re-test");
+        return;
+    }
+    mcpwm_timer_config_t tc = {
+        .group_id = 0, .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
+        .resolution_hz = 80'000'000, .count_mode = MCPWM_TIMER_COUNT_MODE_UP,
+        .period_ticks = 2048, .intr_priority = 0, .flags = {}
+    };
     ESP_ERROR_CHECK(mcpwm_new_timer(&tc, &timer));
-    mcpwm_operator_config_t oc = {.group_id=0, .intr_priority=0, .flags={}};
+    mcpwm_operator_config_t oc = {.group_id = 0, .intr_priority = 0, .flags = {}};
     ESP_ERROR_CHECK(mcpwm_new_operator(&oc, &oper));
     ESP_ERROR_CHECK(mcpwm_operator_connect_timer(oper, timer));
-    mcpwm_comparator_config_t cc2 = {.intr_priority=0, .flags={}};
+    mcpwm_comparator_config_t cc2 = {.intr_priority = 0, .flags = {}};
     ESP_ERROR_CHECK(mcpwm_new_comparator(oper, &cc2, &cmp));
     ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmp, 1024));
-    mcpwm_generator_config_t gc = {.gen_gpio_num=pin, .flags={}};
+    mcpwm_generator_config_t gc = {.gen_gpio_num = pin, .flags = {}};
     ESP_ERROR_CHECK(mcpwm_new_generator(oper, &gc, &gen));
     ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(gen,
         MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
@@ -238,14 +248,15 @@ static void cmdWifi(cmd *c) {
             nvs.close();
         }
     } else {
-        CMD_FAIL("wifi: expected on|off [minutes]");
+        CMD_FAIL_RETURN("wifi: expected on|off [minutes]");
     }
 }
 
 static void cmdWifiAdd(cmd *c) {
     auto ssidAndPw = Command(c).getArg(0).getValue();
     auto i = ssidAndPw.indexOf(':');
-    if (i <= 0) CMD_FAIL("wifi-add: expected ssid:password");
+    if (i <= 0)
+        CMD_FAIL_RETURN("wifi-add: expected ssid:password");
     std::string ssid = ssidAndPw.substring(0, i).c_str();
     auto psk = ssidAndPw.substring(i + 1);
     ESP_LOGI("main", "adding wifi network %s (psk=%s)", ssid.c_str(), psk.c_str());
@@ -260,7 +271,8 @@ static void cmdLs(cmd *) { ESP_LOGE("main", "not impl"); }
 #ifdef WITH_NETW
 static void cmdOta(cmd *c) {
     auto url = Command(c).getArg(0).getValue();
-    if (url.length() == 0) CMD_FAIL("ota: expected url");
+    if (url.length() == 0)
+        CMD_FAIL_RETURN("ota: expected url");
     stopAndBackoff(10);
     adcSampler.halted = true; // disable ADC reading
     doOta(url.c_str());
@@ -275,17 +287,21 @@ static void cmdOtaBle(cmd *c) {
     Command cc(c);
     auto sub = cc.getArg(0).getValue();
     if (sub == "begin") {
-        if (cc.countArgs() < 3) CMD_FAIL("otab: begin <size> <sha256hex>");
+        if (cc.countArgs() < 3)
+            CMD_FAIL_RETURN("otab: begin <size> <sha256hex>");
         long size = cc.getArg(1).getValue().toInt();
         auto sha = cc.getArg(2).getValue();
-        if (size <= 0 || sha.length() != 64) CMD_FAIL("otab: bad size/sha");
-        if (!otaBleBegin((uint32_t) size, sha.c_str())) CMD_FAIL("otab: begin rejected");
+        if (size <= 0 || sha.length() != 64)
+            CMD_FAIL_RETURN("otab: bad size/sha");
+        if (!otaBleBegin((uint32_t) size, sha.c_str()))
+            CMD_FAIL_RETURN("otab: begin rejected");
     } else if (sub == "end") {
-        if (!otaBleEnd()) CMD_FAIL("otab: end failed"); // on success this reboots and never returns
+        if (!otaBleEnd())
+            CMD_FAIL_RETURN("otab: end failed"); // on success this reboots and never returns
     } else if (sub == "abort") {
         otaBleAbort();
     } else {
-        CMD_FAIL("otab: expected begin|end|abort");
+        CMD_FAIL_RETURN("otab: expected begin|end|abort");
     }
 }
 
@@ -307,7 +323,8 @@ static void cmdMem(cmd *) {
 }
 
 static void cmdSensor(cmd *c) {
-    if (Command(c).countArgs() >= 1) { // `sensor avg`: one compact line of EWM averages, for fast polling
+    if (Command(c).countArgs() >= 1) {
+        // `sensor avg`: one compact line of EWM averages, for fast polling
         char line[160];
         int n = 0;
         for (auto s: adcSampler.sensors) {
@@ -361,7 +378,7 @@ static void cmdHostname(cmd *c) {
 }
 
 std::string confFile(const std::string &c) {
-    auto path =  "/littlefs/conf/" + c;
+    auto path = "/littlefs/conf/" + c;
     if (!c.ends_with(".conf")) path += ".conf";
     return path;
 }
@@ -376,7 +393,8 @@ std::string confFile(const String &c) {
 //   set-config limits.conf iout_max 35    set-config charger.conf cell_voltage_eoc 3.53
 static void cmdSetConfig(cmd *c) {
     Command cc(c);
-    if (cc.countArgs() < 3) CMD_FAIL("set-config: expected <file> <key> <value>");
+    if (cc.countArgs() < 3)
+        CMD_FAIL_RETURN("set-config: expected <file> <key> <value>");
     auto fn = confFile(cc.getArg(0).getValue());
     auto key = cc.getArg(1).getValue();
     String val = cc.getArg(2).getValue();
@@ -392,20 +410,22 @@ static void cmdSetConfig(cmd *c) {
 // del-config <file> <key>  — remove a key; the whole line (incl. inline comment) is deleted.
 static void cmdDelConfig(cmd *c) {
     Command cc(c);
-    if (cc.countArgs() < 2) CMD_FAIL("del-config: expected <file> <key>");
+    if (cc.countArgs() < 2)
+        CMD_FAIL_RETURN("del-config: expected <file> <key>");
     auto fn = confFile(cc.getArg(0).getValue());
     auto key = cc.getArg(1).getValue();
     ConfFile conf{fn.c_str()};
     if (conf.remove(key.c_str()))
         ESP_LOGI("main", "Deleted conf '%s:%s'", fn.c_str(), key.c_str());
     else
-        CMD_FAIL("del-config: key '%s' not found in %s", key.c_str(), fn.c_str());
+        CMD_FAIL_RETURN("del-config: key '%s' not found in %s", key.c_str(), fn.c_str());
 }
 
 // get-config <file> [key]  — print one key, or dump the whole file.
 static void cmdGetConfig(cmd *c) {
     Command cc(c);
-    if (cc.countArgs() < 1) CMD_FAIL("get-config: expected <file> [key]");
+    if (cc.countArgs() < 1)
+        CMD_FAIL_RETURN("get-config: expected <file> [key]");
     auto fn = confFile(cc.getArg(0).getValue());
     ConfFile conf{fn.c_str()};
     if (cc.countArgs() >= 2) {
@@ -421,13 +441,15 @@ static void cmdGetConfig(cmd *c) {
 static void cmdVset(cmd *c) {
     float v = Command(c).getArg(0).getValue().toFloat();
     if (v >= 0 and v <= 999) mppt.charger.params.Vbat_max = v;
-    else CMD_FAIL("vset: out of range [0,999]");
+    else
+        CMD_FAIL_RETURN("vset: out of range [0,999]");
 }
 
 static void cmdIset(cmd *c) {
     float v = Command(c).getArg(0).getValue().toFloat();
     if (v >= 0 and v <= 999) mppt.charger.params.Ibat_lim = v;
-    else CMD_FAIL("iset: out of range [0,999]");
+    else
+        CMD_FAIL_RETURN("iset: out of range [0,999]");
 }
 
 // svc [list]                       svc on|off|restart|rs <name>
@@ -442,9 +464,11 @@ static void cmdService(cmd *c) {
         for (auto *s: g_services.all()) {
             auto detail = s->statusDetail();
             auto st = s->state();
-            const char *color = st == ServiceState::Running ? "\x1b[32m"   // green
-                              : st == ServiceState::Failed  ? "\x1b[31m"   // red
-                                                            : "\x1b[90m";  // gray
+            const char *color = st == ServiceState::Running
+                                    ? "\x1b[32m" // green
+                                    : st == ServiceState::Failed
+                                          ? "\x1b[31m" // red
+                                          : "\x1b[90m"; // gray
             char state[24];
             snprintf(state, sizeof(state), "%s%-8s\x1b[0m", color, stateStr(st));
             UART_LOG("%-10s %s %-6s %-8s %s", s->name(), state,
@@ -453,10 +477,12 @@ static void cmdService(cmd *c) {
         return;
     }
 
-    if (n < 2) CMD_FAIL("svc: expected <name>");
+    if (n < 2)
+        CMD_FAIL_RETURN("svc: expected <name>");
     auto name = cc.getArg(1).getValue();
     auto *s = g_services.findByName(name.c_str());
-    if (!s) CMD_FAIL("svc: unknown '%s'", name.c_str());
+    if (!s)
+        CMD_FAIL_RETURN("svc: unknown '%s'", name.c_str());
 
     if (sub == "on") {
         s->setEnabledPersist(true);
@@ -467,30 +493,34 @@ static void cmdService(cmd *c) {
     } else if (sub == "restart" || sub == "rs") {
         s->restart();
     } else if (sub == "log") {
-        if (n < 3) CMD_FAIL("svc log: expected <error|warn|info>");
+        if (n < 3)
+            CMD_FAIL_RETURN("svc log: expected <error|warn|info>");
         s->setLogLevel(strToLevel(cc.getArg(2).getValue().c_str()), /*persist*/ true);
     } else {
-        CMD_FAIL("svc: unknown subcommand '%s'", sub.c_str());
+        CMD_FAIL_RETURN("svc: unknown subcommand '%s'", sub.c_str());
     }
 }
 
 // measure-coil l0|ls [steps|hs] [dwell_ms] [apply]  — the sweep logic lives in measure_coil.cpp.
 static void cmdMeasureCoil(cmd *c) {
-    if (adcSampler.isCalibrating()) CMD_FAIL("measure-coil: busy calibrating");
+    if (adcSampler.isCalibrating())
+        CMD_FAIL_RETURN("measure-coil: busy calibrating");
     Command cc(c);
     auto mode = cc.getArg(0).getValue();
     bool ls;
     if (mode == "l0") ls = false;
     else if (mode == "ls") ls = true;
-    else CMD_FAIL("measure-coil: expected l0|ls [args]");
+    else
+        CMD_FAIL_RETURN("measure-coil: expected l0|ls [args]");
 
     int nArgs = cc.countArgs();
     bool apply = nArgs >= 2 && cc.getArg(nArgs - 1).getValue() == "apply";
-    int numArgs = apply ? nArgs - 1 : nArgs;     // positional count excluding trailing 'apply'
+    int numArgs = apply ? nArgs - 1 : nArgs; // positional count excluding trailing 'apply'
     int arg1 = numArgs >= 2 ? cc.getArg(1).getValue().toInt() : 0;
     uint32_t dwellMs = numArgs >= 3 ? (uint32_t) cc.getArg(2).getValue().toInt() : 3000;
     if (dwellMs < 200) dwellMs = 200;
-    if (!measureCoilStart(ls, apply, arg1, dwellMs)) CMD_FAIL("measure-coil: already running");
+    if (!measureCoilStart(ls, apply, arg1, dwellMs))
+        CMD_FAIL_RETURN("measure-coil: already running");
 }
 
 static void cmdHelp(cmd *) { UART_LOG("%s", cli.toString().c_str()); }
@@ -544,16 +574,16 @@ void setupCli() {
                  (unsigned long) (status & 0xFFFF), (unsigned long) ((status >> 16) & 1));
     });
     cli.addBoundlessCmd("pwm-dump", [](cmd *) {
-        uint32_t freq    = converter.getPwmFrequency();
-        uint16_t pwmMax  = converter.pwmMaxDriver();
+        uint32_t freq = converter.getPwmFrequency();
+        uint16_t pwmMax = converter.pwmMaxDriver();
         uint16_t pwmCtrl = converter.getCtrlOnPwmCnt();
         uint16_t pwmRect = converter.getRectOnPwmCnt();
         uint16_t dtTicks = converter.getDtTicks();
-        uint16_t hs_off  = pwmCtrl;
+        uint16_t hs_off = pwmCtrl;
         // enLogic: LS rises at TEZ (tick 0); HiLi: LS rises at cmpHS_. DT module delays the posedge.
         uint16_t ls_on_base = converter.isEnLogic() ? 0 : pwmCtrl;
-        uint16_t ls_on      = (pwmRect == 0) ? 0 : (uint16_t) (ls_on_base + dtTicks);
-        uint16_t ls_off  = (pwmRect == 0) ? 0 : (uint16_t) (pwmCtrl + pwmRect);
+        uint16_t ls_on = (pwmRect == 0) ? 0 : (uint16_t) (ls_on_base + dtTicks);
+        uint16_t ls_off = (pwmRect == 0) ? 0 : (uint16_t) (pwmCtrl + pwmRect);
         UART_LOG("freq=%u pwmMax=%u hs_off=%u ls_on=%u ls_off=%u fault=0 brake=0",
                  (unsigned) freq, (unsigned) pwmMax,
                  (unsigned) hs_off, (unsigned) ls_on, (unsigned) ls_off);
@@ -561,7 +591,7 @@ void setupCli() {
     cli.addBoundlessCmd("anaw", [](cmd *c) {
         Command cc(c);
         int pin = cc.getArg(0).getValue().toInt();
-        int val = cc.getArg(1).getValue().toInt();   // 0..255
+        int val = cc.getArg(1).getValue().toInt(); // 0..255
         analogWrite(pin, val);
         UART_LOG("anaw %d -> %d (Arduino LEDC)", pin, val);
     });
@@ -591,7 +621,8 @@ bool handleCommand(const String &inp) {
         int pwmStep = inp.toInt();
         // route through the duty target so only the RT core writes PWM (no cross-core race);
         // implies manual mode, same as 'dc'
-        if (!manualPwm) ESP_LOGI("main", "Switched to manual PWM");
+        if (!manualPwm)
+            ESP_LOGI("main", "Switched to manual PWM");
         manualPwm = true;
         int target = (int) converter.getCtrlOnPwmCnt() + pwmStep;
         if (target < 0) target = 0;

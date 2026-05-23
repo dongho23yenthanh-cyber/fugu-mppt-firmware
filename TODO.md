@@ -164,6 +164,7 @@ compute stall — the RT loop is *blocked waiting* for ADC data).
 - The watchdog is correct — don't touch it.
 
 Candidate fixes (ranked):
+
 1. `hasData()` non-blocking (`wait(0)`) so a missed/late alert costs ~0, not 3ms. Verify internal-adc pacing
    doesn't busy-spin.
 2. Don't rely on the edge: poll conv-ready flag / use latched alert; drop fry i2c_freq to 400k.
@@ -244,142 +245,159 @@ A few ways around this if you don't have a current probe:
 What do you recommend? You have all the data available at InfluxDB (although downsampled).
 If you need HF-data, use scope-client.
 
-
 write md doc with a bit of theory:
+
 * methods on how to obtain L0, with and without coil current probe
 * how a broken current sensor affects the measurement
-  * gain and offset error
-* how a wrong L0 (too high or too low) value affects diode emulation 
+    * gain and offset error
+* how a wrong L0 (too high or too low) value affects diode emulation
 * then how this script works (and why you chose that method)
 
 add charts of the CCM and DCM coil current (can be ascii)
 
-
 scope proto: zigzag-delta + varint
 
-
 `version` command?
-
-
 
 * can we run the LS sweep?
 * add this to the coil measurement document. including both charts, separated, one for flat and one for fry
 
-
-The L-wiggle is a delivered-charge ripple, and its source is the open-loop, integer-quantized low-side turn-off time. In computePwmRectMax() (buck.h:233):
+The L-wiggle is a delivered-charge ripple, and its source is the open-loop, integer-quantized low-side turn-off time. In
+computePwmRectMax() (buck.h:233):
 
 pwmRectMax = round(pwmCtrl · pwmRectRatioDCM)        // LS count, whole PWM ticks
 pwmRectRatioDCM = rectCtrlRatio(M_wce) = 1/M_wce − 1 // buck, voltages only
 
 Three things make the charge per cycle (hence apparent L) swing as duty sweeps:
 
-1. Rounding to whole ticks. Each LS tick is 1/(fsw·pwmMax) ≈ 12.5 ns. The ideal LS-off lands between ticks; round() stair-steps it, so the turn-off
-   alternately sits a hair before the inductor zero-crossing (body-diode finishes → Vf loss → less charge) or after it (reverse current pulls charge back). Both
+1. Rounding to whole ticks. Each LS tick is 1/(fsw·pwmMax) ≈ 12.5 ns. The ideal LS-off lands between ticks; round()
+   stair-steps it, so the turn-off
+   alternately sits a hair before the inductor zero-crossing (body-diode finishes → Vf loss → less charge) or after it (
+   reverse current pulls charge back). Both
    reduce net Iout, so L reads high — and which side you're on beats against duty.
-2. A fixed offset — gate delay + dead-time + the deliberate conservative bias voltageMaxErr = 0.01 (buck.h:431, turns LS off ~2 % early on purpose for
+2. A fixed offset — gate delay + dead-time + the deliberate conservative bias voltageMaxErr = 0.01 (buck.h:431, turns LS
+   off ~2 % early on purpose for
    safety). This shifts the whole pattern toward the body-diode side.
-3. The asymmetry around the zero-crossing (Vf one side, reverse current the other) rectifies that timing jitter into the periodic charge error you see.
+3. The asymmetry around the zero-crossing (Vf one side, reverse current the other) rectifies that timing jitter into the
+   periodic charge error you see.
 
-It's open-loop because the converter is sensorless on inductor current — it computes the turn-off from voltages and L0 instead of detecting the zero
+It's open-loop because the converter is sensorless on inductor current — it computes the turn-off from voltages and L0
+instead of detecting the zero
 crossing.
 
 How to reduce it — ranked by effort/payoff
 
 1. Error-feedback (dither) the LS-count rounding — cheapest, most targeted.
-   Instead of round(), carry the rounding remainder forward in an accumulator so the average LS-off time tracks the ideal continuously:
-   acc += pwmCtrl · ratio;  ls = (int)acc;  acc -= ls;   // sigma-delta the fractional tick
-   This converts the duty-pinned beat into high-frequency jitter that the output cap/battery filter out. ~3 lines, RT-safe (just an int add in pwmPerturb), no
+   Instead of round(), carry the rounding remainder forward in an accumulator so the average LS-off time tracks the
+   ideal continuously:
+   acc += pwmCtrl · ratio; ls = (int)acc; acc -= ls; // sigma-delta the fractional tick
+   This converts the duty-pinned beat into high-frequency jitter that the output cap/battery filter out. ~3 lines,
+   RT-safe (just an int add in pwmPerturb), no
    hardware change. Directly kills the quantization half of the oscillation.
 
 2. Calibrate and apply the fixed timing offset.
-   Use measure_coil.py --ls-sweep --hs N (§6) on each board to find the actual offset between the commanded LS count and the true Iout peak (zero-crossing),
-   then add it as a constant pwmRectOffset after the round — and, if the voltage sensors are trustworthy on that board, trim voltageMaxErr from 0.01. This
-   centers operation on the zero-crossing so you ride the flat top of the peak instead of a steep side, removing the DC bias and shrinking the swing.
+   Use measure_coil.py --ls-sweep --hs N (§6) on each board to find the actual offset between the commanded LS count and
+   the true Iout peak (zero-crossing),
+   then add it as a constant pwmRectOffset after the round — and, if the voltage sensors are trustworthy on that board,
+   trim voltageMaxErr from 0.01. This
+   centers operation on the zero-crossing so you ride the flat top of the peak instead of a steep side, removing the DC
+   bias and shrinking the swing.
 
 3. Close the loop on reverse current — the real fix, biggest change.
-   The oscillation only exists because turn-off is computed, not measured. Servo pwmRect down whenever reverse current is detected (the firmware already has a
-   "reverse-current pullback"; promote it to an integral controller fed by the Iout dip or a switch-node comparator). That removes the dependence on L0/M
+   The oscillation only exists because turn-off is computed, not measured. Servo pwmRect down whenever reverse current
+   is detected (the firmware already has a
+   "reverse-current pullback"; promote it to an integral controller fed by the Iout dip or a switch-node comparator).
+   That removes the dependence on L0/M
    accuracy entirely — and incidentally makes the L0 value almost irrelevant to timing.
-
-
 
 maybe we should turn off wifi, i noticed pwm glitches with wifi enabled. we can steer over ble
 
-
-⏺ While the build runs, here's the auto-calibrate answer — and yes, the offset knob I just added (rectOnOffset / coil.conf::rect_offset) is exactly what an
+⏺ While the build runs, here's the auto-calibrate answer — and yes, the offset knob I just added (rectOnOffset /
+coil.conf::rect_offset) is exactly what an
 auto-calibrator would tune.
 
-The physics makes it tractable: the thing to learn is a single scalar — the fixed dead-time/gate-delay in counts. rectCtrlRatio·HS already handles the
-operating-point (M, HS) dependence, so a dead-time (fixed time → fixed counts) should be ~constant across duties. So auto-cal trims one constant slowly, not
-a per-cycle search. (Worth confirming constancy by running --ls-sweep at 2–3 HS values; if peak−ideal drifts with HS, there's also a ratio error to fix
+The physics makes it tractable: the thing to learn is a single scalar — the fixed dead-time/gate-delay in counts.
+rectCtrlRatio·HS already handles the
+operating-point (M, HS) dependence, so a dead-time (fixed time → fixed counts) should be ~constant across duties. So
+auto-cal trims one constant slowly, not
+a per-cycle search. (Worth confirming constancy by running --ls-sweep at 2–3 HS values; if peak−ideal drifts with HS,
+there's also a ratio error to fix
 separately.)
 
-The signal is asymmetric, which dictates the strategy. The Iout peak is broad and flat on the body-diode side (poor gradient — P&O would just wander there)
-but the reverse-current cliff is sharp. And overshoot = reverse current = the destroy-the-LS-switch direction (§4). So don't hill-climb to the peak — climb
+The signal is asymmetric, which dictates the strategy. The Iout peak is broad and flat on the body-diode side (poor
+gradient — P&O would just wander there)
+but the reverse-current cliff is sharp. And overshoot = reverse current = the destroy-the-LS-switch direction (§4). So
+don't hill-climb to the peak — climb
 the offset up until reverse-current onset, then back off a margin.
 
 I'd offer two tiers:
 
-Tier 1 — host-driven, safe, I can add now. measure_coil.py --ls-sweep already computes peak − ideal. Add --apply: after the sweep it writes
-coil.conf::rect_offset = (peak − ideal − margin) via set-config. Supervised, one-shot, bounded by the sweep's own --i-max and "passed the peak" stop. No
+Tier 1 — host-driven, safe, I can add now. measure_coil.py --ls-sweep already computes peak − ideal. Add --apply: after
+the sweep it writes
+coil.conf::rect_offset = (peak − ideal − margin) via set-config. Supervised, one-shot, bounded by the sweep's own
+--i-max and "passed the peak" stop. No
 autonomous RT behavior on a live converter. This is the low-risk "auto-calibrate."
 
 Tier 2 — on-device autonomous servo. A slow P&O in loopLF (core 0, never the RT loop):
+
 - Gate hard: steady DCM, Iout above an SNR floor, voltages stable, not in MPPT-sweep/transient/protection.
-- Raise rectOnOffset by 1 ct per ~second; watch averaged Iout. Stop the moment Iout rolls over or the existing reverse-current pullback fires (use that as
+- Raise rectOnOffset by 1 ct per ~second; watch averaged Iout. Stop the moment Iout rolls over or the existing
+  reverse-current pullback fires (use that as
   the hard "too far" signal — it's a cleaner landmark than the broad peak), then back off a safety margin and hold.
-- Clamp rectOnOffset to a conservative max; debounce-persist the learned value to coil.conf::rect_offset; restart from the stored value on boot.
+- Clamp rectOnOffset to a conservative max; debounce-persist the learned value to coil.conf::rect_offset; restart from
+  the stored value on boot.
 - Always err to the early/body-diode side.
 
 Tier 2 (on-device auto-cal)
 remains a sim-first follow-up whenever you want it.
 
-
-
-
 --ls-sweep --apply: plausibility checks, apply and re-test after applied
 write into doc
 re-run HS sweep
 
-
 /measure_coil.py should show a final plot
-* how does measure_coil get the values?
 
+* how does measure_coil get the values?
 
 let wifi use the svc api (instead of wifi off)
 
-
 * add an optional argument to wifi off <timeout> to disable wifi for some minutes
-
-
 
 #3 — why the oscillation survives the dither (hypothesis)
 
-I initially suspected the dither was frozen during a held-duty sweep, but the code refutes that: in manual mode the RT loop calls converter.pwmPerturb(0)
-every iteration (main.cpp:661-663), which re-runs computePwmRectMax(), so rectDitherErr does iterate and toggle the LS count N↔N+1 each RT cycle,
+I initially suspected the dither was frozen during a held-duty sweep, but the code refutes that: in manual mode the RT
+loop calls converter.pwmPerturb(0)
+every iteration (main.cpp:661-663), which re-runs computePwmRectMax(), so rectDitherErr does iterate and toggle the LS
+count N↔N+1 each RT cycle,
 time-averaging to the fractional ideal. The dither is working as designed.
 
-The problem is what it's averaging over. The dither assumes the Iout-vs-LS response is locally linear, so that toggling N↔N+1 yields the fractional-point
-result. But we measured that response in the ls-sweep and it's sharply asymmetric around the operating point: a flat body-diode plateau on the short side (no
-penalty) and a steep reverse-current cliff on the long side. Averaging a toggled input across that nonlinearity gives a biased Iout (Jensen's inequality),
-and the bias depends on where the fractional ideal sits relative to the integer grid — which slides with H. That's the residual ~115-count oscillation the
+The problem is what it's averaging over. The dither assumes the Iout-vs-LS response is locally linear, so that toggling
+N↔N+1 yields the fractional-point
+result. But we measured that response in the ls-sweep and it's sharply asymmetric around the operating point: a flat
+body-diode plateau on the short side (no
+penalty) and a steep reverse-current cliff on the long side. Averaging a toggled input across that nonlinearity gives a
+biased Iout (Jensen's inequality),
+and the bias depends on where the fractional ideal sits relative to the integer grid — which slides with H. That's the
+residual ~115-count oscillation the
 dither can't remove.
 
-And the kicker: rect_offset=+100 moves the operating point toward the cliff (we confirmed auto_LS now sits only ~17 ct below the Iout peak), i.e. into the
-most asymmetric region — so the calibration, which buys efficiency, plausibly makes this oscillation worse, not better. That's consistent with our earlier
+And the kicker: rect_offset=+100 moves the operating point toward the cliff (we confirmed auto_LS now sits only ~17 ct
+below the Iout peak), i.e. into the
+most asymmetric region — so the calibration, which buys efficiency, plausibly makes this oscillation worse, not better.
+That's consistent with our earlier
 dither A/B showing no clear improvement.
 
-To confirm (not over-theorize), the clean test is on the dry_mock sim: sweep with dither on/off and rect_offset 0 vs 100, and see whether oscillation tracks
-proximity-to-cliff rather than dither state. That needs a sim build — I'd like your go-ahead before setting it up rather than starting it blind.
-
-
+To confirm (not over-theorize), the clean test is on the dry_mock sim: sweep with dither on/off and rect_offset 0 vs
+100, and see whether oscillation tracks
+proximity-to-cliff rather than dither state. That needs a sim build — I'd like your go-ahead before setting it up rather
+than starting it blind.
 
 * MCPWM instead of ledc?
-* re-arange 
-
+* re-arange
 
 MCPWM vibes
 Sketch the implementation of the MCPWM driver for the synchronous buck convert preserving the diode-emulation.
+
 * frequency and counts configurable
 * there is a function that computes the highest counts for frequency to achieve best pwm resolution
 * dead time is configurable
@@ -389,32 +407,30 @@ Sketch the implementation of the MCPWM driver for the synchronous buck convert p
 
 braintstorm->sketching->spec->impl
 
-
 wifi lively check with mqtt host and roam ??
-
 
 - write a dead-time optimization script
 
 does the charger compensate battery current to zero after termination?
 does the recharge_dod work?
 
-
 2. Gate driver + diode emulation transitions
-   Above, plus verify the CCM↔DCM rectifier-cutoff timing across the `pwm` (HS) sweep — i.e. that `pwmRectMax`/`rect_offset` produces the right LS turn-off
+   Above, plus verify the CCM↔DCM rectifier-cutoff timing across the `pwm` (HS) sweep — i.e. that `pwmRectMax`/
+   `rect_offset` produces the right LS turn-off
    relative to the inductor zero-crossing. Still mock-ADC, but exercises the full `computePwmRectMax` path.
 3. Full converter under load
-   All of the above plus real Vin/Iin/Vout/Iout via PSU + e-load + current probe — closes the loop on duty/MPPT/protection too. Requires more wiring and a
+   All of the above plus real Vin/Iin/Vout/Iout via PSU + e-load + current probe — closes the loop on
+   duty/MPPT/protection too. Requires more wiring and a
    bench rig from `doc/Automated Bench Tests.md`.
-
 
 
 - update the tests for the charger.h
 - check each input parameter description for contracts
 
-
 # command tests
 
 ```python
+# command acceptance:
 t = [
     ("dc 100", True),
     ("dc", False),
@@ -424,16 +440,30 @@ t = [
     ("dc 2040", False),
 ]
 
+"""
+# closed scope test
+* use picoscope to test PWM signals
+* use both channels to monitor Ctrl and Sync (buck: HS and LS) channels
+* accept configuration for scope attenuation (e.g. x10, x50)
+before the actual pwm test, perform a systems check:
+use digitalWrite() to write a 0,1,0 sequence to the two PWM pins for channel identification and to verify that
+the signal is actually picked up by the scope channels.
+track the high-level voltage (the scope probes might have a wrong attenuation) and bail if it is below 1.5V.
+
+with the scope channel <-> gpio pin map, we can now start the PWM driver test sequences:
+
+"""
+
 pwmCtrlMax = 2048
 cmax = pwmCtrlMax
 smin = pwmSyncMin
-tq = 1/(fsw*pwmMax)
-rtol = lambda a,b,tol: abs(a-b)/abs(b)
+tq = 1 / (fsw * pwmMax)
+rtol = lambda a, b, tol: abs(a - b) / abs(b)
 t = [
-    ("dc 1 0"), # check ton(HS) < 1.5 *tq, rtol(ton(LS), smin * tq) < 0.01
-    ("dc 2 0"), # check ton(HS) < 2.5 *tq, rtol(ton(LS), smin * tq) < 0.01
-    ("dc 10 0"), # check ton(HS) < 12 *tq, rtol(ton(LS), smin * tq) < 0.01
-    ]
+    ("dc 1 0"),  # check ton(HS) < 1.5 *tq, rtol(ton(LS), smin * tq) < 0.01
+    ("dc 2 0"),  # check ton(HS) < 2.5 *tq, rtol(ton(LS), smin * tq) < 0.01
+    ("dc 10 0"),  # check ton(HS) < 12 *tq, rtol(ton(LS), smin * tq) < 0.01
+]
 ```
 
 

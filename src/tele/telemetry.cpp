@@ -203,7 +203,7 @@ bool wait_for_wifi() {
     ESP_LOGI("tele", "Connecting WiFi...");
     auto t_start = millis();
     if (stick) WiFi.reconnect();
-    while ((stick ? WiFi.status() : wifiMulti.run()) != WL_CONNECTED) {
+    while ((stick ? WiFi.status() : static_cast<wl_status_t>(wifiMulti.run())) != WL_CONNECTED) {
         delay(50);
         if (millis() - t_start > 6000) {
             ESP_LOGW("tele", "WiFi connection timeout");

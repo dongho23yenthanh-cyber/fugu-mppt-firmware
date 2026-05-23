@@ -398,6 +398,7 @@ void MpptController::begin(const ConfFile &trackerConf, const ConfFile &boardCon
 }
 
 void MpptController::telemetry() {
+#ifdef WITH_NETW
     if (!WiFi.isConnected() || !tele.influxdbHost || !timeSynced)
         return;
 
@@ -461,4 +462,5 @@ void MpptController::telemetry() {
 
     telemetryAddPoint(point, 80);
     _lastPointWrite = wallClockUs();
+#endif
 }

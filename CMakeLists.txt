@@ -1,21 +1,18 @@
 cmake_minimum_required(VERSION 3.16)
 
-# WITH_BLE=1 layers the NimBLE config on top of the defaults, so the BLE stack (and its flash cost)
-# is only baked in for BLE builds. Keep in sync with the WITH_BLE compile def in main/CMakeLists.txt.
+# Layer optional sdkconfig fragments on top of the defaults so flag-gated features (and their
+# flash cost) are only baked into builds that ask for them. Order matters — later fragments win.
+set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
+# WITH_BLE=1 enables the NimBLE stack (and its flash cost). Keep in sync with the WITH_BLE
+# compile def in main/CMakeLists.txt.
 if (DEFINED ENV{WITH_BLE})
-    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.ble")
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.ble")
 endif ()
-
-# WITH_NETW=0 layers sdkconfig.no_netw on top of the defaults to disable IDF networking
-# (mbedtls / esp_http_client / esp_https_ota / mDNS / optionally WiFi+lwIP). Default (unset or
-# non-zero) leaves the full network stack in. Keep in sync with the WITH_NETW define in
-# main/CMakeLists.txt.
+# WITH_NETW=0 disables IDF networking (mbedtls / esp_http_client / esp_https_ota / mDNS /
+# optionally WiFi+lwIP). Default (unset or non-zero) leaves the full network stack in. Keep in
+# sync with the WITH_NETW define in main/CMakeLists.txt.
 if (DEFINED ENV{WITH_NETW} AND NOT $ENV{WITH_NETW})
-    if (DEFINED ENV{WITH_BLE})
-        set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.ble;sdkconfig.no_netw")
-    else ()
-        set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.no_netw")
-    endif ()
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.no_netw")
 endif ()
 
 # The sampling profiler (components/esp32-semihosting-profiler) is opt-in via WITH_SPROFILER=1.

@@ -38,6 +38,11 @@ public:
     [[nodiscard]] float getVout() const { return vOut_; }
     [[nodiscard]] float getIL() const   { return iLEnd_; }
 
+    void setPwm(const PwmState &s) { pwm_ = s; }
+    [[nodiscard]] float getIinAvg() const  { return iInAvg_; }
+    [[nodiscard]] float getIoutAvg() const { return iOutAvg_; }
+    [[nodiscard]] bool  inDcm() const      { return dcm_; }
+
     // Advance the model by dt_s seconds. Without PwmState updates, uses last
     // latched pwm (zero by default -> converter idle, no I_L, I_in=I_out=0,
     // caps drift toward source/sink).
@@ -61,4 +66,9 @@ private:
     float vOut_  = 0.0f;
     float iLEnd_ = 0.0f;   // coil current at end of last PWM cycle
     PwmState pwm_{};
+    float iInAvg_  = 0.0f;
+    float iOutAvg_ = 0.0f;
+    bool  dcm_     = false;
+
+    void stepOneCycle(float T);
 };

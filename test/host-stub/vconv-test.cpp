@@ -46,9 +46,42 @@ static void test_battery_cap_dynamics() {
     assert(approxEq(vc.getVout(), vout0, 0.05f));
 }
 
+static void test_ccm_steady_state() {
+    VirtualConverter vc;
+    vc.setPv(8.0f, 60.0f, 2.0f);
+    vc.setBat(27.5f, 0.05f);
+    vc.setPassives(470e-6f, 470e-6f, 50e-6f);
+    vc.setVin(60.0f);
+    vc.setVout(28.0f);
+
+    // Pin a duty that gives clearly-CCM operation: D = Vout/Vin ~= 0.467.
+    // pwmMax=1023 (typical LEDC at ~39 kHz on ESP32). pwmCtrl=478, pwmRect=pwmMax-pwmCtrl-1.
+    VirtualConverter::PwmState p{
+        .pwmMax = 1023,
+        .pwmCtrl = 478,
+        .pwmRect = static_cast<uint16_t>(1023 - 478 - 1),
+        .pwmFreq = 39000,
+    };
+    vc.setPwm(p);
+
+    // Run 5 ms (~195 cycles) to let I_L settle. PV provides plenty of current.
+    for (int i = 0; i < 200; ++i) vc.stepSeconds(1.0f / 39000.0f, 39000);
+
+    // After settling, I_L_end should be positive (CCM, not zero).
+    assert(vc.getIL() > 0.5f);
+
+    // Iout average reported by the model.
+    const float iout = vc.getIoutAvg();
+    assert(iout > 1.0f && iout < 12.0f);
+
+    // Vout should not have collapsed.
+    assert(vc.getVout() > 20.0f && vc.getVout() < 35.0f);
+}
+
 int main() {
     test_pv_iv_curve();
     test_battery_cap_dynamics();
+    test_ccm_steady_state();
     std::printf("vconv-test: all asserts passed\n");
     return 0;
 }

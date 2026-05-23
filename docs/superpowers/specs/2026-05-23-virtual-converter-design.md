@@ -184,7 +184,14 @@ I_pv(V) = Isc * (1 - exp((V - Voc) / k))
 
 Clamped to `[0, Isc]`. `k` controls MPP sharpness — `k ≈ 2 V` gives MPP near `0.8 * Voc` for typical Si.
 
-**Battery (output):** stiff voltage source `V_bat` with small series `R_bat` (~0.05 Ω) so the cap dynamics see a derivative instead of a clamp δ-function. `I_bat = max(0, (V_out - V_bat) / R_bat)` — backflow protection clamped at the model level, matching what `backflow.h` does on real HW.
+**Battery (output):** stiff voltage source `V_bat` with small series `R_bat` (~0.05 Ω) so the cap dynamics see a derivative instead of a clamp δ-function. `I_bat` is bidirectional during normal operation — the battery sources current when V_out drops below V_bat, which is essential to model the sync-rect reverse-current regime (LS held past the coil zero crossing pumps energy from output back into V_in via the HS body diode). Backflow protection only engages when the converter is fully disabled, matching the real `backflow.h` switch:
+
+```
+if (pwmCtrl == 0):              # converter disabled → backflow switch open
+    I_bat = max(0, (V_out - V_bat) / R_bat)
+else:                            # converter running → bidirectional
+    I_bat = (V_out - V_bat) / R_bat
+```
 
 ### N-cycle stepping
 
@@ -234,6 +241,8 @@ Two layers:
    - DCM zero-crossing detection: as Iout falls, model enters DCM at the same boundary buck.h does
    - Sweep: PV IV-curve has a peak at the expected V
    - Cap dynamics: step change in PV current → V_in settles with the right time constant
+   - **Reverse-current regime:** force LS-on past the zero crossing (set `pwmRect` such that the analytic phase-2 ends with `I_L_after_LS < 0`). Run N cycles, assert: V_in rises, V_out drops, I_bat goes negative (battery sources). Confirms the HS-body-diode pumping path and the bidirectional I_bat clause.
+   - Backflow on disable: with converter running and V_out ≈ V_bat, set pwmCtrl=0 (simulating `disable()`). Assert I_bat clamps to zero and V_out drifts away from V_bat instead of being held to it.
 2. **On-target integration test** — flash `wokwi_mock` (or a new `vconv_mock` board config) with vconv enabled. Boot, let it run: MPPT tracker should find an MPP near `0.8*Voc`, PD loops should regulate, charger should reach CV. Pass = no protection trips, MPP within ±10% of expected, Iout > 0 at MPP.
 
 The host-stub already has `converter-test.cpp` and infrastructure — `vconv-test.cpp` slots in next to it.
@@ -248,11 +257,14 @@ The host-stub already has `converter-test.cpp` and infrastructure — `vconv-tes
 
 ## Out of scope (parking lot)
 
+See `etc/virtual-converter/TODO.md` for the prioritised list. Headlines:
+
+- **PV strings** — multiple parallel strings with different `isc/voc/k` so the combined IV curve has multiple local maxima. Stresses the MPPT global-sweep / re-sweep logic (partial-shading scenarios).
 - Boost topology — same structure, sides swapped, parameterize on `isBoost` later.
 - MOSFET losses (R_DS_on, switching loss) — adds a small Vh-Vl drop and skews efficiency.
 - Cap ESR — see brainstorming notes; v1 omits, ripple realism improves with it later.
 - Coil saturation / non-linear L — current model uses constant L0 like firmware does.
-- Multiple input sources / output sinks — single PV, single battery.
+- Multiple input sources / output sinks.
 - Host-side firmware run — host-stub currently builds `SynchronousConverter` only; full firmware run would need a much larger host-stub (FreeRTOS, esp_timer, mcpwm). Not needed for vconv to be useful.
 
 ## Implementation order

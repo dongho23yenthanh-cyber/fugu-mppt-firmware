@@ -105,13 +105,16 @@ static void cmdMppt(cmd *) {
 
 // dc <hs> [ls]  — manual PWM. With no [ls] the low side is automatic (diode emulation); with
 // [ls] the low-side on-count is pinned to that value (bench LS-timing sweep). ls<0 -> auto.
+
 static void cmdDc(cmd *c) {
-    if (adcSampler.isCalibrating()) CMD_FAIL("dc: busy calibrating");
+    if (adcSampler.isCalibrating() || isMeasuring()) CMD_FAIL("dc: busy calibrating");
+    if (isMeasuring()) CMD_FAIL("dc: busy measuring");
     Command cc(c);
     auto v = cc.getArg(0).getValue();
     if (v.length() == 0) CMD_FAIL("dc: expected <hs> [ls]");
     auto dc = v.toInt();
-    if (dc < 0 || dc > converter.pwmCtrlMax) CMD_FAIL("dc: out of range [0,%i]", (int) converter.pwmCtrlMax);
+    if (dc < 0 || dc > converter.pwmCtrlMax || v.indexOf(',') != -1)
+        CMD_FAIL("dc: out of range [0,%i]", (int) converter.pwmCtrlMax);
 
     if (!manualPwm || converter.disabled()) {
         ESP_LOGI("main", "Switched to manual PWM");
@@ -360,13 +363,24 @@ static void cmdHostname(cmd *c) {
     nvs.close();
 }
 
+std::string confFile(const std::string &c) {
+    auto path =  "/littlefs/conf/" + c;
+    if (!c.ends_with(".conf")) path += ".conf";
+    return path;
+}
+
+std::string confFile(const String &c) {
+    return confFile(std::string(c.c_str()));
+}
+
+
 // set-config <file> <key> <value...>  — value may contain spaces, so join the trailing tokens.
 //   set-config coil.conf L0 50            set-config mqtt.conf broker_uri mqtt://192.168.1.134:1882
 //   set-config limits.conf iout_max 35    set-config charger.conf cell_voltage_eoc 3.53
 static void cmdSetConfig(cmd *c) {
     Command cc(c);
     if (cc.countArgs() < 3) CMD_FAIL("set-config: expected <file> <key> <value>");
-    auto fn = "/littlefs/conf/" + cc.getArg(0).getValue();
+    auto fn = confFile(cc.getArg(0).getValue());
     auto key = cc.getArg(1).getValue();
     String val = cc.getArg(2).getValue();
     for (int i = 3; i < cc.countArgs(); ++i) val += " " + cc.getArg(i).getValue();
@@ -377,11 +391,12 @@ static void cmdSetConfig(cmd *c) {
         conf.add({{key.c_str(), val.c_str()}}, true);
 }
 
+
 // del-config <file> <key>  — remove a key; the whole line (incl. inline comment) is deleted.
 static void cmdDelConfig(cmd *c) {
     Command cc(c);
     if (cc.countArgs() < 2) CMD_FAIL("del-config: expected <file> <key>");
-    auto fn = "/littlefs/conf/" + cc.getArg(0).getValue();
+    auto fn = confFile(cc.getArg(0).getValue());
     auto key = cc.getArg(1).getValue();
     ConfFile conf{fn.c_str()};
     if (conf.remove(key.c_str()))
@@ -394,7 +409,7 @@ static void cmdDelConfig(cmd *c) {
 static void cmdGetConfig(cmd *c) {
     Command cc(c);
     if (cc.countArgs() < 1) CMD_FAIL("get-config: expected <file> [key]");
-    auto fn = "/littlefs/conf/" + cc.getArg(0).getValue();
+    auto fn = confFile(cc.getArg(0).getValue());
     ConfFile conf{fn.c_str()};
     if (cc.countArgs() >= 2) {
         auto key = cc.getArg(1).getValue();
@@ -531,6 +546,21 @@ void setupCli() {
                  grp, (unsigned long) cfg0, (unsigned long) cfg1, (unsigned long) status,
                  (unsigned long) (status & 0xFFFF), (unsigned long) ((status >> 16) & 1));
     });
+    cli.addBoundlessCmd("pwm-dump", [](cmd *) {
+        uint32_t freq    = converter.getPwmFrequency();
+        uint16_t pwmMax  = converter.pwmMaxDriver();
+        uint16_t pwmCtrl = converter.getCtrlOnPwmCnt();
+        uint16_t pwmRect = converter.getRectOnPwmCnt();
+        uint16_t dtTicks = converter.getDtTicks();
+        uint16_t hs_off  = pwmCtrl;
+        // enLogic: LS rises at TEZ (tick 0); HiLi: LS rises at cmpHS_. DT module delays the posedge.
+        uint16_t ls_on_base = converter.isEnLogic() ? 0 : pwmCtrl;
+        uint16_t ls_on      = (pwmRect == 0) ? 0 : (uint16_t) (ls_on_base + dtTicks);
+        uint16_t ls_off  = (pwmRect == 0) ? 0 : (uint16_t) (pwmCtrl + pwmRect);
+        UART_LOG("freq=%u pwmMax=%u hs_off=%u ls_on=%u ls_off=%u fault=0 brake=0",
+                 (unsigned) freq, (unsigned) pwmMax,
+                 (unsigned) hs_off, (unsigned) ls_on, (unsigned) ls_off);
+    });
     cli.addBoundlessCmd("anaw", [](cmd *c) {
         Command cc(c);
         int pin = cc.getArg(0).getValue().toInt();
@@ -546,12 +576,12 @@ void setupCli() {
     cli.addSingleArgCmd("vset", cmdVset);
     cli.addSingleArgCmd("iset", cmdIset);
 
-    cli.addBoundlessCmd("hostname", cmdHostname);
-    cli.addBoundlessCmd("set-config", cmdSetConfig);
-    cli.addBoundlessCmd("del-config", cmdDelConfig);
-    cli.addBoundlessCmd("get-config", cmdGetConfig);
-    cli.addBoundlessCmd("svc", cmdService);
-    cli.addBoundlessCmd("otab", cmdOtaBle);
+    cli.addBoundlessCmd("hostname,hn", cmdHostname);
+    cli.addBoundlessCmd("set-config,setc", cmdSetConfig);
+    cli.addBoundlessCmd("del-config,delc", cmdDelConfig);
+    cli.addBoundlessCmd("get-config,getc", cmdGetConfig);
+    cli.addBoundlessCmd("service,svc", cmdService);
+    cli.addBoundlessCmd("ota-ble", cmdOtaBle);
     cli.addBoundlessCmd("measure-coil", cmdMeasureCoil); // measure-coil l0|ls [steps|hs] [dwell_ms] [apply]
 }
 

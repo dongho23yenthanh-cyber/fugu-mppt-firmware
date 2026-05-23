@@ -232,11 +232,24 @@ static int vprintf_mux(const char *fmt, va_list argptr) {
         int l = vsnprintf(loc_buf, sizeof(loc_buf), fmt, ap2);
         va_end(ap2);
         if (l > 0) {
-            //enqueue_telnet_log(loc_buf, l);
-            if (log_telnet) log_telnet->write((uint8_t *) loc_buf, l);
+            char *buf = loc_buf;
+            // vsnprintf returns the untruncated length; writing l from loc_buf over-reads the stack
+            if (l >= (int) sizeof(loc_buf)) {
+                buf = (char *) malloc(l + 1);
+                if (buf) {
+                    va_copy(ap2, argptr);
+                    vsnprintf(buf, l + 1, fmt, ap2);
+                    va_end(ap2);
+                } else {
+                    buf = loc_buf;
+                    l = sizeof(loc_buf) - 1;
+                }
+            }
+            if (log_telnet) log_telnet->write((uint8_t *) buf, l);
             LogCallback cbs[kMaxLogCallbacks];
             int n = snapshotLogCallbacks(cbs);
-            for (int i = 0; i < n; ++i) cbs[i](loc_buf, l);
+            for (int i = 0; i < n; ++i) cbs[i](buf, l);
+            if (buf != loc_buf) free(buf);
         }
     }
 

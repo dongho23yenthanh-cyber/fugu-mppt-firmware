@@ -106,9 +106,7 @@ static void logConfErr(const char *name, const std::exception &e) {
 void setup() {
     consoleInit();
     setupCli();
-    auto app = esp_app_get_description();
-    ESP_LOGI("main", "*** Fugu Firmware Version " FIRMWARE_VERSION " %s %s (built %s %s, IDF %s)",
-             app->project_name, app->version, app->date, app->time, app->idf_ver);
+    ESP_LOGI("main", "*** %s", format_version());
 
     rtcount_test_cycle_counter();
 
@@ -719,7 +717,12 @@ static void loopNetwork_task(void *arg) {
 
 void systemRestart() {
     converter.disable();
-    UART_LOG("Rebooting in 200ms");
+    UART_LOG("Rebooting");
+    // Send the telnet FIN first and wait (≤2s) for the client to close, so a FIN lost on a weak link
+    // gets retransmitted before the reset wipes the stack (else the client hangs half-open). stopAll()
+    // would slam the socket shut, so do this ahead of it.
+    telnetService.beginClose();
+    for (int i = 0; i < 200 && telnetService.closePending(); ++i) delay(10);
     g_services.stopAll(); // tear down MQTT/telnet/etc. while WiFi is still up (see mqtt_task overflow)
     delay(300);
     ESP.restart();

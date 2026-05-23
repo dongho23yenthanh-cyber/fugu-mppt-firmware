@@ -149,7 +149,9 @@ public:
             manualRect = -1;
             return;
         }
-        manualRect = constrain(ls, (int) pwmRectMin, (int) (pwmDriver.pwmMax - pwmCtrl));
+        // -1: cmpLS == pwmMax would land on the timer-wrap, never firing the turn-off event;
+        // LS would stay HIGH the whole period.
+        manualRect = constrain(ls, (int) pwmRectMin, (int) (pwmDriver.pwmMax - pwmCtrl - 1));
         pwmRect = (uint16_t) manualRect;
 #if WITH_MCPWM
         pwmDriver.setLsOff(pwmCtrl + pwmRect);
@@ -285,9 +287,9 @@ public:
             }
         } else {
             // CCM
-            pwmRectMax = pwmDriver.pwmMax - pwmCtrl;
+            pwmRectMax = pwmDriver.pwmMax - pwmCtrl - 1;   // -1: keep cmpLS < period (timer-wrap)
         }
-        pwmRectMax = std::min<uint16_t>(std::max(pwmRectMin, pwmRectMax), pwmDriver.pwmMax - pwmCtrl);
+        pwmRectMax = std::min<uint16_t>(std::max(pwmRectMin, pwmRectMax), pwmDriver.pwmMax - pwmCtrl - 1);
     }
 
     void pwmPerturb(int16_t direction) {
@@ -310,7 +312,7 @@ public:
         if (manualRect >= 0) {
             // bench: hold LS at the requested count (clamped to the complementary max)
             pwmRect = (uint16_t) constrain(manualRect, (int) pwmRectMin,
-                                           (int) (pwmDriver.pwmMax - pwmCtrl));
+                                           (int) (pwmDriver.pwmMax - pwmCtrl - 1));
         } else {
             if (largerDecrease && !forcedPwm)
                 // assume DCM as it will always give equal or less pwmRectMax

@@ -13,7 +13,7 @@ extern MpptController mppt;
 
 class TelemetryService : public Service {
 public:
-    TelemetryService() : Service("tele", "/littlefs/conf/tele.conf", /*requiresNetwork*/ true) {}
+    TelemetryService() : Service("tele", "/littlefs/conf/tele.conf", /*requiresNetwork*/ true, false) {}
 
     // The UDP target it flushes points to, once a host is configured/resolved.
     std::string statusDetail() const override {

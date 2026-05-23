@@ -2,7 +2,7 @@
 <project version="4">
   <component name="CMakeSharedSettings">
     <configurations>
-      <configuration PROFILE_NAME="idf5.5-esp32s3" ENABLED="true" TOOLCHAIN_NAME="esp-idf-v5.5" NO_GENERATOR="true">
+      <configuration PROFILE_NAME="idf5.5-esp32s3" ENABLED="true" TOOLCHAIN_NAME="esp-idf-v5.5" GENERATION_OPTIONS="-G Ninja">
         <ADDITIONAL_GENERATION_ENVIRONMENT>
           <envs>
             <env name="IDF_TARGET" value="esp32s3" />

@@ -184,7 +184,9 @@ void MpptController::update() {
         if (controlMode == MpptControlMode::None or controlMode == MpptControlMode::MPPT or
             (controlMode == MpptControlMode::CV && converter.getCtrlOnPwmCnt() > targetDutyCycle)) {
             controlMode = MpptControlMode::Sweep;
-            controlValue = (float) constrain(targetDutyCycle - converter.getCtrlOnPwmCnt(), -8, 2);
+            controlValue = (float) constrain(targetDutyCycle - converter.getCtrlOnPwmCnt(),
+                                             -(converter.pwmCounts() / 64) - 1,
+                                             converter.pwmCounts() / 128 + 1);
             if (std::fabs(controlValue) <= 1) {
                 ESP_LOGI("mppt", "Reached target duty cycle %hu", targetDutyCycle);
                 targetDutyCycle = 0;

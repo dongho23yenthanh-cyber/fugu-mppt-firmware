@@ -622,4 +622,6 @@ public:
 #endif
         if (pinSd != 255)digitalWrite(pinSd, 0);
     }
+
+    [[nodiscard]] const uint16_t &pwmCounts()  const { return pwmDriver.pwmMax; }
 };

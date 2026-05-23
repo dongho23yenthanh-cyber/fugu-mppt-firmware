@@ -1,5 +1,15 @@
-
+On-target tests (Unity, replaces main.cpp with test/main.cpp):
 
 ```
 RUN_TESTS=1 idf.py -p /dev/tty.usb*      flash &&  idf.py -p /dev/tty.usb*      monitor
 ```
+
+Host-side tests (clang/g++, no flash needed):
+
+```
+clang++ -std=gnu++17 -fexceptions -I test/host-stub -I src \
+    -o /tmp/service-test test/host-stub/service-test.cpp && /tmp/service-test
+```
+
+Each `test/host-stub/*-test.cpp` is self-contained; ESP-IDF headers are shimmed in
+`test/host-stub/` (`esp_log.h`, `Arduino.h`, `freertos/{FreeRTOS,queue}.h`).

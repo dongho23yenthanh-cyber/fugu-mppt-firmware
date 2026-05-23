@@ -184,6 +184,7 @@ for noise debugging.
 - if you want to `git revert` but there are local dirty files, do a `git stash` before and `git stash pop` after
 - **Never ever run `git reset --hard`**
 - if you cannot find the `timeout` command, run `brew install coreutils` and try again
+- Never copy/mirror an existing `#define` that defines a constant value  to another file, just because you cannot include the file were it is defined. Look for a header file that both files already include and put it there (e.g. util.h).
 
 # Connecting to devices
 

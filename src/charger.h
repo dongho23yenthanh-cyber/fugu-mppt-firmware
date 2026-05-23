@@ -87,11 +87,13 @@ class Li_ChgTerminationCondition {
      * Charge termination condition for LFP (LiFePo4, Lithium Iron Phosphate) and other (?) Lithium Batteries
      * as described in https://nordkyndesign.com/charging-marine-lithium-battery-banks/
      * also see discussion https://github.com/fl4p/fugu-mppt-firmware/issues/31
+     *
+     * when full charged, the battery voltage is pinned. todo regulate battery current towards 0?
      */
 
     const BatChargerParams &p;
     bool terminated = false;
-    float _v_term; // termination cell voltage; single writer (RT thread), atomic 32-bit float store/load
+    float _v_term;
 
 public:
     [[nodiscard]] float v_term() const { return _v_term; }
@@ -129,7 +131,8 @@ public:
 private:
     [[nodiscard]] bool shouldRelease(float vcell_high, float ahSinceFull) const {
         // in case sth is wrong with our coulomb counter we release based on voltage
-        constexpr float RECHARGE_VFLOOR_BAND = 0.05f;
+        constexpr float RECHARGE_VFLOOR_BAND = 0.1f; // TODO make this configurable, was 0.05f;
+        // TODO add ewm smoothing
         if (vcell_high < p.cv_min - RECHARGE_VFLOOR_BAND) {
             ESP_LOGW("charger", "Termination release due to vcell_high(%.3f)<%.3f - %.3f", vcell_high, p.cv_min,
                      RECHARGE_VFLOOR_BAND);
@@ -205,6 +208,7 @@ public:
         bool batDataOk = batSt.haveValidCellVoltage() and std::isfinite(params.Cbat);
 
         if (batDataOk and batSt.vcell_high >= v_eoc) {
+            // battery is full
             _fallbackGlide.reset();
             constexpr auto OV_FEEDBACK_GAIN = 2; // 4
             float vPin_raw = fmin(batSt.vout_avg.get(), vbat) - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN;
@@ -215,6 +219,7 @@ public:
                      vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
             vpack_pin = vPin;
         } else if (!batDataOk && params.Vbat_fallback >= 0) {
+            // missing bat data and we have a fallback -> glide theres
             _vPinFilt.reset();
             if (!_fallbackGlide.active()) {
                 // entering fallback — capture current pin as the glide origin
@@ -227,6 +232,7 @@ public:
             }
             vpack_pin = _fallbackGlide.value(wallClockUs());
         } else {
+            // bulk charging or (missing batData and no fallback)
             _vPinFilt.reset();
             _fallbackGlide.reset();
             vpack_pin = params.Vbat_max;

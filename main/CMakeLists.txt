@@ -19,6 +19,32 @@ else ()
     set(MAIN_SRC "../src/main.cpp" "../src/cli.cpp" "../src/measure_coil.cpp")
 endif ()
 
+set(NETW_SRC
+        "../src/tele/telemetry.cpp"
+        "../src/tele/ftp_service.cpp"
+        "../src/tele/telnet_service.cpp"
+        "../src/tele/scope_service.cpp"
+        "../src/tele/mqtt.cpp"
+        "../src/tele/HAMqttDevice.cpp"
+        "../src/tele/home_assistant.cpp"
+        "../src/tele/tamp_compress.cpp"
+        "../src/web/server.cpp"
+        "../src/etc/ota.cpp"
+)
+
+# WITH_NETW=1 (default) compiles the WiFi/mDNS/MQTT/telemetry/HTTPS-OTA path. WITH_NETW=0 drops
+# all of the above; the firmware then runs UART/USB/BLE consoles only. Reverse polarity to
+# WITH_BLE on purpose — backwards-compat default is "network on". Keep in sync with the
+# sdkconfig.no_netw layering in the top-level CMakeLists.
+set(WITH_NETW_DEFAULT 1)
+if (DEFINED ENV{WITH_NETW} AND NOT $ENV{WITH_NETW})
+    set(WITH_NETW_DEFAULT 0)
+endif ()
+
+if (NOT WITH_NETW_DEFAULT)
+    set(NETW_SRC "")
+endif ()
+
 idf_component_register(SRCS
         ${MAIN_SRC}
         "../src/sensor_setup.cpp"
@@ -27,21 +53,12 @@ idf_component_register(SRCS
         "../src/util.cpp"
         "../src/adc/adc_esp32_cont.cpp"
         "../src/viz/lcd.cpp"
-        "../src/tele/telemetry.cpp"
-        "../src/tele/ftp_service.cpp"
-        "../src/tele/telnet_service.cpp"
-        "../src/tele/scope_service.cpp"
-        "../src/web/server.cpp"
         "../src/console.cpp"
         "../src/console_ble.cpp"
         "../src/etc/rt.cpp"
-        "../src/tele/mqtt.cpp"
-        "../src/etc/ota.cpp"
         "../src/etc/ota_ble.cpp"
-        "../src/tele/HAMqttDevice.cpp"
-        "../src/tele/home_assistant.cpp"
-        "../src/tele/tamp_compress.cpp"
         "../src/math/float16.cpp"
+        ${NETW_SRC}
         INCLUDE_DIRS "." "../src"
         REQUIRES
         # if we start to list components here we need to list them all
@@ -53,6 +70,10 @@ idf_component_register(SRCS
         #esp_system
         # NetworkClientSecure # OTA
 )
+
+if (WITH_NETW_DEFAULT)
+    component_compile_definitions("WITH_NETW=1")
+endif ()
 
 
 if ($ENV{FUGU_BAT_V})

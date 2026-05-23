@@ -6,6 +6,18 @@ if (DEFINED ENV{WITH_BLE})
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.ble")
 endif ()
 
+# WITH_NETW=0 layers sdkconfig.no_netw on top of the defaults to disable IDF networking
+# (mbedtls / esp_http_client / esp_https_ota / mDNS / optionally WiFi+lwIP). Default (unset or
+# non-zero) leaves the full network stack in. Keep in sync with the WITH_NETW define in
+# main/CMakeLists.txt.
+if (DEFINED ENV{WITH_NETW} AND NOT $ENV{WITH_NETW})
+    if (DEFINED ENV{WITH_BLE})
+        set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.ble;sdkconfig.no_netw")
+    else ()
+        set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.no_netw")
+    endif ()
+endif ()
+
 # The sampling profiler (components/esp32-semihosting-profiler) is opt-in via WITH_SPROFILER=1.
 # When off (default), drop the whole component so its flash + ~8 KB .bss isn't linked; main.cpp
 # guards its use with #ifdef WITH_SPROFILER. Keep in sync with main/CMakeLists.txt.

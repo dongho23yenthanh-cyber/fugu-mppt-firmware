@@ -49,6 +49,9 @@ Conventions used in the tables below:
 | `pwm_in`                     | GPIO | int    | —       | Gate driver IN pin (InEn mode)                 |
 | `pwm_en`                     | GPIO | int    | —       | Gate driver EN pin (InEn mode)                 |
 | `boot_refresh_ns`            | ns   | float  | 1500    | Min LS on-time to refresh HS bootstrap cap     |
+| `pwm_deadtime_ns`            | ns   | float  | 0       | HiLi hardware dead-time (MCPWM); 0 = none      |
+| `pwm_fault_pin`              | GPIO | int    | 255     | GPIO for HW OST brake (MCPWM); 255 = disabled  |
+| `pwm_fault_active_high`      |      | bool   | 0       | 1 if fault asserts high, 0 if low              |
 | `panel_en`                   | GPIO | int    | —       | Panel/input backflow enable switch pin         |
 | `panel_sd`                   | GPIO | int    | —       | Panel/input backflow shutdown switch pin       |
 | `led_WS2812` / `led_WS2812B` | GPIO | int    | —       | WS2812 status LED data pin (alt key)           |

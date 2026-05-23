@@ -352,7 +352,20 @@ void MpptController::updateCV() {
 
 
 void MpptController::updateManual() {
-    if (targetDutyCycle) {
+    if (_targetDisable) {
+        // dc 0 from the console: ramp pwmCtrl down on the RT core, then disable().
+        // disable() from the console task would race an in-flight ledc_update_duty
+        // (re-asserts sig_out_en=true on LEDC); doing it here keeps all PWM writes on core 1.
+        if (converter.disabled()) {
+            _targetDisable = false;
+        } else if (converter.getCtrlOnPwmCnt() <= converter.pwmCtrlMin) {
+            ESP_LOGI("mppt", "Reached target duty cycle 0, disabling");
+            converter.disable();
+            _targetDisable = false;
+        } else {
+            converter.pwmPerturb(-4);
+        }
+    } else if (targetDutyCycle) {
         int16_t step = constrain(targetDutyCycle - converter.getCtrlOnPwmCnt(), -4, 4);
         if (step == 0) {
             ESP_LOGI("mppt", "Reached target duty cycle %hu", targetDutyCycle);
@@ -361,7 +374,6 @@ void MpptController::updateManual() {
             converter.pwmPerturb(step);
         }
     }
-
 }
 
 

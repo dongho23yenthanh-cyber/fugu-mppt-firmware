@@ -250,9 +250,12 @@ static void measureCoilTask(void *arg) {
         }
         if (a.ls) sweepLs(a); else sweepL0(a);
     }
-    manualPwm = false;
     converter.setManualRect(-1);
-    mppt.setTargetDutyCycle(0);
+    mppt.setTargetDutyCycle(0); // RT core ramps down and disables (avoids cross-core LEDC race)
+    uint32_t doneDeadline = wallClockMs() + 2000;
+    while (!converter.disabled() && wallClockMs() < doneDeadline)
+        vTaskDelay(pdMS_TO_TICKS(10));
+    manualPwm = false;
     s_measureBusy.store(false);
     UART_LOG("measure-coil: done, MPPT restored");
     vTaskDelete(nullptr);

@@ -180,6 +180,7 @@ public:
 
 private:
     bool _sweeping = false; // global scan
+    bool _targetDisable = false; // ramp pwmCtrl down to pwmCtrlMin then disable(); set by setTargetDutyCycle(0)
 
 
     struct {
@@ -539,6 +540,7 @@ public:
         converter.disable();
         ctrlState._limiting = false;
         targetDutyCycle = 0;
+        _targetDisable = false;
 
         VinController.reset();
         VoutController.reset();
@@ -563,10 +565,13 @@ public:
         });
     }
 
+    // Called from the console task (core 0). Stores the target only; the RT loop
+    // ramps pwmCtrl on core 1 — keeps all PWM writes on one core so a concurrent
+    // disable() can't race an in-flight ledc_update_duty (LEDC has no force-low latch).
     void setTargetDutyCycle(uint16_t dutyCycle) {
-        if (dutyCycle == 0) converter.disable(); // no need to fade
         if (dutyCycle > converter.pwmCtrlMax) dutyCycle = converter.pwmCtrlMax;
         targetDutyCycle = dutyCycle;
+        _targetDisable = (dutyCycle == 0);
     }
 
     struct CVP {

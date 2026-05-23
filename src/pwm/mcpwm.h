@@ -56,9 +56,11 @@ class MCPWM_SyncLeg {
     mcpwm_oper_handle_t  oper_  = nullptr;
     mcpwm_cmpr_handle_t  cmpHS_ = nullptr, cmpLS_ = nullptr;
     mcpwm_gen_handle_t   genHS_ = nullptr, genLS_ = nullptr;
+    uint16_t dtTicks_  = 0;
 
 public:
-    uint16_t pwmMax = 0;   // = period_ticks (same role as LEDC pwmMax)
+    const char *name = "mcpwm";
+    uint16_t pwmMax    = 0;   // = period_ticks (same role as LEDC pwmMax)
 
     mcpwm_oper_handle_t  oper()  const { return oper_; }
     mcpwm_gen_handle_t   genHS() const { return genHS_; }

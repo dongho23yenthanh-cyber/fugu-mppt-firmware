@@ -17,17 +17,21 @@
 #include "service.h"
 #include "sensor_setup.h"
 #include "util.h"
+#ifdef WITH_NETW
 #include "tele/telemetry.h"
 #include "tele/ftp_service.h"
 #include "tele/telnet_service.h"
 #include "tele/telemetry_service.h"
 #include "tele/scope_service.h"
+#endif
 #include "viz/lcd.h"
 #include "viz/lcd_service.h"
 #include "viz/led.h"
 #include "console_ble_service.h"
 #include "measure_coil.h"
+#ifdef WITH_NETW
 #include "etc/ota.h"
+#endif
 
 #include "etc/version.h"
 
@@ -48,7 +52,9 @@
 #include <esp_pm.h>
 #include <filesystem>
 
+#ifdef WITH_NETW
 #include "tele/home_assistant.h"
+#endif
 
 
 ADC_Sampler adcSampler{}; // schedules async ADC reading
@@ -77,8 +83,10 @@ unsigned long lastMpptUpdateNumSamples = 0;
 
 // todo bit fields
 bool manualPwm = false;
+#ifdef WITH_NETW
 bool disableWifi = false;
 uint32_t wifiReenableMs = 0; // wallClockMs() deadline to auto re-enable WiFi (0 = never)
+#endif
 bool usbConnected = false;
 bool setupErr = false;
 
@@ -206,12 +214,15 @@ void setup() {
         }
 
 
+#ifdef WITH_NETW
 #ifdef NO_WIFI
     disableWifi = true;
+#endif
 #endif
 
     TeleConf teleConf{};
 
+#ifdef WITH_NETW
     if (!disableWifi) {
         connect_wifi_async();
         bool res = wait_for_wifi();
@@ -226,6 +237,7 @@ void setup() {
             logConfErr("tele.conf", e);
         }
     }
+#endif
 
     Limits lim{};
     try {
@@ -273,6 +285,7 @@ void setup() {
         led.setHexShort(0x200);
     }
 
+#ifdef WITH_NETW
     // Register the optional non-RT subsystems as services and start the enabled ones. MQTT keeps
     // its mppt/home-assistant wiring here (out of mqtt.cpp) via preStart, re-run on every start.
     MQTT.preStart = [](const ConfFile &mqttConf) {
@@ -289,8 +302,11 @@ void setup() {
     g_services.registerService(&telemetryService);
     g_services.registerService(&ftpService);
     g_services.registerService(&telnetService);
+#endif
     g_services.registerService(&lcdService);
+#ifdef WITH_NETW
     g_services.registerService(&scopeService);
+#endif
 #ifdef WITH_BLE
     g_services.registerService(&bleConsoleService);
 #endif
@@ -298,7 +314,9 @@ void setup() {
 
     // this will defer all logs, if abort() is called during setup we might never see relevant messages
     // so calls this after everything else has been set up
+#ifdef WITH_NETW
     enable_esp_log_to_telnet();
+#endif
 
 #if defined(BENCH_TELE) && WITH_BINARY_TELE
     benchTele(); // one-shot encode/compress microbench
@@ -520,12 +538,14 @@ void loopLF(const unsigned long &nowUs) {
     if (sensors.Vout)
         mppt.charger.update(sensors.Vout->ewm.avg.get(), sensors.Iout->ewm.avg.get());
 
+#ifdef WITH_NETW
     if (mppt.ucTemp.last() > 95 && WiFi.isConnected()) {
         ESP_LOGW("main", "High chip temperature, shut-down WiFi");
         flush_async_uart_log();
         vTaskDelay(pdMS_TO_TICKS(200));
         WiFi.disconnect(true);
     }
+#endif
 
     if (sensors.Vin && !isMeasuring())
         UART_LOG(
@@ -552,7 +572,11 @@ void loopLF(const unsigned long &nowUs) {
             maxLoopLag,
             //maxLoopDT,
             nSamples,
+#ifdef WITH_NETW
             WiFi.RSSI()
+#else
+            (int16_t) 0
+#endif
         );
     lastNSamples = nSamples;
     bytesSent = 0;
@@ -678,6 +702,7 @@ static void loopNetwork_task(void *arg) {
     flush_async_uart_log();
     process_queued_tasks();
 
+#ifdef WITH_NETW
     if (disableWifi && wifiReenableMs && (int32_t) (wallClockMs() - wifiReenableMs) >= 0) {
         wifiReenableMs = 0;
         disableWifi = false;
@@ -698,6 +723,7 @@ static void loopNetwork_task(void *arg) {
         if (wifiUp && !wifiWasUp) g_services.startEnabledNetworkServices();
         wifiWasUp = wifiUp;
     }
+#endif
 
     // ftp / telnet / telemetry / lcd / scope ticks (only the Running ones do work)
     g_services.tickAll();
@@ -711,19 +737,25 @@ static void loopNetwork_task(void *arg) {
 
     // Preserve the cooperative yield: scope's netLoop() blocks ~1 tick when a client is attached
     // and serves as the yield; otherwise we must yield explicitly.
+#ifdef WITH_NETW
     if (!(scopeService.state() == ServiceState::Running && scopeService.hasClient()))
         vTaskDelay(pdMS_TO_TICKS(1));
+#else
+    vTaskDelay(pdMS_TO_TICKS(1));
+#endif
 }
 
 void systemRestart() {
     converter.disable();
     UART_LOG("Rebooting");
+#ifdef WITH_NETW
     // Send the telnet FIN first and wait (≤2s) for the client to close, so a FIN lost on a weak link
     // gets retransmitted before the reset wipes the stack (else the client hangs half-open). stopAll()
     // would slam the socket shut, so do this ahead of it.
     telnetService.beginClose();
     for (int i = 0; i < 200 && telnetService.closePending(); ++i) delay(10);
-    g_services.stopAll(); // tear down MQTT/telnet/etc. while WiFi is still up (see mqtt_task overflow)
+#endif
+    g_services.stopAll(); // tear down enabled services while WiFi is still up (see mqtt_task overflow)
     delay(300);
     ESP.restart();
 }

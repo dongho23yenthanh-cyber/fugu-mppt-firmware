@@ -369,8 +369,7 @@ void stopAndBackoff(uint32_t secondsDelay) {
 static void loopRT(void *arg) {
     // low-latency control loop task
 
-#define RT_CORE 1
-#define NON_RT_CORE 0
+
 
 #if CONFIG_ARDUINO_RUNNING_CORE == RT_CORE or CONFIG_ARDUINO_EVENT_RUNNING_CORE == RT_CORE or \
 CONFIG_ARDUINO_UDP_RUNNING_CORE == RT_CORE or CONFIG_ARDUINO_SERIAL_EVENT_TASK_RUNNING_CORE == RT_CORE

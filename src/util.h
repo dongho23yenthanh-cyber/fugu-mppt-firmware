@@ -2,6 +2,9 @@
 
 #include <cstdint>
 
+#define RT_CORE 1
+#define NON_RT_CORE 0
+
 extern unsigned long loopWallClockUs_;
 
 inline const unsigned long &wallClockUs() { return loopWallClockUs_; }

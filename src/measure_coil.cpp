@@ -18,8 +18,6 @@ extern SynchronousConverter converter;
 extern MpptController mppt;
 extern VIinVout<const Sensor *> sensors;
 
-#define NON_RT_CORE 0
-
 static constexpr int MEAS_MAX_PTS = 64;
 
 struct MeasArgs {

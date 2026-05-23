@@ -9,25 +9,22 @@
 #include <SimpleCLI.h>
 
 #include "logging.h"
-#include "conf.h"               // ConfFile
-#include "util.h"               // scan_i2c, wallClockUs
-#include "buck.h"               // SynchronousConverter
-#include "mppt.h"               // MpptController
-#include "measure_coil.h"       // measureCoilStart
-#include "etc/version.h"        // format_version
-#include "adc/sampling.h"       // ADC_Sampler, Sensor, VIinVout
-#include "service.h"            // g_services, stateStr/levelToStr/strToLevel
-#include "viz/led.h"            // LedIndicator
-#include "storage/key-value.h"  // KeyValueStorage
+#include "conf.h"
+#include "util.h"
+#include "buck.h"
+#include "mppt.h"
+#include "measure_coil.h"
+#include "etc/version.h"
+#include "adc/sampling.h"
+#include "service.h"
+#include "viz/led.h"
+#include "storage/key-value.h"
 #ifdef WITH_NETW
 #include "tele/telemetry.h"     // connect_wifi_async, add_ap
 #include "etc/ota.h"            // doOta
 #endif
 #include "etc/ota_ble.h"        // otaBleBegin/End/Abort (OTA push over BLE)
 
-// Defined in main.cpp's TU via etc/perf.h (which defines, not just declares, it — so we can't
-// include that header here without a duplicate definition). Forward-declare and let the linker
-// resolve it.
 void print_real_time_stats_1s_task(void *);
 
 // Globals owned by main.cpp that the command handlers act on. Declared extern here (rather than in

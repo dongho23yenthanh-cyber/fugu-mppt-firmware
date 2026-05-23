@@ -354,6 +354,9 @@ void MpptController::updateCV() {
 
 
 void MpptController::updateManual() {
+    // Keep lastUs fresh so the first mppt.update() after `mppt` sees a normal dt_us
+    lastUs = wallClockUs();
+
     if (_targetDisable) {
         // dc 0 from the console: ramp pwmCtrl down on the RT core, then disable().
         // disable() from the console task would race an in-flight ledc_update_duty

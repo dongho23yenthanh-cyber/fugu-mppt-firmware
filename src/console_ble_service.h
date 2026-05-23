@@ -9,7 +9,12 @@
 #include "service.h"
 #include "console_ble.h"
 #include "util.h"
+#ifdef WITH_NETW
 #include "tele/telemetry.h"
+#else
+#include "storage/key-value.h"
+extern KeyValueStorage nvs;
+#endif
 
 class BleConsoleService : public Service {
 public:
@@ -22,7 +27,14 @@ public:
 protected:
     bool onStart() override {
         ConfFile c{"/littlefs/conf/ble.conf", /*no_warn_if_not_open*/ true};
-        bleConsoleBegin("fugu-" + getHostname(),
+#ifdef WITH_NETW
+        std::string hn = getHostname();
+#else
+        nvs.open();
+        std::string hn = nvs.readString("hostname", "fugu");
+        nvs.close();
+#endif
+        bleConsoleBegin("fugu-" + hn,
                         c.getString("ble_security", "justworks"),
                         (uint32_t) c.getLong("ble_passkey", 0));
         return true;

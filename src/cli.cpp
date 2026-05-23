@@ -345,7 +345,13 @@ static void cmdAdcReset(cmd *) { adcSampler.resetPeripherals(); }
 static void cmdHostname(cmd *c) {
     Command cc(c);
     if (cc.countArgs() < 1 || cc.getArg(0).getValue().length() == 0) {
+#ifdef WITH_NETW
         UART_LOG("Hostname: %s", getHostname().c_str());
+#else
+        nvs.open();
+        UART_LOG("Hostname: %s", nvs.readString("hostname", "fugu").c_str());
+        nvs.close();
+#endif
         return;
     }
     auto hn = cc.getArg(0).getValue();

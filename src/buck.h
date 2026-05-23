@@ -109,6 +109,16 @@ public:
 
     [[nodiscard]] const uint16_t &pwmMaxDriver() const { return pwmDriver.pwmMax; };
 
+    [[nodiscard]] uint16_t getDtTicks() const {
+#if WITH_MCPWM
+        return pwmDriver.getDtTicks();
+#else
+        return 0;
+#endif
+    }
+
+    [[nodiscard]] bool isEnLogic() const { return pwmEnLogic; }
+
     [[nodiscard]] uint32_t getPwmFrequency() const { return pwmFrequency; }
 
     uint16_t pwmCtrlMax{}, pwmRectMin{}, pwmCtrlMin{};

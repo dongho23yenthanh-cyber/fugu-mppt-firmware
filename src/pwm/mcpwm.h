@@ -64,6 +64,7 @@ public:
     mcpwm_gen_handle_t   genHS() const { return genHS_; }
     mcpwm_gen_handle_t   genLS() const { return genLS_; }
     mcpwm_timer_handle_t timer() const { return timer_; }
+    [[nodiscard]] uint16_t getDtTicks() const { return dtTicks_; }
 
     // fixedTicks>0 pins period_ticks (LEDC-equivalent); 0 -> bestTiming(freq).
     void init(int group, uint32_t freq, int pinHS, int pinLS,
@@ -124,6 +125,7 @@ public:
         // the LS rising edge by dtTicks (covers the HS->LS transition). The LS->HS transition
         // (start of next period) gets its dead-band by reducing pwmMax by dtTicks so software
         // clamps keep lsOff <= period - dtTicks. HiLi only; 0 = no-op (InEn).
+        dtTicks_ = (uint16_t) dtTicks;
         if (dtTicks) {
             mcpwm_dead_time_config_t dt = {
                 .posedge_delay_ticks = dtTicks,

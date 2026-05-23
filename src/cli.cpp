@@ -4,7 +4,6 @@
 #include <WiFi.h>
 #include <cmath>
 #include <esp_timer.h>
-#include <esp_app_desc.h>
 #include <SimpleCLI.h>
 
 #include "logging.h"
@@ -13,6 +12,7 @@
 #include "buck.h"               // SynchronousConverter
 #include "mppt.h"               // MpptController
 #include "measure_coil.h"       // measureCoilStart
+#include "etc/version.h"        // format_version
 #include "adc/sampling.h"       // ADC_Sampler, Sensor, VIinVout
 #include "service.h"            // g_services, stateStr/levelToStr/strToLevel
 #include "viz/led.h"            // LedIndicator
@@ -153,6 +153,50 @@ static void cmdFan(cmd *c) {
 
 static void cmdLed(cmd *c) { led.setRGB(Command(c).getArg(0).getValue().c_str()); }
 
+// Bench-only: `gpio <pin> <0|1>` -- direct digitalWrite test. Bypasses MCPWM/LEDC.
+static void cmdGpio(cmd *c) {
+    Command cc(c);
+    auto pin = (uint8_t) cc.getArg(0).getValue().toInt();
+    auto val = (uint8_t) cc.getArg(1).getValue().toInt();
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, val);
+    UART_LOG("gpio %u -> %u", (unsigned) pin, (unsigned) val);
+}
+
+// Bench-only: `mcpwmtest <pin>` -- minimal IDF MCPWM example pattern on a single pin.
+// 1 kHz 50% duty, no dead-time, no fault. Verifies the MCPWM peripheral itself.
+#include "driver/mcpwm_prelude.h"
+#include "soc/gpio_reg.h"
+#include "soc/io_mux_reg.h"
+#include "soc/mcpwm_reg.h"
+static void cmdMcpwmTest(cmd *c) {
+    int pin = Command(c).getArg(0).getValue().toInt();
+    static mcpwm_timer_handle_t timer = nullptr;
+    static mcpwm_oper_handle_t  oper  = nullptr;
+    static mcpwm_cmpr_handle_t  cmp   = nullptr;
+    static mcpwm_gen_handle_t   gen   = nullptr;
+    if (timer) { CMD_FAIL("already created; reboot to re-test"); return; }
+    mcpwm_timer_config_t tc = {.group_id=1, .clk_src=MCPWM_TIMER_CLK_SRC_DEFAULT,
+        .resolution_hz=1'000'000, .count_mode=MCPWM_TIMER_COUNT_MODE_UP,
+        .period_ticks=1000, .intr_priority=0, .flags={}};
+    ESP_ERROR_CHECK(mcpwm_new_timer(&tc, &timer));
+    mcpwm_operator_config_t oc = {.group_id=1, .intr_priority=0, .flags={}};
+    ESP_ERROR_CHECK(mcpwm_new_operator(&oc, &oper));
+    ESP_ERROR_CHECK(mcpwm_operator_connect_timer(oper, timer));
+    mcpwm_comparator_config_t cc2 = {.intr_priority=0, .flags={}};
+    ESP_ERROR_CHECK(mcpwm_new_comparator(oper, &cc2, &cmp));
+    ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmp, 500));
+    mcpwm_generator_config_t gc = {.gen_gpio_num=pin, .flags={}};
+    ESP_ERROR_CHECK(mcpwm_new_generator(oper, &gc, &gen));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(gen,
+        MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
+    ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(gen,
+        MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, cmp, MCPWM_GEN_ACTION_LOW)));
+    ESP_ERROR_CHECK(mcpwm_timer_enable(timer));
+    ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer, MCPWM_TIMER_START_NO_STOP));
+    UART_LOG("mcpwmtest: 1kHz 50%% on GPIO %d (group 1, isolated from buck driver)", pin);
+}
+
 static void cmdSweep(cmd *) { mppt.startSweep(); }
 
 static void cmdResetLag(cmd *) {
@@ -241,10 +285,8 @@ static void cmdRtStats(cmd *) {
 
 // monotonic seconds since boot; resets only on reboot (unlike status N, which zeroes on each sweep)
 static void cmdUptime(cmd *) {
-    const esp_app_desc_t *app = esp_app_get_description();
     UART_LOG("Uptime: %lu s", (uint32_t) (esp_timer_get_time() / 1000000));
-    UART_LOG("App: %s %s (built %s %s, IDF %s)", app->project_name, app->version, app->date, app->time,
-             app->idf_ver);
+    UART_LOG("App: %s", format_version());
 }
 
 static void cmdMem(cmd *) {
@@ -446,6 +488,36 @@ void setupCli() {
     cli.addSingleArgCmd("speed", cmdSpeed);
     cli.addSingleArgCmd("fan", cmdFan);
     cli.addSingleArgCmd("led", cmdLed);
+    cli.addBoundlessCmd("gpio", cmdGpio);
+    cli.addSingleArgCmd("mcpwmtest", cmdMcpwmTest);
+    cli.addSingleArgCmd("gpiodump", [](cmd *c) {
+        int pin = Command(c).getArg(0).getValue().toInt();
+        // GPIO_ENABLE_REG (or _ENABLE1 for pin>=32) bit, GPIO_OUT_SEL signal, IO_MUX function
+        uint32_t en = (pin < 32) ? REG_READ(GPIO_ENABLE_REG) : REG_READ(GPIO_ENABLE1_REG);
+        uint32_t out_sel = REG_READ(GPIO_FUNC0_OUT_SEL_CFG_REG + (pin * 4));
+        uint32_t io_mux = REG_READ(IO_MUX_GPIO0_REG + (pin * 4));
+        uint32_t enable_bit = (en >> (pin & 31)) & 1;
+        uint32_t signal_idx = out_sel & 0x1FF;
+        uint32_t oen_sel = (out_sel >> 10) & 1;
+        UART_LOG("gpio %d: enable=%u sig=%u oen_sel=%u io_mux=0x%lx",
+                 pin, (unsigned) enable_bit, (unsigned) signal_idx, (unsigned) oen_sel, (unsigned long) io_mux);
+    });
+    cli.addSingleArgCmd("mcpwmdump", [](cmd *c) {
+        int grp = Command(c).getArg(0).getValue().toInt();
+        uint32_t cfg0 = REG_READ(MCPWM_TIMER0_CFG0_REG(grp));
+        uint32_t cfg1 = REG_READ(MCPWM_TIMER0_CFG1_REG(grp));
+        uint32_t status = REG_READ(MCPWM_TIMER0_STATUS_REG(grp));
+        UART_LOG("mcpwm grp%d T0: cfg0=0x%lx cfg1=0x%lx status=0x%lx (count=%lu dir=%lu)",
+                 grp, (unsigned long) cfg0, (unsigned long) cfg1, (unsigned long) status,
+                 (unsigned long) (status & 0xFFFF), (unsigned long) ((status >> 16) & 1));
+    });
+    cli.addBoundlessCmd("anaw", [](cmd *c) {
+        Command cc(c);
+        int pin = cc.getArg(0).getValue().toInt();
+        int val = cc.getArg(1).getValue().toInt();   // 0..255
+        analogWrite(pin, val);
+        UART_LOG("anaw %d -> %d (Arduino LEDC)", pin, val);
+    });
     cli.addBoundlessCmd("wifi", cmdWifi); // wifi on | off [minutes]
     cli.addSingleArgCmd("wifi-add", cmdWifiAdd);
     cli.addSingleArgCmd("ota", cmdOta);

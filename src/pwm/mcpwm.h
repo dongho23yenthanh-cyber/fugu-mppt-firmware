@@ -2,7 +2,10 @@
 
 #include <array>
 #include "driver/mcpwm_prelude.h"
+#include "driver/gpio.h"
 #include "esp_err.h"
+#include "esp_log.h"
+#include "soc/gpio_reg.h"
 #include "mcpwm_timing.h"
 
 // One GPIO fault per group, shared by all legs. OST brake latches gates LOW in HW.
@@ -67,6 +70,8 @@ public:
     // fixedTicks>0 pins period_ticks (LEDC-equivalent); 0 -> bestTiming(freq).
     void init(int group, uint32_t freq, int pinHS, int pinLS,
               uint32_t dtTicks, bool enLogic, uint32_t fixedTicks = 0) {
+        ESP_LOGI("mcpwm-leg", "init grp=%d freq=%u pinHS=%d pinLS=%d dtTicks=%u enLogic=%d fixed=%u",
+                 group, (unsigned) freq, pinHS, pinLS, (unsigned) dtTicks, enLogic, (unsigned) fixedTicks);
         PwmTiming t = fixedTicks ? PwmTiming{freq * fixedTicks, fixedTicks, freq}
                                  : bestTiming(freq);
         pwmMax = (uint16_t) t.period_ticks;
@@ -92,13 +97,29 @@ public:
         };
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpHS_));
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpLS_));
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpHS_, 0));
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpLS_, 0));
+        // Non-zero initial values: cmpHS=0 + cmpLS=0 would collapse TEZ-HIGH and cmp-LOW onto
+        // the same instant, leaving the generator stuck low on the first period.
+        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpHS_, pwmMax / 4));
+        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpLS_, pwmMax / 2));
+
+        // ESP32-S3: enable GPIO output BEFORE mcpwm_new_generator (the IDF only sets GPIO_ENABLE
+        // in esp_rom_gpio_connect_out_signal for ESP32/S2). INPUT_OUTPUT (not plain OUTPUT)
+        // keeps FUN_IE=1 in IO_MUX -- with FUN_IE=0 the pad's output path isn't actually driven
+        // out, despite enable=1 and a valid OUT_SEL. Note gpio_set_direction also resets OUT_SEL
+        // to GPIO-direct, so mcpwm_new_generator must run AFTER to re-route the peripheral signal.
+        ESP_ERROR_CHECK(gpio_set_direction((gpio_num_t) pinHS, GPIO_MODE_INPUT_OUTPUT));
+        ESP_ERROR_CHECK(gpio_set_direction((gpio_num_t) pinLS, GPIO_MODE_INPUT_OUTPUT));
 
         mcpwm_generator_config_t gHS = {.gen_gpio_num = pinHS, .flags = {}};
         mcpwm_generator_config_t gLS = {.gen_gpio_num = pinLS, .flags = {}};
         ESP_ERROR_CHECK(mcpwm_new_generator(oper_, &gHS, &genHS_));
         ESP_ERROR_CHECK(mcpwm_new_generator(oper_, &gLS, &genLS_));
+
+        // ESP32-S3: MCPWM's peripheral-OEN signal isn't asserted, so OEN_SEL=0 (default) leaves
+        // the pin high-Z. Set OEN_SEL=1 (bit 10) on the OUT_SEL_CFG register so output enable
+        // comes from GPIO_ENABLE (which we set above via gpio_set_direction).
+        REG_SET_BIT(GPIO_FUNC0_OUT_SEL_CFG_REG + (pinHS * 4), BIT(10));
+        REG_SET_BIT(GPIO_FUNC0_OUT_SEL_CFG_REG + (pinLS * 4), BIT(10));
 
         // HS: HIGH at TEZ, LOW at cmpHS  ->  on [0, hsOff]
         ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(genHS_,
@@ -117,15 +138,18 @@ public:
         ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(genLS_,
             MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, cmpLS_, MCPWM_GEN_ACTION_LOW)));
 
-        // Dead-time: delay both rising edges by dtTicks (HiLi). 0 = no-op (InEn).
+        // Dead-time: each MCPWM operator has ONE shared dead-time submodule, so we delay only
+        // the LS rising edge by dtTicks (covers the HS->LS transition). The LS->HS transition
+        // (start of next period) gets its dead-band by reducing pwmMax by dtTicks so software
+        // clamps keep lsOff <= period - dtTicks. HiLi only; 0 = no-op (InEn).
         if (dtTicks) {
             mcpwm_dead_time_config_t dt = {
                 .posedge_delay_ticks = dtTicks,
                 .negedge_delay_ticks = 0,
                 .flags = {.invert_output = 0},
             };
-            ESP_ERROR_CHECK(mcpwm_generator_set_dead_time(genHS_, genHS_, &dt));
             ESP_ERROR_CHECK(mcpwm_generator_set_dead_time(genLS_, genLS_, &dt));
+            pwmMax = (uint16_t) (t.period_ticks - dtTicks);   // reserves the LS->HS dead-band
         }
     }
 
@@ -133,6 +157,9 @@ public:
     inline void setLsOff(uint16_t c) { mcpwm_comparator_set_compare_value(cmpLS_, c); }
 
     void start() {
+        // Defense in depth: clear any latched force-level state from a prior brake/shutdown.
+        mcpwm_generator_set_force_level(genHS_, -1, true);
+        mcpwm_generator_set_force_level(genLS_, -1, true);
         ESP_ERROR_CHECK(mcpwm_timer_enable(timer_));
         ESP_ERROR_CHECK(mcpwm_timer_start_stop(timer_, MCPWM_TIMER_START_NO_STOP));
     }

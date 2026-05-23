@@ -322,9 +322,6 @@ void setup() {
     enable_esp_log_to_telnet();
 #endif
 
-#if defined(BENCH_TELE) && WITH_BINARY_TELE
-    benchTele(); // one-shot encode/compress microbench
-#endif
 
     // the compress+send task is now spawned by TelemetryService::onStart (and deleted on stop)
 

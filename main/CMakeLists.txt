@@ -66,6 +66,12 @@ if ($ENV{WITH_BLE})
     component_compile_definitions("WITH_BLE=1")
 endif ()
 
+# WITH_MCPWM=1 swaps the LEDC gate driver for the MCPWM driver (src/pwm/mcpwm.h):
+# hardware dead-time, GPIO OST brake, glitch-free comparator updates. See doc/mcpwm-sync-buck-driver.md.
+if ($ENV{WITH_MCPWM})
+    component_compile_definitions("WITH_MCPWM=1")
+endif ()
+
 # WITH_BINARY_TELE=1 sends telemetry as the binary symbol-table wire (sym_line_protocol.h) +
 # compression (tele.conf compressor=none|tamp, default tamp) instead of text influx line protocol.
 # The receiver on UDP :8086 must then strip the 1-byte compressor id, decompress, and decode the

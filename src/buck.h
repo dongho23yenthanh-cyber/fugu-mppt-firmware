@@ -10,11 +10,18 @@
 
 #include <Arduino.h>
 //#include "pinconfig.h"
+#if WITH_MCPWM
+#include "pwm/mcpwm.h"
+using PwmDriver = MCPWM_SyncLeg;
+#else
 #include "pwm/ledc.h"
+using PwmDriver = PWM_ESP32_ledc;
+#endif
 
 #else
 
 #include "pwm/mock.h"
+using PwmDriver = PWM_Mock;
 
 #endif
 
@@ -56,10 +63,9 @@ class SynchronousConverter {
     static constexpr float UnityRatioMargin = 1e-2f;
 
 
-#ifdef ARDUINO
-    PWM_ESP32_ledc pwmDriver;
-#else
-    PWM_Mock pwmDriver;
+    PwmDriver pwmDriver;
+#if WITH_MCPWM
+    MCPWM_FaultBrake faultBrake;
 #endif
 
     bool pwmEnLogic = false; // whether the driver has a IN/SD input logic (instead of HI/LO)
@@ -145,8 +151,12 @@ public:
         }
         manualRect = constrain(ls, (int) pwmRectMin, (int) (pwmDriver.pwmMax - pwmCtrl));
         pwmRect = (uint16_t) manualRect;
+#if WITH_MCPWM
+        pwmDriver.setLsOff(pwmCtrl + pwmRect);
+#else
         if (pwmEnLogic) pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl + pwmRect);
         else pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl, pwmRect);
+#endif
     }
 
     void init(const ConfFile &converterConf, const ConfFile &boardConf, const ConfFile &coilConf) {
@@ -213,8 +223,23 @@ public:
             throw std::runtime_error("unrecognized pwm_driver_logic " + drvInpLogic);
         }
 
+#if WITH_MCPWM
+        // pwmMax pinned to LEDC-equivalent so rect_offset/pwmRectMin calibration stays bit-identical.
+        constexpr uint32_t kFixedTicks = 2048;
+        uint32_t dtTicks = (uint32_t) std::lround(
+            boardConf.getFloat("pwm_deadtime_ns", 0.f) * 1e-9f
+            * (float) pwmFrequency * (float) kFixedTicks);
+        pwmDriver.init(0, pwmFrequency, pinCtrl, pinRect, dtTicks, pwmEnLogic, kFixedTicks);
+        uint8_t faultPin = boardConf.getByte("pwm_fault_pin", 255);
+        if (faultPin != 255) {
+            faultBrake.initGpio(0, faultPin, boardConf.getByte("pwm_fault_active_high", 0));
+            faultBrake.bindLeg(pwmDriver.oper(), pwmDriver.genHS(), pwmDriver.genLS());
+        }
+        pwmDriver.start();
+#else
         pwmDriver.init_pwm(pwmCh_Ctrl, pinCtrl, pwmFrequency);
         pwmDriver.init_pwm(pwmCh_Rect, pinRect, pwmFrequency);
+#endif
 
         if (pinSd != 255) {
             pinMode(pinSd, OUTPUT);
@@ -310,6 +335,13 @@ public:
         }
 
 
+#if WITH_MCPWM
+        // Both comparators latch together on TEZ -> order-independent, glitch-free.
+        // The largerDecrease/direction ordering dance is only needed for LEDC's two-write update.
+        pwmDriver.setHsOff(pwmCtrl);
+        pwmDriver.setLsOff(pwmCtrl + pwmRect);
+        (void) largerDecrease;
+#else
         if (largerDecrease) {
             /*
              * with larger decreases of duty cycle do a "safe" update
@@ -348,6 +380,7 @@ public:
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl, pwmRect);
             }
         }
+#endif
     }
 
 
@@ -376,11 +409,12 @@ public:
 
     void disable() {
         if (pinSd != 255)digitalWrite(pinSd, 1);
-        //pwmDriver.update_pwm(pwmCh_Ctrl, 0);
-        //pwmDriver.update_pwm(pwmCh_Rect, 0);
-
+#if WITH_MCPWM
+        pwmDriver.forceShutdown();
+#else
         pwmDriver.stop(pwmCh_Ctrl, 0);
         pwmDriver.stop(pwmCh_Rect, 0);
+#endif
 
         if (pwmCtrl > pwmCtrlMin)
             UART_LOG("PWM disabled (duty cycle was %d)\n", (int) pwmCtrl);
@@ -502,11 +536,15 @@ public:
                 UART_LOG("Set pwmLS %hu -> pwmMaxLS=%hu (VR=%.3f)", pwmRect, pwmRectMax, outInVoltageRatio);
             }
             pwmRect = pwmRectMax;
+#if WITH_MCPWM
+            pwmDriver.setLsOff(pwmCtrl + pwmRect); // instantly commit if limit decreases
+#else
             if (pwmEnLogic) {
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl + pwmRect); // instantly commit if limit decreases
             } else {
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl, pwmRect);
             }
+#endif
         }
 
         return outInVoltageRatio;
@@ -540,21 +578,31 @@ public:
                          pwmRectMin, outInVoltageRatio, pwmRectMax);
             }
             pwmRect = pwmRectMin;
+#if WITH_MCPWM
+            pwmDriver.setLsOff(pwmCtrl + pwmRect);
+#else
             if (pwmEnLogic) {
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl + pwmRect);
             } else {
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl, pwmRect);
             }
+#endif
         }
     }
 
     void shortLs() {
         disable();
 
+#if WITH_MCPWM
+        // Hold-LS-high diagnostic mode not supported by force_level shutdown.
+        // Drop SD if available; otherwise just stays in forceShutdown state.
+        ESP_LOGW("buck", "shortLs() is a LEDC-only diagnostic; ignored under WITH_MCPWM");
+#else
         auto pwmChLS = boost() ? pwmCh_Ctrl : pwmCh_Rect;
         auto pwmChHS = !boost() ? pwmCh_Ctrl : pwmCh_Rect;
         pwmDriver.stop(pwmChLS, 1);
         pwmDriver.stop(pwmChHS, 0);
+#endif
         if (pinSd != 255)digitalWrite(pinSd, 0);
     }
 };

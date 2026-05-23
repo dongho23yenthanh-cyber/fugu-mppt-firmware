@@ -46,6 +46,8 @@ extern unsigned long maxLoopLag;
 extern unsigned long maxLoopDT;
 #endif
 
+#define WITH_PWM_DIAGNOSTICS 1
+
 // Defined in main.cpp (non-static so we can reach them from here).
 void systemRestart();
 
@@ -551,6 +553,8 @@ void setupCli() {
     cli.addSingleArgCmd("fan", cmdFan);
     cli.addSingleArgCmd("led", cmdLed);
     cli.addBoundlessCmd("gpio", cmdGpio);
+
+#if WITH_PWM_DIAGNOSTICS
     cli.addSingleArgCmd("mcpwmtest", cmdMcpwmTest);
     cli.addSingleArgCmd("gpiodump", [](cmd *c) {
         int pin = Command(c).getArg(0).getValue().toInt();
@@ -595,6 +599,7 @@ void setupCli() {
         analogWrite(pin, val);
         UART_LOG("anaw %d -> %d (Arduino LEDC)", pin, val);
     });
+#endif
 #ifdef WITH_NETW
     cli.addBoundlessCmd("wifi", cmdWifi); // wifi on | off [minutes]
     cli.addSingleArgCmd("wifi-add", cmdWifiAdd);

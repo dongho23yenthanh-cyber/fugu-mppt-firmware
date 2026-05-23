@@ -30,9 +30,35 @@ public:
         return i;
     }
 
+    void setBat(float vbat, float rbat) { vbat_ = vbat; rbat_ = rbat; }
+    void setPassives(float c_in, float c_out, float l) { cIn_ = c_in; cOut_ = c_out; l_ = l; }
+    void setVin(float v) { vIn_ = v; }
+    void setVout(float v) { vOut_ = v; }
+    [[nodiscard]] float getVin() const  { return vIn_; }
+    [[nodiscard]] float getVout() const { return vOut_; }
+    [[nodiscard]] float getIL() const   { return iLEnd_; }
+
+    // Advance the model by dt_s seconds. Without PwmState updates, uses last
+    // latched pwm (zero by default -> converter idle, no I_L, I_in=I_out=0,
+    // caps drift toward source/sink).
+    void stepSeconds(float dt_s, uint32_t pwmFreqFallback);
+
 private:
     // PV
     float isc_ = 8.0f;
     float voc_ = 40.0f;
     float pvK_ = 2.0f;
+
+    // Battery + passives
+    float vbat_ = 28.0f;
+    float rbat_ = 0.05f;
+    float cIn_  = 470e-6f;
+    float cOut_ = 470e-6f;
+    float l_    = 50e-6f;
+
+    // State
+    float vIn_   = 0.0f;
+    float vOut_  = 0.0f;
+    float iLEnd_ = 0.0f;   // coil current at end of last PWM cycle
+    PwmState pwm_{};
 };

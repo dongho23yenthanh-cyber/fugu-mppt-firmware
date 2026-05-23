@@ -26,8 +26,29 @@ static void test_pv_iv_curve() {
     }
 }
 
+static void test_battery_cap_dynamics() {
+    VirtualConverter vc;
+    vc.setPv(8.0f, 40.0f, 2.0f);
+    vc.setBat(/*vbat=*/28.0f, /*rbat=*/0.05f);
+    vc.setPassives(/*c_in=*/470e-6f, /*c_out=*/470e-6f, /*L=*/50e-6f);
+
+    // No PWM applied yet -> caps integrate net source/sink current.
+    vc.setVin(20.0f);
+    vc.setVout(28.0f);
+    // step 1 ms = ~39 PWM cycles at 39 kHz. Without PWM events, Iin/Iout=0,
+    // so Vin should rise toward Voc (PV charges Cin), Vout should stay ~Vbat.
+    const float vin0 = vc.getVin();
+    const float vout0 = vc.getVout();
+    vc.stepSeconds(/*dt=*/1e-3f, /*pwmFreqFallback=*/39000);
+
+    assert(vc.getVin() > vin0);
+    assert(vc.getVin() <= 40.5f);
+    assert(approxEq(vc.getVout(), vout0, 0.05f));
+}
+
 int main() {
     test_pv_iv_curve();
+    test_battery_cap_dynamics();
     std::printf("vconv-test: all asserts passed\n");
     return 0;
 }

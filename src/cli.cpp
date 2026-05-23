@@ -621,14 +621,10 @@ bool handleCommand(const String &inp) {
     ESP_LOGI("main", "received serial command: '%s'", inp.c_str());
 
     // +N / -N PWM step is a signed numeric token, not a named command -> handle before SimpleCLI.
+    // does not enable manual pwm!
     if ((inp[0] == '+' or inp[0] == '-') && !adcSampler.isCalibrating() && inp.length() < 6 &&
         inp.toInt() != 0 && std::abs(inp.toInt()) < converter.pwmCtrlMax) {
         int pwmStep = inp.toInt();
-        // route through the duty target so only the RT core writes PWM (no cross-core race);
-        // implies manual mode, same as 'dc'
-        if (!manualPwm)
-            ESP_LOGI("main", "Switched to manual PWM");
-        manualPwm = true;
         int target = (int) converter.getCtrlOnPwmCnt() + pwmStep;
         if (target < 0) target = 0;
         mppt.setTargetDutyCycle((uint16_t) target);

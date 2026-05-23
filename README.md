@@ -89,7 +89,24 @@ idf.py flash
 
 ## Configuring Build
 
-* Set environment variable `RUN_TESTS=1` to run unit-tests
+Build-time features are toggled via environment variables read in `main/CMakeLists.txt` (and `CMakeLists.txt`
+for sdkconfig layering). Set them on the `idf.py build` invocation, e.g.
+`WITH_BLE=1 WITH_BINARY_TELE=1 idf.py build`.
+
+| Flag                | Default | What it does                                                                                                                                                                                                                |
+|---------------------|--------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `WITH_NETW`         |     on  | WiFi, mDNS, MQTT, telemetry (UDP/InfluxDB), HTTPS OTA, certificates, web server, FTP, telnet. Set `WITH_NETW=0` to strip all of them. Saves ~700 KB; BLE console and BLE OTA remain. Layers in `sdkconfig.no_netw` when off. |
+| `WITH_BLE`          |    off  | NimBLE NUS console (`BleConsoleService`) and BLE OTA push (`otab` command). Layers in `sdkconfig.ble`. Costs ~150 KB.                                                                                                       |
+| `WITH_MCPWM`        |    off  | Swaps the LEDC gate driver for the MCPWM driver (hardware dead-time, GPIO OST brake, glitch-free comparator updates). See [`doc/mcpwm-sync-buck-driver.md`](doc/mcpwm-sync-buck-driver.md).                                  |
+| `WITH_BINARY_TELE`  |    off  | Sends telemetry as a binary symbol-table wire format (`sym_line_protocol.h`) with optional `tamp` compression. The UDP `:8086` receiver must decode it — plain InfluxDB ingestion no longer works.                          |
+| `WITH_SPROFILER`    |    off  | Compiles in the semihosting sampling profiler (`sprofiler_initialize`, only useful with OpenOCD attached). When off, the `esp32-semihosting-profiler` component is excluded entirely (~8 KB BSS).                            |
+| `BENCH_TELE`        |    off  | One-shot encode/compress microbench at boot, prints via `ESP_LOGW("bench", ...)`. Requires `WITH_BINARY_TELE=1`.                                                                                                            |
+
+Other build env vars:
+
+* `RUN_TESTS=1` swaps `src/main.cpp` for `test/main.cpp` and the Unity test sources (see `main/CMakeLists.txt`).
+* `MAIN_SRC=path/to/entry.cpp` swaps in a single alternate entry point without touching CMake (e.g. `MAIN_SRC=../test/test_buck.cpp idf.py build`).
+* `FUGU_BAT_V=14.25|28.5|57` hardcodes the battery max voltage at build time. Leave unset to read it from `charger.conf` at runtime.
 
 ## Board Configuration
 

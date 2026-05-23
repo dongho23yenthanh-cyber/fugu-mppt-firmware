@@ -49,10 +49,6 @@ inline TelePoint makeTelePoint(const char *measurement) { return LineProtocol(me
 
 void telemetryAddPoint(TelePoint &p, uint16_t maxQueue = 40);
 
-#if defined(BENCH_TELE) && WITH_BINARY_TELE
-void benchTele();   // one-shot encode/compress microbench, prints via ESP_LOGW("bench", ...)
-#endif
-
 class ADC_Sampler;
 struct Sensor;
 

@@ -211,6 +211,8 @@ Devices with hostnames like `fugu-esp32s3-*` are bench devices, not real power c
 Confirm the hostname in the welcome message (`Welcome to <hostname> (192.168.4.2)`), as IPs are not static.
 Confirm the device ip address with the `ip` command.
 You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200`
+You can find battery data with `batmon()` in
+`/Users/fab/dev/ha/home-assistant-addons/batmon-ha/tools/impedance/datasets.py`, use default device="bat_caravan"
 
 # Important
 
@@ -225,8 +227,10 @@ You have a device log history available through `ssh havan.local` `tail pv/fugu_
 - keep code comments at a minimum and short
 - if your identity is 'OpenCode (powered by moonshotai/kimi-k2.6)', set your git username to "kimi" and always commit
   with this name
-- if your identity is 'Claude Code, Anthropic's official CLI for Claude', et your git username to "claude" and always
+- if your identity is 'Claude Code, Anthropic's official CLI for Claude', set your git username to "claude" and always
   commit with this name
+- before `git commit ...`, always check for staged files and unstage those changes that are unrelated to what you just
+  did.
 - a mock-ADC configuration for physical devices is in [dry_mock](config/lab/dry_mock)
     - [wokwi_mock](config/lab/wokwi_mock) is for work with the Wokwi simulator
 - in commit messages, try to be short, it's not necessary to point out which functions are called, just an abstract

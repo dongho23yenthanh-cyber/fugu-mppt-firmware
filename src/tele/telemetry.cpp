@@ -351,45 +351,4 @@ void dcdcDataChanged(const ADC_Sampler &dcdc, const Sensor &sensor) {
     }
 }
 
-#if defined(BENCH_TELE) && WITH_BINARY_TELE
-#include <esp_timer.h>
-template<class P> static void fillBench(P &p) {       // representative mppt point (~19 fields)
-    p.addTag("device", "bench-dev");
-    p.addField("I", 12.34f, 3);     p.addField("Ui", 59.41f, 2);   p.addField("Uo", 26.80f, 2);
-    p.addField("P", 330.2f, 2);     p.addField("P_smooth", 330.5f, 2);
-    p.addField("E", 16411.5f, 1);   p.addField("E_today", 1234.5f, 1);
-    p.addField("pwm_dir_f", -0.02f, 2); p.addField("mppt_state", (int) 4);
-    p.addField("mcu_temp", 53.0f, 1);   p.addField("ntc_temp", 47.9f, 1);
-    p.addField("pwm_duty", (int) 957);  p.addField("pwm_ls_duty", (int) 1090); p.addField("pwm_ls_max", (int) 1090);
-    p.addField("pwm_dcm", false);
-    p.addField("P_filt", 330.7f, 2); p.addField("P_prev", 331.0f, 2);
-    p.addField("dP", -0.11f, 2);     p.addField("dP_thres", 0.0f, 2);
-    p.addField("cv_lim_idx", (int) 0);
-    p.setTimeMs();
-}
-
-void benchTele() {
-    constexpr int N = 2000;
-    int64_t t0 = esp_timer_get_time();
-    for (int i = 0; i < N; i++) { LineProtocol p("mppt"); fillBench(p); volatile auto s = p.takeWire().size(); (void) s; }
-    int64_t t1 = esp_timer_get_time();
-    { BinaryLineProtocol w(g_symtab, "mppt"); fillBench(w); (void) w.takeWire(); }  // warm the symbol table
-    int64_t t2 = esp_timer_get_time();
-    for (int i = 0; i < N; i++) { BinaryLineProtocol p(g_symtab, "mppt"); fillBench(p); volatile auto s = p.takeWire().size(); (void) s; }
-    int64_t t3 = esp_timer_get_time();
-
-    std::string batch;
-    for (int i = 0; i < 40; i++) { BinaryLineProtocol p(g_symtab, "mppt"); fillBench(p); batch += p.takeWire(); }
-    Compressor &comp = compressorByName("tamp");
-    std::string out; constexpr int M = 200;
-    int64_t t4 = esp_timer_get_time();
-    for (int i = 0; i < M; i++) comp.packet((const uint8_t *) batch.data(), batch.size(), out);
-    int64_t t5 = esp_timer_get_time();
-
-    double textUs = double(t1 - t0) / N, binUs = double(t3 - t2) / N, tampUs = double(t5 - t4) / M;
-    ESP_LOGW("bench", "tele encode: text %.2f us/pt | binary %.2f us/pt (%.2fx faster) | "
-                      "tamp 40-pt batch %u->%u B in %.1f us (%.2f us/pt)",
-             textUs, binUs, textUs / binUs, (unsigned) batch.size(), (unsigned) out.size(), tampUs, tampUs / 40.0);
-}
-#endif
 

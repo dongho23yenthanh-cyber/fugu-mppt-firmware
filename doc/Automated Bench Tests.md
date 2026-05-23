@@ -231,6 +231,24 @@ Mirror the buck cases with Vin < Vout: OV on output, reverse current, MPP tracki
 
 ---
 
+## Automated gate-driver test
+
+`etc/mcpwm_gate_verify.py` — closed-loop PWM verifier. Drives the device over serial or
+telnet while capturing HS/LS gates on a PicoScope 2000. Asserts frequency, HS-duty
+linearity, LS pulse position/width across an HS × LS grid, dead-time + no shoot-through,
+and the hardware fault brake. Refuses to run against `fry`/`flat` unless `--force-host` —
+default allow-list is `fugu-esp32s3-*` mock boards.
+
+    etc/mcpwm_gate_verify.py --serial /dev/cu.usbmodem2101 [--skip-fault]
+    etc/mcpwm_gate_verify.py --ip 192.168.1.173 --port 232 [--skip-fault]
+
+Wiring: Ch A on `board.conf::pwm_hi`, Ch B on `board.conf::pwm_li`, both DC-coupled at 5 V
+range. For Phase 4, also wire a free GPIO (default 14, set with `--fault-driver-pin`) to
+`board.conf::pwm_fault_pin`. See `docs/superpowers/specs/2026-05-23-pwm-gate-verifier-design.md`
+for the full spec and PASS-gate math.
+
+---
+
 ## Automation notes
 
 - Wrap each case as: set PSU + load → issue console command(s) → wait → read console/telemetry →

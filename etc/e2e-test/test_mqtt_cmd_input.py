@@ -99,7 +99,8 @@ class LogTap:
         token = "e2eid_" + os.urandom(4).hex()
         cursor = self._raw_len()
         ctrl.run(token, timeout=4)            # unknown command: still echoed + logged
-        marker = f"received serial command: '{token}'"
+        marker = f"received serial command: '{token}'" # todo use CliMarkers.RX_CMD
+        raise NotImplementedError()
         t0 = time.monotonic()
         while time.monotonic() - t0 < timeout:
             with self._lock:

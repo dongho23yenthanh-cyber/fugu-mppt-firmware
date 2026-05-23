@@ -101,12 +101,6 @@ if ($ENV{WITH_BINARY_TELE})
     component_compile_definitions("WITH_BINARY_TELE=1")
 endif ()
 
-# BENCH_TELE=1 runs a one-shot encode/compress microbench at boot (benchTele, prints via
-# ESP_LOGW("bench", ...)). Requires WITH_BINARY_TELE (compares LineProtocol vs BinaryLineProtocol).
-if ($ENV{BENCH_TELE})
-    component_compile_definitions("BENCH_TELE=1")
-endif ()
-
 # WITH_SPROFILER=1 compiles in the semihosting sampling profiler (sprofiler_initialize, only useful
 # with OpenOCD attached). Off by default; the top-level CMakeLists then EXCLUDE_COMPONENTS the
 # esp32-semihosting-profiler component so its flash + ~8 KB .bss is dropped entirely.

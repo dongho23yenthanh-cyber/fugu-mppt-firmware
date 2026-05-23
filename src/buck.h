@@ -252,7 +252,7 @@ public:
         // not otherwise pulled low (high duty, or DCM/zero coil current). Fixed time, not a duty
         // fraction: the recharge need is set by HS gate charge, independent of fsw. During normal
         // conversion the LS body diode refreshes the cap, so this only binds in those corners.
-        auto bootRefreshNs = boardConf.getFloat("boot_refresh_ns", 1500.f);
+        auto bootRefreshNs = boardConf.getFloat("boot_refresh_ns", 500.f);
         pwmRectMin = isBoost ? 0 : (uint16_t) std::ceil(
                          bootRefreshNs * 1e-9f * (float) pwmFrequency * (float) pwmDriver.pwmMax);
         pwmCtrlMax = (uint16_t) (pwmDriver.pwmMax - pwmRectMin);
@@ -260,8 +260,8 @@ public:
         // note that mosfets have different Vg(th) and switching times worst case is Vi/o=80/12
         // ^ set pwmMinHS a bit lower than pwmMinLS (might cause no-load output over-voltage otherwise)
 
-        ESP_LOGI("converter", "f=%lu boost=%d pwmMax=%hu minLS=%hu minHS=%hu maxHS=%hu",
-                 pwmFrequency, isBoost, pwmDriver.pwmMax, pwmRectMin, pwmCtrlMin, pwmCtrlMax);
+        ESP_LOGI("converter", "drv=%s f=%lu boost=%d pwmMax=%hu minLS=%hu minHS=%hu maxHS=%hu",
+                 pwmDriver.name, pwmFrequency, isBoost, pwmDriver.pwmMax, pwmRectMin, pwmCtrlMin, pwmCtrlMax);
     }
 
     void computePwmRectMax() {

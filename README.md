@@ -100,7 +100,6 @@ for sdkconfig layering). Set them on the `idf.py build` invocation, e.g.
 | `WITH_MCPWM`        |    off  | Swaps the LEDC gate driver for the MCPWM driver (hardware dead-time, GPIO OST brake, glitch-free comparator updates). See [`doc/mcpwm-sync-buck-driver.md`](doc/mcpwm-sync-buck-driver.md).                                  |
 | `WITH_BINARY_TELE`  |    off  | Sends telemetry as a binary symbol-table wire format (`sym_line_protocol.h`) with optional `tamp` compression. The UDP `:8086` receiver must decode it — plain InfluxDB ingestion no longer works.                          |
 | `WITH_SPROFILER`    |    off  | Compiles in the semihosting sampling profiler (`sprofiler_initialize`, only useful with OpenOCD attached). When off, the `esp32-semihosting-profiler` component is excluded entirely (~8 KB BSS).                            |
-| `BENCH_TELE`        |    off  | One-shot encode/compress microbench at boot, prints via `ESP_LOGW("bench", ...)`. Requires `WITH_BINARY_TELE=1`.                                                                                                            |
 
 Other build env vars:
 

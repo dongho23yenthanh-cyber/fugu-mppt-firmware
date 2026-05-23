@@ -93,7 +93,11 @@ bool setupErr = false;
 float conversionEfficiency;
 uint16_t loopRateMin = 0;
 
+#ifdef WITH_NETW
 Scope *scope = &scopeService.scopeObj; // RT/ADC path uses this pointer; object owned by scopeService
+#else
+Scope *scope = nullptr; // RT/ADC scope publish becomes a no-op without the TCP scope service
+#endif
 
 KeyValueStorage nvs{};
 
@@ -214,13 +218,11 @@ void setup() {
         }
 
 
-#ifdef WITH_NETW
-#ifdef NO_WIFI
+#if defined(WITH_NETW) && defined(NO_WIFI)
     disableWifi = true;
 #endif
-#endif
 
-    TeleConf teleConf{};
+    TeleConf teleConf{};  // default-constructed (influxdbHost=nullptr) when WITH_NETW=0; mppt.begin handles it
 
 #ifdef WITH_NETW
     if (!disableWifi) {
@@ -250,7 +252,9 @@ void setup() {
     try {
         setupSensors(boardConf, lim);
         mppt.initSensors(boardConf);
+#ifdef WITH_NETW
         scope->addChannel(&mppt, 0, 'u', 12, "vout_filt"); // scope owned by scopeService (scope -> &scopeObj)
+#endif
 
         if (!setupErr) {
             ConfFile coilConf{"/littlefs/conf/coil.conf"};

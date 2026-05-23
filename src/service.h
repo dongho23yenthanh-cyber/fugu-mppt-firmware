@@ -193,11 +193,12 @@ public:
 
     const std::vector<Service *> &all() const { return _services; }
 
-    // Start every service whose persisted enabled flag is set. Network services may fail here if
-    // WiFi isn't up yet; they self-heal via startEnabledNetworkServices() on the WiFi-up edge.
-    void startEnabledAtBoot() {
+    // Start every service whose persisted enabled flag is set. Network services are skipped when
+    // networkUp=false (they'd just transition to Failed with no recourse); they self-heal via
+    // startEnabledNetworkServices() on the WiFi-up edge and stay Stopped if WiFi never comes up.
+    void startEnabledAtBoot(bool networkUp) {
         for (auto *s: _services)
-            if (s->enabled()) s->start();
+            if (s->enabled() && (networkUp || !s->requiresNetwork())) s->start();
     }
 
     // Self-heal: (re)start enabled network services that aren't Running. Called when WiFi connects.

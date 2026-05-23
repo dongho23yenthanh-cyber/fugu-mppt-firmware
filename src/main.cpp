@@ -314,7 +314,8 @@ void setup() {
 #ifdef WITH_BLE
     g_services.registerService(&bleConsoleService);
 #endif
-    g_services.startEnabledAtBoot(); // network services may fail now; self-heal on WiFi-up edge
+    // network services skipped when WiFi isn't up; self-heal on WiFi-up edge in loopNetwork_task
+    g_services.startEnabledAtBoot(WiFi.isConnected());
 
     // this will defer all logs, if abort() is called during setup we might never see relevant messages
     // so calls this after everything else has been set up

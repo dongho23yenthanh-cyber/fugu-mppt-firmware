@@ -468,3 +468,165 @@ t = [
 
 
 
+
+alias idf-noble='WITH_BLE=0 idf.py -B build-noble'
+
+
+
+
+
+
+
+
+# panic:
+
+```
+ERR: vconv bat r_bat 1
+V=76.0/36.43 I=0.00/ 0.00A   0.0W 1℃45℃ 6809sps  0㎅/s CCM(H|L|Lm)=   0|   0|2045 st= MANU,0 lag=994㎲ N=235232 rssi=0
+> vconv set r_bat 1
+I (261992) main: received serial command: 'vconv set r_bat 1'
+vconv: r_bat=1
+V=76.0/12.59 I=0.00/ 0.00A   0.0W 1℃45℃  0sps  0㎅/s CCM(H|L|Lm)=   0|   0|2045 st= MANU,0 lag=994㎲ N=316786 rssi=0
+OK: vconv set r_bat 1
+> dc 1
+I (266654) main: received serial command: 'dc 1'
+I (266654) main: Switched to manual PWM
+V=76.0/ 0.00 I=0.00/ 0.00A   0.0W 1℃45℃  0sps  0㎅/s CCM(H|L|Lm)=   0|   0|2045 st= MANU,0 lag=994㎲ N=330770 rssi=0
+OK: dc 1
+(266168188): Converter enabled
+(266168949): converter: CCM -> DCM (M=-0.00, I=0.00, ∆I/2=-0.00, pwm=1)
+I (266656) mppt: Reached target duty cycle 1
+V=76.0/ 0.04 I=0.00/ 0.04A   0.0W 1℃45℃ 2992sps  0㎅/s DCM(H|L|Lm)=   1|  40|  40 st= MANU,1 lag=994㎲ N=339767 rssi=0
+> dc 100
+I (271806) main: received serial command: 'dc 100'
+V=76.0/ 0.04 I=0.00/ 0.04A   0.0W 1℃45℃  0sps  0㎅/s DCM(H|L|Lm)=   1|  40|  40 st= MANU,1 lag=994㎲ N=346224 rssi=0
+OK: dc 100
+(271321325): converter: DCM -> CCM (M=0.00, I=0.15, ∆I/2=0.02, pwm=13)
+I (271815) mppt: Reached target duty cycle 100
+V=75.9/ 3.71 I=0.19/ 3.71A  14.2W 1℃45℃ 2995sps  0㎅/s CCM(H|L|Lm)= 100|  40|1946 st= MANU,1 lag=994㎲ N=355223 rssi=0
+V=75.9/ 3.71 I=0.19/ 3.71A  14.2W 1℃45℃ 3000sps  0㎅/s CCM(H|L|Lm)= 100|  40|1946 st= MANU,1 lag=994㎲ N=364229 rssi=0
+> sweep
+I (279877) main: received serial command: 'sweep'
+PWM disabled (duty cycle was 100)
+
+I (279877) mppt: Start sweep
+I (279878) mppt: Start calibration
+V= nan/ 0.48 I= nan/  nanA   nanW 1℃45℃  0sps  0㎅/s CCM(H|L|Lm)=   0|   0|1946 st=START,1 lag=994㎲ N=1 rssi=0
+OK: sweep
+I (279877) mppt: Stop sweep 123.48s mode=MPPT (lim=4 tgt=1000.00 act=13.76) PWM=100 MPP=(0.0W,0,0.0V)
+(279391137): Current above threshold 3.71 (pwm=0)
+(279391222): Back-flow switch enabled
+(279391262): Sync rect enabled
+I (279878) mppt: Start sweep
+I (279879) mppt: Start calibration
+I (279879) sensor: vin reset calibration
+I (279879) sensor: ntc reset calibration
+I (279879) sensor: vout reset calibration
+I (279926) plot: Not enough data to plot V
+I (279930) plot: Not enough data to plot D
+I (279948) store: Wrote /littlefs/stats (size 32)
+I (279948) flash: Wrote flash value /littlefs/stats
+I (279946) sampler: Sensor vin calibration: avg=76.0000 std=0.000000
+I (279947) sampler: Sensor vout calibration: avg=0.0000 std=1.673200
+I (279947) sampler: Sensor iout calibration: avg=0.0000 std=0.878408
+I (279948) sampler: Sensor iout offset-calibrated: 0.000000
+I (279948) sampler: Sensor ntc calibration: avg=0.9000 std=0.000000
+I (279948) sampler: Calibration done!
+(279461545): Back-flow switch disabled
+(279462078): Converter enabled
+(279462489): converter: CCM -> DCM (M=-0.00, I=-0.05, ∆I/2=-0.01, pwm=15)
+(279464103): converter: DCM -> CCM (M=0.00, I=0.17, ∆I/2=0.09, pwm=15)
+(279464861): Current above threshold 0.26 (pwm=15)
+(279465045): Back-flow switch enabled
+(279465075): Sync rect enabled
+I (282022) mppt: Stop sweep 2.08s mode=CV (lim=1 tgt=14.60 act=14.53) PWM=397 MPP=(210.7W,397,75.0V)
+I (282023) mppt: PWM fade to 397 stopped at controlMode CV
+I (282027) mppt: Grouping 3 V points (75.21,174.07)~(76.00,0.37) into 100 bins, binW=0.008
+
+174 ┼─────────────────────────────────────────────────╮                                                  
+169 ┤                                                 │                                                  
+164 ┤                                                 │                                                  
+159 ┤                                                 │                                                  
+153 ┤                                                 │                                                  
+148 ┤                                                 │                                                  
+143 ┤                                                 │                                                  
+138 ┤                                                 │                                                  
+133 ┤                                                 │                                                  
+128 ┤                                                 │                                                  
+123 ┤                                                 │                                                  
+117 ┤                                                 │                                                  
+112 ┤                                                 │                                                  
+107 ┤                                                 │                                                  
+102 ┤                                                 │                                                  
+ 97 ┤                                                 │                                                  
+ 92 ┤                                                 ╰───────────────────────────────────────────────── 
+  P|V     75.2 .. 76
+
+
+
+
+assert failed: block_locate_free tlsf_control_functions.h:618 (block_size(block) >= *size)
+
+
+Backtrace: 0x40382cb5:0x3fcc1e30 0x40382c81:0x3fcc1e50 0x4038b445:0x3fcc1e70 0x40389666:0x3fcc1f90 0x403890c3:0x3fcc1fb0 0x40376237:0x3fcc1fd0 0x40376259:0x3fcc2000 0x40375eca:0x3fcc2020 0x4038b4c5:0x3fcc2040 0x4210e801:0x3fcc2060 0x4203682e:0x3fcc2080 0x4203699d:0x3fcc20c0 0x42030d61:0x3fcc20f0 0x4201772a:0x3fcc2210
+--- 0x40382cb5: panic_abort at /Users/fab/dev/esp/idf5.5/components/esp_system/panic.c:469
+--- 0x40382c81: esp_system_abort at /Users/fab/dev/esp/idf5.5/components/esp_system/port/esp_system_chip.c:87
+--- 0x4038b445: __assert_func at /Users/fab/dev/esp/idf5.5/components/newlib/src/assert.c:80
+--- 0x40389666: block_locate_free at /Users/fab/dev/esp/idf5.5/components/heap/tlsf/tlsf_control_functions.h:618
+--- (inlined by) tlsf_malloc at /Users/fab/dev/esp/idf5.5/components/heap/tlsf/tlsf.c:444
+--- 0x403890c3: multi_heap_malloc_impl at /Users/fab/dev/esp/idf5.5/components/heap/multi_heap.c:216
+--- 0x40376237: aligned_or_unaligned_alloc at /Users/fab/dev/esp/idf5.5/components/heap/heap_caps_base.c:93
+--- (inlined by) heap_caps_aligned_alloc_base at /Users/fab/dev/esp/idf5.5/components/heap/heap_caps_base.c:175
+--- 0x40376259: heap_caps_malloc_base at /Users/fab/dev/esp/idf5.5/components/heap/heap_caps_base.c:202
+--- 0x40375eca: heap_caps_malloc at /Users/fab/dev/esp/idf5.5/components/heap/heap_caps.c:84
+--- (inlined by) heap_caps_malloc_default at /Users/fab/dev/esp/idf5.5/components/heap/heap_caps.c:110
+--- 0x4038b4c5: malloc at /Users/fab/dev/esp/idf5.5/components/newlib/src/heap.c:24
+--- 0x4210e801: operator new(unsigned int) at /builds/idf/crosstool-NG/.build/xtensa-esp-elf/src/gcc/libstdc++-v3/libsupc++/new_op.cc:50
+--- 0x4203682e: std::__new_allocator<std::__detail::_Hash_node<std::pair<char const* const, rtcount_stat>, false> >::allocate(unsigned int, void const*) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/new_allocator.h:151
+--- (inlined by) std::allocator<std::__detail::_Hash_node<std::pair<char const* const, rtcount_stat>, false> >::allocate(unsigned int) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/allocator.h:196
+--- (inlined by) std::allocator_traits<std::allocator<std::__detail::_Hash_node<std::pair<char const* const, rtcount_stat>, false> > >::allocate(std::allocator<std::__detail::_Hash_node<std::pair<char const* const, rtcount_stat>, false> >&, unsigned int) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/alloc_traits.h:478
+--- (inlined by) std::__detail::_Hash_node<std::pair<char const* const, rtcount_stat>, false>* std::__detail::_Hashtable_alloc<std::allocator<std::__detail::_Hash_node<std::pair<char const* const, rtcount_stat>, false> > >::_M_allocate_node<std::piecewise_construct_t const&, std::tuple<char const* const&>, std::tuple<> >(std::piecewise_construct_t const&, std::tuple<char const* const&>&&, std::tuple<>&&) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/hashtable_policy.h:2019
+--- (inlined by) std::_Hashtable<char const*, std::pair<char const* const, rtcount_stat>, std::allocator<std::pair<char const* const, rtcount_stat> >, std::__detail::_Select1st, std::equal_to<char const*>, std::hash<char const*>, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits<false, false, true> >::_Scoped_node::_Scoped_node<std::piecewise_construct_t const&, std::tuple<char const* const&>, std::tuple<> >(std::__detail::_Hashtable_alloc<std::allocator<std::__detail::_Hash_node<std::pair<char const* const, rtcount_stat>, false> > >*, std::piecewise_construct_t const&, std::tuple<char const* const&>&&, std::tuple<>&&) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/hashtable.h:312
+--- (inlined by) std::__detail::_Map_base<char const*, std::pair<char const* const, rtcount_stat>, std::allocator<std::pair<char const* const, rtcount_stat> >, std::__detail::_Select1st, std::equal_to<char const*>, std::hash<char const*>, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits<false, false, true>, true>::operator[](char const* const&) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/hashtable_policy.h:843
+--- 0x4203699d: std::unordered_map<char const*, rtcount_stat, std::hash<char const*>, std::equal_to<char const*>, std::allocator<std::pair<char const* const, rtcount_stat> > >::operator[](char const* const&) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/unordered_map.h:988
+--- (inlined by) rtcount(char const*) at /Users/fab/dev/pv/fugu-mppt-firmware/src/etc/rt.cpp:118
+--- 0x42030d61: MpptController::update() at /Users/fab/dev/pv/fugu-mppt-firmware/src/mppt.cpp:263
+--- 0x4201772a: loopRT(void*) at /Users/fab/dev/pv/fugu-mppt-firmware/src/main.cpp:659
+--- (inlined by) loopRT at /Users/fab/dev/pv/fugu-mppt-firmware/src/main.cpp:477
+
+
+
+
+ELF file SHA256: 949ab0c18
+
+Rebooting...
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0xc (RTC_SW_CPU_RST),boot:0x8 (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4202ee52
+--- 0x4202ee52: std::enable_if<std::__and_<std::__not_<std::__is_tuple_like<float> >, std::is_move_constructible<float>, std::is_move_assignable<float> >::value, void>::type std::swap<float>(float&, float&) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/move.h:222
+--- (inlined by) std::pair<float, float>::swap(std::pair<float, float>&) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/stl_pair.h:309
+--- (inlined by) std::enable_if<std::__and_<std::__is_swappable<float>, std::__is_swappable<float> >::value, void>::type std::swap<float, float>(std::pair<float, float>&, std::pair<float, float>&) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/stl_pair.h:1091
+--- (inlined by) void std::iter_swap<__gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > > >(__gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/stl_algobase.h:185
+--- (inlined by) __gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > > std::__unguarded_partition<__gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__ops::_Iter_less_iter>(__gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__ops::_Iter_less_iter) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/stl_algo.h:1842
+--- (inlined by) __gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > > std::__unguarded_partition_pivot<__gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__ops::_Iter_less_iter>(__gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__ops::_Iter_less_iter) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/stl_algo.h:1857
+--- (inlined by) void std::__introsort_loop<__gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, int, __gnu_cxx::__ops::_Iter_less_iter>(__gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, __gnu_cxx::__normal_iterator<std::pair<float, float>*, std::vector<std::pair<float, float>, std::allocator<std::pair<float, float> > > >, int, __gnu_cxx::__ops::_Iter_less_iter) at /Users/fab/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/bits/stl_algo.h:1889
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x1700
+load:0x403c8700,len:0xec0
+--- 0x403c8700: _stext at ??:?
+load:0x403cb700,len:0x31c0
+entry 0x403c894c
+--- 0x403c894c: call_start_cpu0 at /Users/fab/dev/esp/idf5.5/components/bootloader/subproject/main/bootloader_start.c:25
+I (24) boot: ESP-IDF v5.5.1-dirty 2nd stage bootloader
+I (24) boot: compile time May 24 2026 02:26:43
+I (24) boot: Multicore bootloader
+I (25) boot: chip revision: v0.2
+I (28) boot: efuse block revision: v1.4
+I (31) qio_mode: Enabling default flash chip QIO
+```
+
+
+
+TODO rename re-bulk charger conf?

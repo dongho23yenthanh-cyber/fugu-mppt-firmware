@@ -191,6 +191,12 @@ void setupSensors(const ConfFile &boardConf, const Limits &lim) {
         } else {
             sensors.Iin = adcSampler.addVirtualSensor(
                 [&]() {
+                    // Sensor.reset() leaves last=NaN until the first post-reset sample arrives
+                    // (calibration phase, ADC reInit, etc.). |NaN|<x is false, so without this
+                    // guard the division below would propagate NaN into power/MPPT.
+                    if (!std::isfinite(sensors.Iout->last) || !std::isfinite(sensors.Vin->last) ||
+                        !std::isfinite(sensors.Vout->last))
+                        return 0.f;
                     if (std::abs(sensors.Iout->last) < .01f or sensors.Vin->last < 0.1f)
                         return 0.f;
                     return sensors.Iout->last * sensors.Vout->last / sensors.Vin->last / conversionEfficiency;
@@ -217,6 +223,9 @@ void setupSensors(const ConfFile &boardConf, const Limits &lim) {
         } else {
             sensors.Iout = adcSampler.addVirtualSensor(
                 [&]() {
+                    if (!std::isfinite(sensors.Iin->last) || !std::isfinite(sensors.Vin->last) ||
+                        !std::isfinite(sensors.Vout->last))
+                        return 0.f;
                     if (std::abs(sensors.Iin->last) < .05f or sensors.Vout->last < 0.1f)
                         return 0.f;
                     return sensors.Iin->last * sensors.Vin->last / sensors.Vout->last * conversionEfficiency;

@@ -12,7 +12,7 @@ Before any `idf.py` invocation, source ESP-IDF into the shell. The repo ships a 
 ```bash
 . ./idf-export.sh          # sources ../../esp/idf5.5/export.sh, sets IDF_TARGET=esp32s3, autodetects $ESPPORT
 idf.py set-target esp32s3  # only needed once per build dir
-WITH_BINARY_TELE=1 WITH_BLE=1 idf.py build
+WITH_BINARY_TELE=1 idf.py build   # BLE on by default; pass WITH_BLE=0 to drop the NimBLE stack
 idf.py -p $ESPPORT flash monitor
 ```
 
@@ -228,8 +228,7 @@ You can find battery data with `batmon()` in
 - keep code comments at a minimum and short
 - if your identity is 'OpenCode (powered by moonshotai/kimi-k2.6)', set your git username to "kimi" and always commit
   with this name
-- if your identity is 'Claude Code, Anthropic's official CLI for Claude', set your git username to "claude" and always
-  commit with this name
+- if your identity is 'Claude Code, Anthropic's official CLI for Claude', do commits under my name.
 - before `git commit ...`, always check for staged files and unstage those changes that are unrelated to what you just
   did.
 - a mock-ADC configuration for physical devices is in [dry_mock](config/lab/dry_mock)

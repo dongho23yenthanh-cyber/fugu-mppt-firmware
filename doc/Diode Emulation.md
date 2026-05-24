@@ -106,15 +106,14 @@ If we find the converter to be in DCM, we compute LS on-time as follows.
 
 ### DCM Rectifier timing
 
-During HS on-time ($0<t<t_{on,HS}$), coil current rises:
-
+During HS on-tim
 $$I_L(t) = \frac{1}{L} \int_{0}^{t} V_i-V_o \,dt$$
 
 We calculate the peak inductor current:
 
 $$I_{L,max} = I_L(t_{on,HS}) = \frac{1}{L} (V_i-V_o) \cdot t_{on,HS}$$
 
-During LS conduction ($t_{on,HS}<t<t_{on,HS}+t_{on,LS}$), the inductor
+During LS conduction asdf ($t_{on,HS} < t < t_{on,HS}+t_{on,LS}$), asdf the inductor
 current falls:
 
 $$I_L(t) = I_{L,max} - \frac{1}{L} (V_o) \cdot (t- t_{on,HS})$$
@@ -163,7 +162,49 @@ of the actual value, V_out -1%: we will get an M which is around -2%
 below the actual value ( precisely $0.99/1.01≈0.98$ ). Rectification time is reciprocal to M and
 this will cause a +4% error rectification on time at D=0.5. If we double
 the voltage error, we get approximately double the error for
-rectification time. Longer rectification time will cause reverse current
+rectification time.
+
+```
+   I_L ▲
+       │      ▲ I_peak
+       │     ╱╲
+       │    ╱  ╲
+       │   ╱    ╲
+       │  ╱      ╲
+       │ ╱        ╲
+       │╱          ╲
+     0 ●────────────●────────●─────▶ t
+       │             ╲      ╱
+       │              ╲    ╱   ◄── reverse current
+       │               ╲  ╱        (slope = −Vout/L
+       │                ╲╱          continues through 0)
+       │                 ●
+       │
+       │← HS →│←── LS ──→│
+```
+
+```
+
+   I_L ▲
+       │            ▲ I_peak
+       │           ╱╲
+       │          ╱  ╲
+       │         ╱    ╲
+       │        ╱      ╲
+       │       ╱        ╲ ◄── LS opens early
+       │      ╱          ╲╲
+       │     ╱            ╲╲   ◄── body diode picks up
+       │    ╱              ╲╲       remaining I_L (Vf loss)
+     0 ┼───●────────────────●●●────────────▶ t
+       │
+       │←── HS on ──→│ LS on │diode│  idle  │
+                     (short)
+
+```
+
+
+
+Longer rectification time will cause reverse current
 flow and additional loss (it can reduce ripple voltage, refer to forced
 PWM or FPWM)
 

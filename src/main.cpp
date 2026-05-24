@@ -674,7 +674,11 @@ static void loopRTNewData(unsigned long nowMs) {
                 if (manualPwm) mppt.setTargetDutyCycle(0); // don't re-fade after a manual-mode trip
             }
         } else if (wallClockUs() > delayStartUntil && mppt.startCondition()) {
-            if (!manualPwm) {
+            // Don't auto-restart with a global sweep while termination is latched —
+            // the sweep would ramp duty 0→max into a full pack. Either the pack
+            // discharges enough for termCond to release (recharge_dod), or VFLOOR
+            // fires on sustained voltage sag, both of which clear this gate.
+            if (!manualPwm && !bool(mppt.charger.termCond)) {
                 rtcount("mppt.startSweep.pre");
                 mppt.startSweep();
                 rtcount("mppt.startSweep");

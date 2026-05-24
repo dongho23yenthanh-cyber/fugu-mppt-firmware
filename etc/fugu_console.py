@@ -321,9 +321,15 @@ def discover_devices():
 #                      (e.g. no fan / no panel switch / wrong topology for this hardware).
 GROUP_ALWAYS, GROUP_MOCK, GROUP_NET = "always", "mock", "net"
 
-# Per-command timeout overrides (seconds). The default 4 s is plenty for most commands; the I2C
-# bus scan is slower, more so amid the mock's ADC-timeout chatter.
-TIMEOUT_OVERRIDE = {"scan-i2c": 12.0}
+# Per-command timeout overrides (seconds), keyed by command verb (first token). The default 4 s
+# fits most commands; the I2C bus scan is slower (more so amid the mock's ADC-timeout chatter),
+# and `ota <url>` blocks until the firmware finishes downloading and reboots (or its 10 s connect
+# timeout fires + recovery) — ~40 s for a successful flash, so 180 s gives comfortable headroom.
+TIMEOUT_OVERRIDE = {"scan-i2c": 12.0, "ota": 180.0}
+
+
+def _timeout_for(cmd: str, default: float = 4.0) -> float:
+    return TIMEOUT_OVERRIDE.get(cmd.split(None, 1)[0] if cmd else cmd, default)
 
 PLAN = [
     # --- read-only diagnostics --------------------------------------------------------------
@@ -386,7 +392,7 @@ def run_plan(con: Console, mock: bool, include_net: bool):
             results.append((cmd, "SKIP", "mutates NVS/Wi-Fi — needs --include-network"))
             continue
 
-        reply = con.command(cmd, timeout=TIMEOUT_OVERRIDE.get(cmd, 4.0))
+        reply = con.command(cmd, timeout=_timeout_for(cmd))
 
         if reply.ok:
             if expect is not None and expect not in reply.text:
@@ -490,13 +496,15 @@ def main():
 
     print(f"({'MOCK' if args.mock else 'REAL-HARDWARE'} mode)")
     try:
-        con = Console(make_transport(args))
+        transport = make_transport(args)
+        # Telnet drops the first byte sent during the post-connect handshake; wait for the banner.
+        con = Console(transport, wait_banner=isinstance(transport, SocketTransport))
     except Exception as e:
         print(e)
         return 1
     try:
         if args.command:
-            for ln in con.command(args.command):
+            for ln in con.command(args.command, timeout=_timeout_for(args.command)):
                 print(ln)
             return 0
         if args.test:

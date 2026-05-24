@@ -409,6 +409,16 @@ Two layers:
    - **Iload ≈ 0** (set `v_bat = Vout_target`): assert steady `iOutAvg ≈ (Vout − Vbat)/Rbat` to 1%.
    - **Battery at termination** (sweep Vbat up to `cv_eoc`): raising Vbat above MPP·D collapses `iOutAvg → 0` without
      instability.
+   - **Open-circuit output** (`vconv bat open`, i.e. `v_bat=0, r_bat=1e9`): with a modest duty driving the plant, assert
+     V_out climbs monotonically from its start and stops at `≤ 2·Voc` (the `max(2·V_bat, 2·Voc)` defensive ceiling).
+     `iOutAvg` should be essentially zero in steady state, and `getIL()` finite. Catches a regression where the V_out
+     clamp re-pins to `2·V_bat=0` or where the mains-ripple guard fires with `V_bat=0`.
+   - **Short-circuit output** (`vconv bat short`, i.e. `v_bat=0, r_bat=1e-3`): commanded duty with `pwmRect` small,
+     run a few hundred cycles. Assert (a) `isfinite(V_out)` and `isfinite(IL)` throughout, (b) `V_out` stays small
+     (`< 1 V`), (c) `iOutAvg > 0` (current actually flows into the short — guards against the V_out-below-`kVMin` early
+     return zeroing iOutAvg), (d) phase-3 doesn't divide-by-zero when V_out lands at exactly 0 (the `slope < 0` guard).
+     Note: with no L-saturation model, I_L grows over many cycles; the test horizon is bounded, not asserting steady
+     state. The real firmware would trip OCP — that's an on-target concern, not this test's.
 
    **Numerical / stability:**
    - **Output-node stability at small R_bat.** With backward-Euler on V_out, sweep `r_bat ∈ {1e-3, 1e-2, 0.05, 1, 1e9}`

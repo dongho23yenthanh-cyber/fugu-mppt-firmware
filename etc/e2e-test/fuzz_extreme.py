@@ -23,6 +23,10 @@ Env:
     FUZZ_SWEEP_SPEED   tracker.conf::sweep_speed value to set + reboot for faster
                        sweeps; default 20 (vs firmware default 4); set to 0/skip
                        to leave the on-flash value untouched
+    FUZZ_POOL          which command set to sample from:
+                         safe    — everything except known wedgers (default)
+                         danger  — only known wedgers (adc-reset, adc-restart, ads-restart)
+                         all     — both pools combined
 
 Exit codes:
     0  device still alive at end
@@ -51,6 +55,7 @@ PAUSE_MAX = float(os.environ.get("FUZZ_PAUSE_MAX", "0.30"))
 BURST_PROB = float(os.environ.get("FUZZ_BURST_PROB", "0.10"))
 BURST_MAX = int(os.environ.get("FUZZ_BURST_MAX", "12"))
 SWEEP_SPEED = os.environ.get("FUZZ_SWEEP_SPEED", "20")
+POOL = os.environ.get("FUZZ_POOL", "safe").lower()
 
 PANIC_MARKERS = (
     "assert failed", "Backtrace:", "Guru Meditation", "abort()",
@@ -161,15 +166,13 @@ def gen_wifi():
 
 
 # (name_for_stats, generator)
-GEN = [
+GEN_SAFE = [
     ("sensor", lambda: random.choice(["sensor", "sensor avg", "sensor " + rnd_token()])),
     ("mem", lambda: "mem"),
     ("uptime", lambda: "uptime"),
     ("rt-stats", lambda: "rt-stats"),
     ("reset-lag", lambda: "reset-lag"),
     ("scan-i2c", lambda: "scan-i2c"),
-    ("ads-restart", lambda: random.choice(["ads-restart", "adc-restart"])),
-    ("adc-reset", lambda: "adc-reset"),
     ("sweep", lambda: "sweep"),
     ("mppt", lambda: "mppt"),
     ("short-ls", lambda: "short-ls"),
@@ -183,6 +186,23 @@ GEN = [
     ("svc", gen_svc),
     ("wifi", gen_wifi),
 ]
+
+# Known wedgers — repeatedly hammering these blocks the RT loop in adcSampler.update()
+# (samples never arrive again) and the TWDT eventually reboots the device. Kept in a
+# separate pool so a "safe" run can probe everything else without short-circuiting.
+GEN_DANGER = [
+    ("ads-restart", lambda: random.choice(["ads-restart", "adc-restart"])),
+    ("adc-reset", lambda: "adc-reset"),
+]
+
+if POOL == "danger":
+    GEN = GEN_DANGER
+elif POOL == "all":
+    GEN = GEN_SAFE + GEN_DANGER
+else:
+    if POOL != "safe":
+        print(f"warn: unknown FUZZ_POOL={POOL!r}, defaulting to 'safe'")
+    GEN = GEN_SAFE
 
 
 def speed_up_sweeps(c, watch):
@@ -206,8 +226,14 @@ def speed_up_sweeps(c, watch):
     except Exception as e:
         print(f"  !! restart write failed: {e}")
         return False
-    # Device reboots; reader thread keeps draining. Give the boot a window then probe.
+    # USB-CDC re-enumerates on reboot; the reader thread's read() raises and exits.
+    # Close + reopen the transport so it comes back, then probe.
     time.sleep(2.5)
+    try:
+        c.reconnect()
+    except Exception as e:
+        print(f"  !! reconnect failed: {e}")
+        return False
     watch.lines.clear()
     watch.panicked = False
     watch.trigger = None
@@ -222,7 +248,8 @@ def main():
     random.seed(SEED)
     seed_repr = SEED if SEED is not None else "os-entropy"
     print(f"connecting to {PORT}  (seed={seed_repr}, duration={DURATION:.0f}s, "
-          f"ack_prob={ACK_PROB:.2f}, pause=[{PAUSE_MIN:.3f},{PAUSE_MAX:.2f}]s)")
+          f"ack_prob={ACK_PROB:.2f}, pause=[{PAUSE_MIN:.3f},{PAUSE_MAX:.2f}]s, "
+          f"pool={POOL} [{len(GEN)} cmds])")
     t = SerialTransport(PORT, baud=115200)
     watch = PanicWatch()
     c = Console(t, eol="\r\n", on_line=watch)
@@ -314,10 +341,21 @@ def main():
     time.sleep(1.0)
     r = c.command("mem", timeout=5.0)
     if r.timed_out or not r.ok:
-        print(f"!! final probe failed  (timed_out={r.timed_out}, ok={r.ok}, last cmd={last_cmd!r})")
-        watch.dump()
-        c.close()
-        return 3
+        # transport may have died mid-fuzz on a `restart` or USB hiccup; reconnect once
+        # and retry so we can tell harness-side drop apart from a real device hang.
+        print(f"!! first probe missed (timed_out={r.timed_out}, ok={r.ok}); reconnecting…")
+        try:
+            c.reconnect()
+        except Exception as e:
+            print(f"  reconnect failed: {e}")
+        time.sleep(1.0)
+        r = c.command("mem", timeout=5.0)
+        if r.timed_out or not r.ok:
+            print(f"!! final probe failed after reconnect  (last cmd={last_cmd!r})")
+            watch.dump()
+            c.close()
+            return 3
+        print("  recovered after reconnect (transport had dropped)")
 
     print("device alive after fuzz")
     c.close()

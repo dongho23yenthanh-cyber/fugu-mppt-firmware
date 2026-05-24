@@ -11,11 +11,37 @@ Design: [docs/superpowers/specs/2026-05-23-virtual-converter-design.md](../../do
 3. `src/adc/vconv.h` — `ADC_VConv : AsyncADC<float>`, reuses `PeriodicTimer`/`TaskNotification` pattern from `ADC_Fake`.
 4. `src/buck.h` selector + CMake gate. `WITH_VCONV` mutually exclusive with `WITH_MCPWM`.
 5. `setupSensors()` in `main.cpp` recognises `*_adc=vconv`.
+   - **Channel-mapping decision (open):** `ADC_VConv` has a fixed channel→quantity table (`0=Vin, 1=Vout, 2=I_out_avg, 4=NTC`) so the per-sensor `*_ch` knobs in conf are redundant. Pick one:
+     - **A. Drop `*_ch` for vconv** — `setupSensors()` hard-codes the four-line handle assignment when backend is `vconv`. Simplest, no silently-wrong configs. Vconv looks different from real backends in conf.
+     - **B. Honor `*_ch`** — add `ADC_VConv::bind(name, ch)`; `setupSensors()` calls it per sensor; `getSample(ch)` dispatches via the binding table. Uniform with other backends; ~20 lines of plumbing.
+     - **C. Encode quantity in selector string** — `vin_adc=vconv:vin`; backend parses the suffix and auto-assigns channels. Cleanest semantically, deviates hardest from convention, needs conf-editor tooling update.
+     - Recommendation: A. Decide before step 5.
 6. `vconv.conf` parsing + wiring; update `doc/Configuration.md` + `etc/config-tool/conf-editor.html`.
 7. `vconv` console command (`pv`, `bat`, `set`, dump).
 8. `config/lab/vconv_mock/` board config.
 9. `test/host-stub/vconv-test.cpp` — CCM steady-state, DCM boundary, PV IV-curve peak, cap time constant.
 10. On-target smoke test: MPPT finds MPP near `0.8 * Voc`, PD loops regulate, charger reaches CV.
+
+## Config validation tool
+
+Conf files live on the device's `littlefs` partition and are flashed/edited independently of the
+firmware — CMake never reads them, so build-time refusal is the wrong layer. Build a checker
+(host-side Python, or a `validate` console command on the device) that vets `vconv.conf` +
+`coil.conf` + `board.conf` together and refuses combinations that violate the model's numerical
+preconditions or the firmware's documented invariants:
+
+- `r_bat > 0` and `c_out > 0` and `c_in > 0` and `L0 > 0`.
+  (The forward-Euler stability cliff `T/(R_bat · C_out) < 2` is now gone — V_out uses
+  backward-Euler, so any `r_bat > 0` is numerically safe.)
+- `0 < pv_k < 1` (Newton solver for α degenerates outside this range).
+- `voc > 0`, `isc > 0`.
+- `vbat_ac_amp >= 0` (and zeroed automatically when `v_bat = 0`, but warn).
+- Sanity: `2 * voc * 1.05 >= v_bat` (otherwise the V_in clamp would block the converter from ever
+  pulling V_out up to V_bat).
+
+Hooks into `etc/config-tool/` (already validates other keys) and/or a `vconv validate` console
+verb that runs at boot from `configureVirtualConverter()` and refuses to start the plant if any
+check fails.
 
 ## v2 — extensions (priority-ordered)
 

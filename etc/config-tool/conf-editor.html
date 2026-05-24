@@ -95,6 +95,31 @@
   #uploadlog .resp { color:var(--muted); }
   #uploadlog .resp.ok { color:var(--accent2); }
   #uploadlog .resp.err { color:var(--warn); }
+  /* MQTT modal */
+  .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; z-index:100;
+    align-items:flex-start; justify-content:center; padding:60px 16px; overflow:auto; }
+  .modal-bg.open { display:flex; }
+  .modal { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    width:min(520px,100%); padding:18px 20px; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  .modal h2 { margin:0 0 12px; font-size:16px; font-weight:600; }
+  .modal .field { display:grid; grid-template-columns:110px 1fr; gap:10px; align-items:center;
+    margin-bottom:8px; }
+  .modal .field label { color:var(--muted); font-size:12px; }
+  .modal .field input { background:var(--bg); color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; padding:6px 9px; font-family:ui-monospace,monospace; font-size:13px; width:100%; }
+  .modal .field input:focus { outline:none; border-color:var(--accent); }
+  .modal .actions { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; align-items:center; }
+  .modal .actions .spacer { flex:1; }
+  .modal .status { color:var(--muted); font-size:12px; min-height:1.2em; }
+  .modal .status.err { color:var(--warn); }
+  .modal .devlist { margin-top:14px; border:1px solid var(--line); border-radius:6px;
+    max-height:220px; overflow:auto; display:none; }
+  .modal .devlist.show { display:block; }
+  .modal .devlist .dev { padding:9px 12px; border-bottom:1px solid var(--line); cursor:pointer;
+    font-family:ui-monospace,monospace; font-size:13px; display:flex; align-items:center; gap:8px; }
+  .modal .devlist .dev:last-child { border-bottom:none; }
+  .modal .devlist .dev:hover { background:var(--panel2); color:var(--accent); }
+  .modal .devlist .empty { padding:14px; color:var(--muted); font-size:12px; text-align:center; }
   @media (max-width:640px) {
     header { padding:12px 14px; gap:10px; }
     #panes { padding:14px 14px 60px; }
@@ -102,6 +127,7 @@
     .row .val, .row .val input { max-width:none; }
     #tabs { padding:0 8px; }
     #uploadlog { left:8px; right:8px; bottom:8px; width:auto; max-height:60vh; }
+    .modal .field { grid-template-columns:1fr; gap:4px; }
   }
 </style>
 </head>
@@ -126,8 +152,9 @@
     <label class="btn">Choose folder<input id="pick-dir" type="file" webkitdirectory directory multiple></label>
     <button id="connect-serial" class="btn">Connect serial (115200)</button>
     <button id="connect-ble" class="btn">Connect Bluetooth</button>
+    <button id="connect-mqtt" class="btn">Connect MQTT</button>
   </div>
-  <div style="margin-top:10px;color:var(--muted);font-size:12px">…or read the live config straight off the device over USB serial, or over Bluetooth (NUS; Chrome/Edge, https or localhost).</div>
+  <div style="margin-top:10px;color:var(--muted);font-size:12px">…or read the live config straight off the device over USB serial, Bluetooth (NUS; Chrome/Edge, https or localhost), or MQTT (via WebSocket).</div>
   <div id="drop-msg" class="err" style="margin-top:14px"></div>
 </div>
 
@@ -141,6 +168,26 @@
   <div id="uploadlog-body"></div>
 </div>
 
+<div id="mqtt-modal" class="modal-bg">
+  <div class="modal">
+    <h2>Connect via MQTT</h2>
+    <div class="field"><label>Broker URL</label><input id="mqtt-url" placeholder="ws://192.168.1.200:9001"></div>
+    <div class="field"><label>Username</label><input id="mqtt-user" placeholder="pv"></div>
+    <div class="field"><label>Password</label><input id="mqtt-pass" type="password"></div>
+    <div style="color:var(--muted);font-size:11px;margin-top:6px">
+      Browser MQTT requires WebSocket (ws:// or wss://). Mosquitto needs a <code>listener</code> on a WS port.
+    </div>
+    <div class="actions">
+      <button id="mqtt-scan" class="primary">Scan for devices</button>
+      <span id="mqtt-status" class="status"></span>
+      <span class="spacer"></span>
+      <button id="mqtt-cancel">Cancel</button>
+    </div>
+    <div id="mqtt-devlist" class="devlist"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
 <script>
 "use strict";
 
@@ -910,7 +957,7 @@ async function connectSerial(){
   let port;
   try { port = await navigator.serial.requestPort(); }
   catch(e){ return; }   // user dismissed the chooser
-  await disconnectSerial(); await disconnectBluetooth();   // drop any prior connection
+  await disconnectSerial(); await disconnectBluetooth(); await disconnectMqtt();   // drop any prior connection
   grantedSerialPort = port; lastTransport = "serial";
   try {
     await port.open({ baudRate:115200 });
@@ -997,7 +1044,7 @@ async function connectBluetooth(){
   let dev;
   try { dev = await navigator.bluetooth.requestDevice({ filters:[{services:[NUS_SVC]}], optionalServices:[NUS_SVC] }); }
   catch(e){ return; }   // user dismissed the chooser
-  await disconnectSerial(); await disconnectBluetooth();   // drop any prior connection (clears bleDevice)
+  await disconnectSerial(); await disconnectBluetooth(); await disconnectMqtt();   // drop any prior connection (clears bleDevice)
   bleDevice = dev; grantedBleDevice = dev; lastTransport = "ble";
   try {
     const { server, rx, tx } = await bleConnectAndDiscover(bleDevice);
@@ -1013,6 +1060,169 @@ async function connectBluetooth(){
   } catch(e){
     showErr("Bluetooth: "+e.message+" — if it was paired before, remove the device in your OS Bluetooth settings; make sure no phone or other browser tab holds the connection, then retry.");
     await disconnectBluetooth();
+  }
+}
+
+/* ----------------------------------------------------------------------------
+   MQTT: same get-config flow over the broker. The browser talks MQTT over
+   WebSocket (mqtt.js). Mirrors `MqttTransport` in etc/fugu/transport.py:
+     • subscribe pv/log/#, treat exactly 3-part topics as log lines for that
+       hostname, ignore deeper /cmd echoes
+     • write() publishes one trimmed command per call to pv/log/<host>/cmd
+---------------------------------------------------------------------------- */
+const MQTT_LOG_ROOT = "pv/log/";
+let mqttClient=null, mqttDeviceHost=null, mqttBuf="";
+let grantedMqttConfig=null;   // {url,username,password,device} for silent re-connect
+let mqttScanClient=null;      // temporary client used only by the scan dialog
+
+function mqttFeedPayload(payload){
+  mqttBuf += new TextDecoder().decode(payload);
+  let i;
+  while ((i=mqttBuf.indexOf("\n")) >= 0){
+    const ln = mqttBuf.slice(0,i).replace(/\r$/,"");
+    mqttBuf = mqttBuf.slice(i+1);
+    lineListeners.forEach(fn=>fn(ln));
+  }
+}
+
+async function mqttWrite(str){
+  if (!mqttClient || !mqttDeviceHost) throw new Error("MQTT not connected");
+  // MQTT is message-framed: publish one trimmed command per write, mirroring transport.py
+  const cmd = str.replace(/[\r\n]+$/,"").trim();
+  if (!cmd) return;
+  await new Promise((res,rej)=>mqttClient.publish(
+    MQTT_LOG_ROOT + mqttDeviceHost + "/cmd", cmd, {qos:0},
+    e => e ? rej(e) : res()));
+}
+
+async function disconnectMqtt(){
+  const c = mqttClient;
+  mqttClient=null; mqttDeviceHost=null; mqttBuf="";
+  if (activeWrite===mqttWrite) activeWrite=null;
+  if (c){ try { c.end(true); } catch(_){} }
+}
+
+// Open a connection to the broker and resolve when CONNACK fires (or reject on error).
+function mqttBrokerConnect(url, username, password){
+  return new Promise((resolve,reject)=>{
+    let c;
+    try { c = mqtt.connect(url, { username:username||undefined, password:password||undefined,
+                                  reconnectPeriod:0, connectTimeout:5000 }); }
+    catch(e){ reject(e); return; }
+    const onErr = e => { try{c.end(true);}catch(_){} reject(e); };
+    c.once("connect", ()=>{ c.off("error", onErr); resolve(c); });
+    c.once("error", onErr);
+  });
+}
+
+// Subscribe and live-connect to one device: feed its log payloads into lineListeners
+// and pick up the activeWrite handle so getConfig/sendCommand work as on serial/BLE.
+async function mqttBindDevice(client, hostname){
+  mqttClient = client; mqttDeviceHost = hostname; mqttBuf = "";
+  client.on("message", (topic, payload)=>{
+    // pv/log/<hostname> only — ignore the deeper /cmd echo, and other devices
+    const parts = topic.split("/");
+    if (parts.length !== 3) return;
+    if (parts[2] !== mqttDeviceHost) return;
+    mqttFeedPayload(payload);
+  });
+  await new Promise((res,rej)=>client.subscribe(MQTT_LOG_ROOT + "#", {qos:0},
+    e => e ? rej(e) : res()));
+  activeWrite = mqttWrite;
+  lastTransport = "mqtt";
+}
+
+/* ----------------------------------------------------------------------------
+   MQTT modal: scan broker for devices, let the user pick one to connect.
+   Hostnames are learned passively from `pv/log/<hostname>` traffic (devices
+   publish their own log stream continuously).
+---------------------------------------------------------------------------- */
+const MQ_LS = { url:"mqtt-url", user:"mqtt-user", pass:"mqtt-pass" };
+function mqttModalRead(){
+  return {
+    url:  document.getElementById("mqtt-url").value.trim(),
+    user: document.getElementById("mqtt-user").value,
+    pass: document.getElementById("mqtt-pass").value,
+  };
+}
+function mqttModalSetStatus(msg, isErr){
+  const s = document.getElementById("mqtt-status");
+  s.textContent = msg || ""; s.classList.toggle("err", !!isErr);
+}
+function mqttModalOpen(){
+  for (const k in MQ_LS) document.getElementById(MQ_LS[k]).value = localStorage.getItem(MQ_LS[k]) || "";
+  // sensible default for the URL if unseen
+  if (!document.getElementById("mqtt-url").value) document.getElementById("mqtt-url").value = "ws://192.168.1.200:9001";
+  const dl = document.getElementById("mqtt-devlist");
+  dl.replaceChildren(); dl.classList.remove("show");
+  mqttModalSetStatus("");
+  document.getElementById("mqtt-modal").classList.add("open");
+}
+function mqttModalClose(){
+  document.getElementById("mqtt-modal").classList.remove("open");
+  if (mqttScanClient){ try { mqttScanClient.end(true); } catch(_){} mqttScanClient=null; }
+}
+function mqttRenderDevices(hosts){
+  const dl = document.getElementById("mqtt-devlist");
+  dl.classList.add("show"); dl.replaceChildren();
+  if (!hosts.length){
+    const e=document.createElement("div"); e.className="empty"; e.textContent="no devices seen yet";
+    dl.appendChild(e); return;
+  }
+  for (const h of hosts){
+    const d=document.createElement("div"); d.className="dev"; d.textContent=h;
+    d.onclick = ()=>mqttConnectAndImport(h);
+    dl.appendChild(d);
+  }
+}
+async function mqttScanDevices(){
+  const cfg = mqttModalRead();
+  if (!cfg.url){ mqttModalSetStatus("broker URL required", true); return; }
+  for (const k in MQ_LS) localStorage.setItem(MQ_LS[k], cfg[k]==null?"":cfg[k]);
+  // tear down a prior scan client before starting a new one
+  if (mqttScanClient){ try { mqttScanClient.end(true); } catch(_){} mqttScanClient=null; }
+  mqttModalSetStatus("connecting …");
+  let client;
+  try { client = await mqttBrokerConnect(cfg.url, cfg.user, cfg.pass); }
+  catch(e){ mqttModalSetStatus("broker: "+(e.message||e), true); return; }
+  mqttScanClient = client;
+  const hosts = new Set();
+  client.on("message", (topic)=>{
+    const p = topic.split("/");
+    if (p.length===3) hosts.add(p[2]);
+  });
+  client.subscribe(MQTT_LOG_ROOT + "#", {qos:0}, e=>{
+    if (e){ mqttModalSetStatus("subscribe: "+e.message, true); return; }
+    mqttModalSetStatus("scanning (5 s) …");
+  });
+  // refresh the list as devices appear; final state shown after 5 s
+  const tick = setInterval(()=>mqttRenderDevices(Array.from(hosts).sort()), 800);
+  setTimeout(()=>{
+    clearInterval(tick);
+    mqttRenderDevices(Array.from(hosts).sort());
+    mqttModalSetStatus(hosts.size ? `${hosts.size} device(s) found — click one to connect` : "no devices publishing under pv/log/", !hosts.size);
+  }, 5000);
+}
+async function mqttConnectAndImport(hostname){
+  const cfg = mqttModalRead();
+  cfg.device = hostname;
+  // hand the scan client off to the device session: same broker connection,
+  // just rebind the message handler — avoids a second CONNACK round-trip.
+  await disconnectSerial(); await disconnectBluetooth(); await disconnectMqtt();
+  let client = mqttScanClient; mqttScanClient = null;
+  try {
+    if (!client) client = await mqttBrokerConnect(cfg.url, cfg.user, cfg.pass);
+    else client.removeAllListeners("message");
+    await mqttBindDevice(client, hostname);
+    grantedMqttConfig = cfg;
+    mqttModalClose();
+    showStatus("connected — reading config from "+hostname+" …");
+    await importFromDevice(hostname);
+    document.getElementById("upload").style.display="";
+  } catch(e){
+    showErr("MQTT: "+(e.message||e));
+    await disconnectMqtt();
+    try { if (client) client.end(true); } catch(_){}
   }
 }
 
@@ -1036,6 +1246,10 @@ async function ensureConnection(){
     await bleTxChar.startNotifications();
     bleTxChar.addEventListener('characteristicvaluechanged', onBleNotify);
     activeWrite = bleWrite;
+  } else if (lastTransport==="mqtt"){
+    if (!grantedMqttConfig) throw new Error("connect to the device first");
+    const c = await mqttBrokerConnect(grantedMqttConfig.url, grantedMqttConfig.user, grantedMqttConfig.pass);
+    await mqttBindDevice(c, grantedMqttConfig.device);
   } else {
     throw new Error("read the config from a device first");
   }
@@ -1054,7 +1268,8 @@ async function uploadChanged(){
   }
   if (!cmds.length){ showStatus("nothing changed to upload"); return; }
   // confirm: list every command that will be sent before touching the device
-  const tname = lastTransport==="ble" ? "Bluetooth" : lastTransport==="serial" ? "serial" : "the device";
+  const tname = lastTransport==="ble" ? "Bluetooth" : lastTransport==="serial" ? "serial"
+              : lastTransport==="mqtt" ? "MQTT" : "the device";
   const prompt = `Send these ${cmds.length} command(s) to ${tname}?\n\n` + cmds.map(c=>"  "+c.str).join("\n");
   if (!window.confirm(prompt)) return;
   const btn = document.getElementById("upload"); btn.disabled = true;
@@ -1081,7 +1296,9 @@ async function uploadChanged(){
   } catch(e){
     showErr("Upload: "+e.message); ulLine("resp err", "connection failed: "+e.message); aborted=true;
   } finally {
-    if (weOpened) await (lastTransport==="ble"?disconnectBluetooth():disconnectSerial());
+    if (weOpened) await (lastTransport==="ble" ? disconnectBluetooth()
+                       : lastTransport==="mqtt" ? disconnectMqtt()
+                       : disconnectSerial());
     btn.disabled=false;
     renderPane(); refreshDirtyMarks();   // drop dots/"was:" for fields now on the device
   }
@@ -1113,6 +1330,12 @@ document.getElementById("upload").onclick = uploadChanged;
 document.getElementById("connect-serial").onclick = connectSerial;
 document.getElementById("serial-btn").onclick = connectSerial;
 document.getElementById("connect-ble").onclick = connectBluetooth;
+document.getElementById("connect-mqtt").onclick = mqttModalOpen;
+document.getElementById("mqtt-scan").onclick = mqttScanDevices;
+document.getElementById("mqtt-cancel").onclick = mqttModalClose;
+document.getElementById("mqtt-modal").addEventListener("click", e=>{
+  if (e.target.id === "mqtt-modal") mqttModalClose();   // click backdrop to dismiss
+});
 
 if (typeof DecompressionStream === "undefined")
   showErr("Note: this browser lacks DecompressionStream; compressed .zip reading may fail. Folder upload still works.");

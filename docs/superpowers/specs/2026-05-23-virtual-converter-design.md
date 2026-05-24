@@ -241,14 +241,19 @@ Numerical guards:
 - If `V_out < 0.1 V` or `V_in < 0.1 V`, skip the per-cycle math and just decay caps toward source/sink — the model isn't
   physically meaningful in that regime and the firmware already special-cases it via `MinRatioVoltage`.
 
-Forward-Euler on the output node has eigenvalue `-1/(R_bat·C_out)`, so the per-step
-amplification of the homogeneous part is `|1 - T/(R_bat·C_out)|`. With defaults
-(`T = 1/39 kHz ≈ 25.6 µs`, `R_bat·C_out = 23.5 µs`), the ratio is 1.09 → stable but
-sign-flip-decay around equilibrium (each step kills 91% of the error, with a flip).
-Harmless, just non-physical fsw ripple feeding the sensor filters. Pick
-`c_out ≥ T / R_bat` to land in the smooth-decay regime (deadbeat-ish at 1.0, fully
-monotone below 1.0). The hard stability cliff is at `T/(R_bat·C_out) = 2`; CMake
-should refuse to build a vconv board config that crosses it.
+The V_in cap uses forward-Euler (its time constant is set by `C_in` and the PV dynamic
+resistance, both bounded — no stability concern). The V_out cap uses **backward-Euler**:
+
+```
+V_out_new = (V_out + T·I_out_avg/C_out + a·V_bat_eff) / (1 + a),   a = T / (R_bat·C_out)
+```
+
+This is unconditionally A-stable, so `r_bat` can go arbitrarily small without crossing
+a numerical cliff — essential for the short-circuit preset (`v_bat=0`, `r_bat≈1 mΩ`),
+where forward-Euler would need `T/(R_bat·C_out) < 2` and blow up well above any realistic
+short impedance. Forward-Euler has been retired here; the old §"pick `c_out ≥ T / R_bat`"
+guidance is no longer load-bearing. In the small-T limit BE matches FE exactly, so the
+realistic-passives regime is unchanged.
 
 ### Sources / sinks
 
@@ -362,6 +367,7 @@ vconv                           # dump state: V_in, V_out, I_L_end, I_in_avg, I_
 vconv pv <isc> <voc> [k]        # update PV params at runtime
 vconv bat <v>                   # update battery voltage at runtime
 vconv bat open                  # open-circuit output preset (v_bat=0, r_bat=1e9)
+vconv bat short                 # hard-short output preset (v_bat=0, r_bat=1e-3)
 vconv set <key> <value>         # generic setter (c_in, c_out, r_bat, ...)
 ```
 
@@ -405,9 +411,10 @@ Two layers:
      instability.
 
    **Numerical / stability:**
-   - **Forward-Euler stability sweep.** Per §"Capacitor dynamics" the cliff is at `T/(Rbat·Cout) = 2`. Set Cout so the
-     ratio is `{0.5, 1.0, 1.5, 1.9}` → step response bounded and ≤2× initial error; at `2.1` it diverges. Locks the
-     documented stability boundary into CI.
+   - **Output-node stability at small R_bat.** With backward-Euler on V_out, sweep `r_bat ∈ {1e-3, 1e-2, 0.05, 1, 1e9}`
+     at default `c_out` and `pwm_freq`; assert step response is bounded and monotone in every regime (no oscillation,
+     no blow-up). The short-circuit (1 mΩ) and open-circuit (1 GΩ) endpoints both pass — locks BE in against an
+     accidental forward-Euler regression.
    - **`vbatAcPhase_` wrap.** Assert phase stays in `[−2π, 2π]` after 1e6 cycles at `vbat_ac_freq=1 Hz` (slow phase
      accumulation is where float precision bites).
    - **No hidden L derate.** Compute `ΔIL_pp` from `vconv.conf` `L` (== `coil.conf::L0`) and compare to the model — the

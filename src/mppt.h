@@ -217,6 +217,8 @@ private:
 
     uint16_t targetPwmCnt = 0;
 
+    float sweepSpeed = 4.0f; // global-sweep speed (tracker.conf::sweep_speed)
+
     struct flags_ {
         bool autoDetectVout_max: 1 = true;
     };

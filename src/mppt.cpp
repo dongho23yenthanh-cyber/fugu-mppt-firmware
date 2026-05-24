@@ -159,8 +159,9 @@ void MpptController::update() {
 
         if (controlMode == MpptControlMode::None) {
             controlMode = MpptControlMode::Sweep;
-            controlValue = std::min(limitingControlValue / 5.0f, 4.0f); // sweep speed
-            //controlValue = std::min(limitingControlValue / 8.0f, 2.0f); // sweep speed
+            // sweep_speed scales both the per-tick cap and the limit-tracking gain,
+            // so it actually controls speed near P/I/V limits, not just far from them
+            controlValue = std::min(limitingControlValue * (sweepSpeed * 0.25f / 5.0f), sweepSpeed);
 
             // capture MPP during sweep, this will be our target afterward
             if (power_smooth > maxPowerPoint.power) {
@@ -393,6 +394,8 @@ void MpptController::begin(const ConfFile &trackerConf, const ConfFile &boardCon
     if (targetPwmCnt) {
         ESP_LOGW("mppt", "target duty cycle PWM=%.2hu, not performing tracking!", targetPwmCnt);
     }
+
+    sweepSpeed = std::max(0.1f, trackerConf.getFloat("sweep_speed", 4.0f));
 
     if (tele.influxdbHost) {
         ESP_LOGI("main", "Influxdb telemetry to host %s", tele.influxdbHost.toString().c_str());

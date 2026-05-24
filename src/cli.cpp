@@ -285,6 +285,8 @@ static void cmdOta(cmd *c) {
 }
 #endif
 
+
+#ifdef WITH_BLE
 // otab begin <size> <sha256hex> | end | abort  — OTA firmware push over BLE (no WiFi). `begin` arms the
 // receiver (halts the converter, erases the passive partition); the host then streams the image to the
 // NUS FW characteristic; `end` verifies the SHA-256 and reboots. ADC halt/restore lives inside otaBle*.
@@ -309,6 +311,7 @@ static void cmdOtaBle(cmd *c) {
         CMD_FAIL_RETURN("otab: expected begin|end|abort");
     }
 }
+#endif
 
 static void cmdRtStats(cmd *) {
     xTaskCreatePinnedToCore(print_real_time_stats_1s_task, "rtstats", 4096, NULL, 1, NULL, NON_RT_CORE /*core*/);
@@ -684,7 +687,9 @@ void setupCli() {
     cli.addBoundlessCmd("del-config,delc", cmdDelConfig);
     cli.addBoundlessCmd("get-config,getc", cmdGetConfig);
     cli.addBoundlessCmd("service,svc", cmdService);
+#ifdef WITH_BLE
     cli.addBoundlessCmd("ota-ble", cmdOtaBle);
+#endif
     cli.addBoundlessCmd("measure-coil", cmdMeasureCoil); // measure-coil l0|ls [steps|hs] [dwell_ms] [apply]
 #if WITH_VCONV
     cli.addBoundlessCmd("vconv", cmdVconv); // vconv [pv|bat|set ...]

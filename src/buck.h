@@ -10,7 +10,10 @@
 
 #include <Arduino.h>
 //#include "pinconfig.h"
-#if WITH_MCPWM
+#if WITH_VCONV
+#include "pwm/vconv.h"
+using PwmDriver = PWM_VConv;
+#elif WITH_MCPWM
 #include "pwm/mcpwm.h"
 using PwmDriver = MCPWM_SyncLeg;
 #else

@@ -24,6 +24,9 @@
 #include "etc/ota.h"            // doOta
 #endif
 #include "etc/ota_ble.h"        // otaBleBegin/End/Abort (OTA push over BLE)
+#if WITH_VCONV
+#include "sim/vconv.h"
+#endif
 
 void print_real_time_stats_1s_task(void *);
 
@@ -525,6 +528,74 @@ static void cmdMeasureCoil(cmd *c) {
         CMD_FAIL_RETURN("measure-coil: already running");
 }
 
+#if WITH_VCONV
+// vconv                           dump state
+// vconv pv <isc> <voc> [k]        update PV params
+// vconv bat <vbat>                update battery voltage
+// vconv set <key> <value>         in-memory setter (c_in, c_out, r_bat, l, vbat_ac_amp, vbat_ac_freq)
+static void cmdVconv(cmd *c) {
+    Command cc(c);
+    int n = cc.countArgs();
+    if (n == 0 || cc.getArg(0).getValue().length() == 0) {
+        const auto &p = g_vconv.getPwm();
+        UART_LOG("vconv: Vin=%.3fV Vout=%.3fV IL=%.3fA Iin=%.3fA Iout=%.3fA %s pwm[ctrl=%u rect=%u max=%u f=%uHz]%s",
+                 g_vconv.getVin(), g_vconv.getVout(), g_vconv.getIL(),
+                 g_vconv.getIinAvg(), g_vconv.getIoutAvg(),
+                 g_vconv.inDcm() ? "DCM" : "CCM",
+                 (unsigned) p.pwmCtrl, (unsigned) p.pwmRect, (unsigned) p.pwmMax,
+                 (unsigned) p.pwmFreq,
+                 g_vconv.errored() ? " ERR" : "");
+        return;
+    }
+    auto sub = cc.getArg(0).getValue();
+    if (sub == "pv") {
+        if (n < 3) CMD_FAIL_RETURN("vconv pv: expected <isc> <voc> [k]");
+        float isc = cc.getArg(1).getValue().toFloat();
+        float voc = cc.getArg(2).getValue().toFloat();
+        float k   = n >= 4 ? cc.getArg(3).getValue().toFloat() : g_vconv.getPvK();
+        if (isc <= 0 || voc <= 0 || k <= 0 || k >= 1)
+            CMD_FAIL_RETURN("vconv pv: bad args (isc>0, voc>0, 0<k<1)");
+        g_vconv.setPv(isc, voc, k);
+        UART_LOG("vconv: PV set Isc=%.2f Voc=%.2f k=%.2f", isc, voc, k);
+    } else if (sub == "bat") {
+        if (n < 2) CMD_FAIL_RETURN("vconv bat: expected <v|open|short>");
+        auto arg1 = cc.getArg(1).getValue();
+        if (arg1 == "open") {
+            // Open-circuit output: huge series R, V_bat=0. I_bat≈0 so V_out
+            // integrates whatever the converter delivers (model caps at 2·Voc;
+            // firmware OVP should trip first).
+            g_vconv.setBat(0.0f, 1e9f);
+            UART_LOG("vconv: bat open-circuit (v_bat=0, r_bat=1e9)");
+        } else if (arg1 == "short") {
+            // Hard short on the output: V_bat=0, tiny R_bat. Backward-Euler on the
+            // V_out node makes this stable at arbitrary r_bat — V_out collapses to
+            // ~iOutAvg·rbat, the firmware should see Iout climb and trip OCP.
+            g_vconv.setBat(0.0f, 1e-3f);
+            UART_LOG("vconv: bat short-circuit (v_bat=0, r_bat=1e-3)");
+        } else {
+            float v = arg1.toFloat();
+            if (v <= 0 || v > 200) CMD_FAIL_RETURN("vconv bat: out of range");
+            g_vconv.setBat(v, g_vconv.getRbat());
+            UART_LOG("vconv: Vbat=%.2f", v);
+        }
+    } else if (sub == "set") {
+        if (n < 3) CMD_FAIL_RETURN("vconv set: expected <key> <value>");
+        auto key = cc.getArg(1).getValue();
+        float v  = cc.getArg(2).getValue().toFloat();
+        if (key == "c_in")          g_vconv.setPassives(v, g_vconv.getCout(), g_vconv.getL());
+        else if (key == "c_out")    g_vconv.setPassives(g_vconv.getCin(), v, g_vconv.getL());
+        else if (key == "l")        g_vconv.setPassives(g_vconv.getCin(), g_vconv.getCout(), v);
+        else if (key == "r_bat")    g_vconv.setBat(g_vconv.getVbat(), v);
+        else if (key == "vbat_ac_amp")  g_vconv.setBatRipple(v, g_vconv.getVbatAcFreq());
+        else if (key == "vbat_ac_freq") g_vconv.setBatRipple(g_vconv.getVbatAcAmp(), v);
+        else CMD_FAIL_RETURN("vconv set: unknown key '%s'", key.c_str());
+        UART_LOG("vconv: %s=%.6g", key.c_str(), v);
+    } else {
+        CMD_FAIL_RETURN("vconv: expected pv|bat|set");
+    }
+}
+#endif
+
 static void cmdHelp(cmd *) { UART_LOG("%s", cli.toString().c_str()); }
 
 void setupCli() {
@@ -615,6 +686,9 @@ void setupCli() {
     cli.addBoundlessCmd("service,svc", cmdService);
     cli.addBoundlessCmd("ota-ble", cmdOtaBle);
     cli.addBoundlessCmd("measure-coil", cmdMeasureCoil); // measure-coil l0|ls [steps|hs] [dwell_ms] [apply]
+#if WITH_VCONV
+    cli.addBoundlessCmd("vconv", cmdVconv); // vconv [pv|bat|set ...]
+#endif
 }
 
 bool handleCommand(const String &inp) {

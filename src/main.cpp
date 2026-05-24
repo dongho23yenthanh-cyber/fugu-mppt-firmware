@@ -641,7 +641,7 @@ static void loopRTNewData(unsigned long nowMs) {
 
 
     if (unlikely(adcSampler.isCalibrating())) {
-        mppt.shutdownDcdc();
+        mppt.shutdownDcdc(0); // calibration must resume MPPT immediately on completion
     } else {
         if (mppt.active() or manualPwm) {
             rtcount("protect.pre");

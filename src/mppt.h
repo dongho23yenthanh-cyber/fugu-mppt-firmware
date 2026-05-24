@@ -193,6 +193,7 @@ private:
 
     unsigned long lastTimeProtectPassed = 0;
     unsigned long _lastPointWrite = 0;
+    unsigned long _backoffUntilUs = 0;
 
     const VIinVout<const Sensor *> &sensors;
 
@@ -268,8 +269,12 @@ public:
     [[nodiscard]] bool active() const { return _sweeping or sampler.isCalibrating() or !converter.disabled(); }
     [[nodiscard]] bool isSweeping() const { return _sweeping; }
 
-    void shutdownDcdc() {
-        // TODO backoff time delay
+    // Default backoff blocks startCondition() so MPPT doesn't re-poke pwmPerturb()
+    // every tick after a protection trip — otherwise OV/OC violations spam the log
+    // and toggle the converter at sample rate (see Vin-OV regression with Voc>vin_max).
+    // Callers that want immediate-recovery semantics (calibration done, user `dc 0`)
+    // must pass 0 explicitly.
+    void shutdownDcdc(uint32_t backoffSec = 5) {
         if (topologyConfig.backflowAtHV) {
             converter.disable();
             bflow.enable(false);
@@ -278,6 +283,10 @@ public:
             // solar current is usually not harmful, so shutting down the converter can wait
             bflow.enable(false); // this is very fast
             converter.disable();
+        }
+        if (backoffSec) {
+            auto until = wallClockUs() + (unsigned long) backoffSec * 1000000UL;
+            if (until > _backoffUntilUs) _backoffUntilUs = until;
         }
     }
 
@@ -293,7 +302,8 @@ public:
     }
 
     [[nodiscard]] bool startCondition() const {
-        return !(ntc.last() > limits.Temp_derate) && ucTemp.last() < limits.Temp_derate
+        return wallClockUs() >= _backoffUntilUs
+               && !(ntc.last() > limits.Temp_derate) && ucTemp.last() < limits.Temp_derate
                && (converter.boost()
                        ? sensors.Vin->ewm.avg.get() < sensors.Vout->ewm.avg.get() + 1
                        : sensors.Vin->ewm.avg.get() > sensors.Vout->ewm.avg.get() + 1)
@@ -396,7 +406,7 @@ public:
              or sensors.Iout->med3.get() > limits.Iout_max * 1.25f
              or sensors.Iout->ewm.avg.get() > limits.Iout_max * 1.15f
             ) and not converter.disabled()) {
-            shutdownDcdc();
+            shutdownDcdc(30);
             ESP_LOGW("mppt", "Iout %.2f (med %.2f avg %.2f) >lim %.2f, shutdown", sensors.Iout->last,
                      sensors.Iout->med3.get(), sensors.Iout->ewm.avg.get(), limits.Iout_max);
             return false;
@@ -461,10 +471,9 @@ public:
 
         if (sensors.Iout->ewm.avg.get() > limits.Ishort and sensors.Vout->ewm.avg.get() < 1) {
             if (!converter.disabled())
-                ESP_LOGE("MPPT", "Output short circuit detected! (V=%.2f, I= %.1fA",
+                ESP_LOGE("MPPT", "Output short circuit detected! (V=%.2f, I= %.1fA)",
                      sensors.Vout->ewm.avg.get(), sensors.Iout->ewm.avg.get());
-            shutdownDcdc();
-            // TODO delay
+            shutdownDcdc(30);
             return false;
         }
 

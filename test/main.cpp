@@ -15,6 +15,25 @@ unsigned long loopWallClockUs_ = 0;
 // build) references it, so define it here too.
 KeyValueStorage nvs{};
 
+// telemetry.cpp references the global `mppt`; mqtt.cpp references handleCommand() (cmd_input).
+// Both live in src/main.cpp / src/cli.cpp in the normal build, which RUN_TESTS excludes — so
+// stub them here to link. The ctor args use internal linkage to avoid clashing with any test
+// TU's own globals; construction mirrors the real static-init (null sensors, empty LCD).
+#include "adc/sampling.h"
+#include "buck.h"
+#include "viz/lcd.h"
+#include "mppt.h"
+static ADC_Sampler s_adcSampler{};
+static VIinVout<const Sensor *> s_sensors{nullptr, nullptr, nullptr, nullptr};
+static SynchronousConverter s_converter{};
+static LCD s_lcd{};
+MpptController mppt{s_adcSampler, s_sensors, s_converter, s_lcd};
+
+// RT/ADC path (temperature.h, mppt) reaches the scope streamer through this pointer; null = off.
+Scope *scope = nullptr;
+
+bool handleCommand(const String &) { return false; }
+
 void test_meter();
 
 void test_meter_storage();
@@ -102,6 +121,16 @@ void test_buck_ripple_current();
 void test_buck_dcm_ccm_transition_and_hysteresis();
 void test_buck_rect_ctrl_ratio();
 void test_buck_current_sweep_no_crash();
+void test_buck_ratio_clamped_below_unity();
+void test_buck_ratio_clamped_when_vout_ge_vin();
+void test_buck_ratio_never_negative_sweep();
+void test_buck_dcm_rectmax_not_full_ccm_near_unity();
+void test_buck_sync_rect_off_below_min_current();
+void test_buck_sync_rect_active_in_dcm_with_current();
+void test_buck_bootstrap_min_default();
+void test_buck_bootstrap_min_scales_with_conf();
+void test_boost_bootstrap_min_is_zero();
+void test_boost_ratio_clamped_above_unity();
 
 // conf.h
 void test_conf_getlong_bases();
@@ -196,6 +225,16 @@ void setup() {
     RUN_TEST(test_buck_dcm_ccm_transition_and_hysteresis);
     RUN_TEST(test_buck_rect_ctrl_ratio);
     RUN_TEST(test_buck_current_sweep_no_crash);
+    RUN_TEST(test_buck_ratio_clamped_below_unity);
+    RUN_TEST(test_buck_ratio_clamped_when_vout_ge_vin);
+    RUN_TEST(test_buck_ratio_never_negative_sweep);
+    RUN_TEST(test_buck_dcm_rectmax_not_full_ccm_near_unity);
+    RUN_TEST(test_buck_sync_rect_off_below_min_current);
+    RUN_TEST(test_buck_sync_rect_active_in_dcm_with_current);
+    RUN_TEST(test_buck_bootstrap_min_default);
+    RUN_TEST(test_buck_bootstrap_min_scales_with_conf);
+    RUN_TEST(test_boost_bootstrap_min_is_zero);
+    RUN_TEST(test_boost_ratio_clamped_above_unity);
 
     // conf.h — ConfFile getters
     RUN_TEST(test_conf_getlong_bases);

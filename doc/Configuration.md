@@ -24,37 +24,40 @@ Conventions used in the tables below:
 - A missing **current** sensor (`iin`/`iout`) is replaced by a `VirtualSensor` derived from the
   other side and `power_conversion_eff`; channel `255` means absent.
 
-
 ---
 
 ## board.conf — pins, buses, ADC/driver wiring
 
-| key                          | unit | type   | default | description                                    |
-|------------------------------|------|--------|---------|------------------------------------------------|
-| `mcu`                        |      | string | —       | MCU type, e.g. `esp32s3` or `esp32`            |
-| `skip_assert`                |      | bool   | 0       | Skip GPIO pull-resistor sanity checks at init  |
-| `i2c_sda`                    | GPIO | int    | —       | I2C SDA pin                                    |
-| `i2c_scl`                    | GPIO | int    | —       | I2C SCL pin                                    |
-| `i2c_freq`                   | Hz   | int    | 100000  | I2C bus clock frequency                        |
-| `i2c_port`                   |      | int    | 0       | ESP32 I2C controller index (0 or 1)            |
-| `ina22x_alert`               | GPIO | int    | —       | INA226 ALERT pin                               |
-| `ina22x_addr`                |      | int    | —       | INA226 I2C address                             |
-| `ina22x_resistor`            | Ω    | float  | —       | INA226 current-sense shunt resistance          |
-| `ina22x_range`               | A    | float  | —       | INA226 max current range for PGA config        |
-| `pwm_freq`                   | Hz   | int    | —       | Converter PWM switching frequency              |
-| `pwm_driver_logic`           |      | enum   | —       | Gate driver logic: `HiLi` or `InEn`            |
-| `pwm_hi`                     | GPIO | int    | —       | High-side gate driver pin (HiLi mode)          |
-| `pwm_li`                     | GPIO | int    | —       | Low-side gate driver pin (HiLi mode)           |
-| `pwm_sd`                     | GPIO | int    | —       | Gate driver shutdown/DIS pin (HiLi mode)       |
-| `pwm_in`                     | GPIO | int    | —       | Gate driver IN pin (InEn mode)                 |
-| `pwm_en`                     | GPIO | int    | —       | Gate driver EN pin (InEn mode)                 |
-| `panel_en`                   | GPIO | int    | —       | Panel/input backflow enable switch pin         |
-| `panel_sd`                   | GPIO | int    | —       | Panel/input backflow shutdown switch pin       |
-| `led_WS2812` / `led_WS2812B` | GPIO | int    | —       | WS2812 status LED data pin (alt key)           |
-| `led_simple`                 | GPIO | int    | —       | Plain on/off status LED pin                    |
-| `fan_pwm`                    | GPIO | int    | —       | Cooling fan PWM pin                            |
-| `ads_alert`                  | GPIO | int    | —       | ADS1x15 ALERT/RDY pin                          |
-| `adc_fake_freq`              | Hz   | int    | 3000    | Mock ADC total fake sample rate (all channels) |
+| key                     | unit | type   | default | description                                    |
+|-------------------------|------|--------|---------|------------------------------------------------|
+| `mcu`                   |      | string | —       | MCU type, e.g. `esp32s3` or `esp32`            |
+| `skip_assert`           |      | bool   | 0       | Skip GPIO pull-resistor sanity checks at init  |
+| `i2c_sda`               | GPIO | int    | —       | I2C SDA pin                                    |
+| `i2c_scl`               | GPIO | int    | —       | I2C SCL pin                                    |
+| `i2c_freq`              | Hz   | int    | 100000  | I2C bus clock frequency                        |
+| `i2c_port`              |      | int    | 0       | ESP32 I2C controller index (0 or 1)            |
+| `ina22x_alert`          | GPIO | int    | —       | INA226 ALERT pin                               |
+| `ina22x_addr`           |      | int    | —       | INA226 I2C address                             |
+| `ina22x_resistor`       | Ω    | float  | —       | INA226 current-sense shunt resistance          |
+| `ina22x_range`          | A    | float  | —       | INA226 max current range for PGA config        |
+| `pwm_freq`              | Hz   | int    | —       | Converter PWM switching frequency              |
+| `pwm_driver_logic`      |      | enum   | —       | Gate driver logic: `HiLi` or `InEn`            |
+| `pwm_hi`                | GPIO | int    | —       | High-side gate driver pin (HiLi mode)          |
+| `pwm_li`                | GPIO | int    | —       | Low-side gate driver pin (HiLi mode)           |
+| `pwm_sd`                | GPIO | int    | —       | Gate driver shutdown/DIS pin (HiLi mode)       |
+| `pwm_in`                | GPIO | int    | —       | Gate driver IN pin (InEn mode)                 |
+| `pwm_en`                | GPIO | int    | —       | Gate driver EN pin (InEn mode)                 |
+| `boot_refresh_ns`       | ns   | float  | 1500    | Min LS on-time to refresh HS bootstrap cap     |
+| `pwm_deadtime_ns`       | ns   | float  | 0       | HiLi hardware dead-time (MCPWM); 0 = none      |
+| `pwm_fault_pin`         | GPIO | int    | 255     | GPIO for HW OST brake (MCPWM); 255 = disabled  |
+| `pwm_fault_active_high` |      | bool   | 0       | 1 if fault asserts high, 0 if low              |
+| `panel_en`              | GPIO | int    | —       | Panel/input backflow enable switch pin         |
+| `panel_sd`              | GPIO | int    | —       | Panel/input backflow shutdown switch pin       |
+| `led_WS2812`            | GPIO | int    | —       | WS2812 status LED data pin; 255=disabled       |
+| `led_simple`            | GPIO | int    | —       | Plain on/off status LED pin                    |
+| `fan_pwm`               | GPIO | int    | —       | Cooling fan PWM pin                            |
+| `ads_alert`             | GPIO | int    | —       | ADS1x15 ALERT/RDY pin                          |
+| `adc_fake_freq`         | Hz   | int    | 3000    | Mock ADC total fake sample rate (all channels) |
 
 ## sensor.conf — channel map, divider ratios, calibration
 
@@ -100,9 +103,10 @@ See [Topology notes & examples](#topology-notes--examples) below for worked ACS7
 
 ## coil.conf — inductor
 
-| key  | unit | type  | default | description                                                                |
-|------|------|-------|---------|----------------------------------------------------------------------------|
-| `L0` | H    | float | —       | Coil inductance (for ripple-current computation; undershot 5% for DC bias) |
+| key           | unit  | type  | default | description                                                                                                                                                |
+|---------------|-------|-------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `L0`          | H     | float | —       | Coil inductance (for ripple-current computation; undershot 5% for DC bias)                                                                                 |
+| `rect_offset` | count | int   | 0       | DCM low-side turn-off offset in PWM counts (dead-time/gate-delay comp; >0 = LS off later, toward the zero crossing). See `etc/measure_coil.py --ls-sweep`. |
 
 ## converter.conf — topology
 

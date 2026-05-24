@@ -102,8 +102,15 @@ void MqttService::_handleEvent(esp_event_base_t base, int32_t event_id, void *ev
 
 static void mqttLogCallback(const char *str, uint16_t len) {
     static char *topic = nullptr;
+    static volatile TaskHandle_t inPublish = nullptr;
     if (!MQTT.isConnected()) return;
     if (strnstr(str, ") mqtt:", len) != nullptr) return; // don't publish mqtt messages
+
+    // On WiFi teardown esp-mqtt's transport floods errors from mqtt_task; mirroring them re-enters
+    // publish on that same task (write to dead socket -> another error -> ...) and overflows its
+    // stack. Drop any log produced while we're already publishing on this task.
+    auto self = xTaskGetCurrentTaskHandle();
+    if (inPublish == self) return;
 
     if (topic == nullptr) {
         auto t = "pv/log/" + getHostname(true);
@@ -113,8 +120,10 @@ static void mqttLogCallback(const char *str, uint16_t len) {
         ESP_LOGI(TAG, "console log topic='%s'", topic);
     }
 
+    inPublish = self;
     if (esp_mqtt_client_publish(MQTT.client, topic, str, len, 0, 0) < 0)
         ESP_LOGE(TAG, "publish error %d", len);
+    inPublish = nullptr;
     //esp_mqtt_client_publish(MQTT.client, topic, str, len, 0, 0);
     //esp_mqtt_client_enqueue(MQTT.client, topic, str, len, 0, 0, false);
 }
@@ -157,6 +166,7 @@ void MqttService::close() {
         client = nullptr; // else a restart with empty broker_uri (init() early-returns) leaves it dangling
     }
     removeLogCallback(mqttLogCallback); // drop the sink; stop may not fire MQTT_EVENT_DISCONNECTED
+    mqttMsgHandlers.clear(); // onStart/preStart rebuilds subscriptions, so a restart honors conf (e.g. cmd_input)
 }
 
 bool MqttService::onStart() {
@@ -168,9 +178,6 @@ bool MqttService::onStart() {
     if (preStart) preStart(conf); // charger BMS subscriptions + onConnected (wired by main.cpp)
 
     // Console-command input over MQTT (output is mirrored to pv/log/<hostname> by mqttLogCallback).
-    // Feeds handleCommand like telnet/BLE; the OK/ERR marker goes through UART_LOG -> the log mux,
-    // so it reaches the host on pv/log/<hostname>. UART_LOG carries no tag, so mqttLogCallback's
-    // ") mqtt:" self-filter doesn't drop it. Gated by cmd_input (default off).
     if (conf.getByte("cmd_input", 0)) {
         subscribeTopic("pv/log/" + getHostname(true) + "/cmd", [](const char *data, int len) {
             String inp(std::string(data, len).c_str());

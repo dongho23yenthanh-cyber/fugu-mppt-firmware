@@ -33,7 +33,7 @@
     <mapping directory="$PROJECT_DIR$/components/Arduino-LiquidCrystal-I2C/Arduino-LiquidCrystal-I2C-library" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/components/ESPTelnet/ESPTelnet" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/components/INA226_WE/INA226_WE" vcs="Git" />
-    <mapping directory="$PROJECT_DIR$/components/InfluxDB-Client-for-Arduino/InfluxDB-Client-for-Arduino" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/components/SimpleCLI/SimpleCLI" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/components/SimpleFTPServer/SimpleFTPServer" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/components/esp32-semihosting-profiler/esp32-semihosting-profiler" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/etc/fugu" vcs="Git" />

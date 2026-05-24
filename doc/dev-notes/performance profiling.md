@@ -1,3 +1,31 @@
+# Profiling on esp32
+
+There are a couple of ways (instrumented and sampled):
+
+* SEGGER SystemView (over ESP-IDF App Trace / JTAG) — the Espressif-blessed way. Enable CONFIG_APPTRACE_SV_ENABLE=y, attach a JTAG probe (built-in USB-JTAG
+   on the S3 works), open SystemView on the host. You get task/ISR timelines, context-switch traces, optional user markers. Docs: ESP-IDF Application Level
+   Tracing Library + SystemView Tracing. The closest thing to a "real" profiler on ESP-IDF.
+  * Tracealyzer (Percepio) — commercial, consumes the SystemView protocol, prettier UI. Same data path as #1.
+* GDB sampling — openocd + xtensa-esp32-elf-gdb, periodic bt for a poor-man's sampling profiler.
+* FreeRTOS runtime stats — vTaskGetRunTimeStats() / uxTaskGetSystemState(). Needs CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y +
+   CONFIG_FREERTOS_USE_TRACE_FACILITY=y. Zero hardware required. This is exactly what your rt-stats already wraps.
+* esp32-semihosting-profiler (integrated into this firmware `WITH_SPROFILER`)
+  * uses xtensa perfmon
+
+
+In this firmware:
+* sprofiler (sampling)
+* rt-stats (sampling)
+  * (src/etc/perf.h, src/cli.cpp:292)
+    Console command rt-stats spawns a one-shot task that samples FreeRTOS runtime stats over ~2 s and prints CPU% per task per core. Best for "is the RT loop
+    being preempted" or "who is hogging core 0.
+* rtcount (per-section instrumentation)
+  *   Wrap any RT path with rtcount("name"); it uses the xtensa cycle counter to accumulate count/min/max/total per label. Already sprinkled through mppt.cpp,
+      sampling.h, main.cpp. Output is printed by rtcount_print(reset) — cli.cpp:213 calls it from the reset-lag command, so run reset-lag over serial/telnet/MQTT
+      to dump and zero the counters. Best for "which step in loopRTNewData is slow."
+
+
+
 # esp32-semihosting-profiler
 * https://github.com/espressif/esp-idf/blob/master/examples/storage/semihost_vfs/README.md
 
@@ -39,7 +67,6 @@ https://components.espressif.com/components/espressif/gprof
 https://github.com/espressif/esp-iot-solution/blob/master/components/gprof/src/esp_gprof.c
 
 # TODO review
-* https://github.com/LiluSoft/esp32-semihosting-profiler
 * vTaskGetRunTimeStats https://blog.drorgluska.com/2022/12/esp32-performance-profiling.html
 * xtensa_perfmon
   https://github.com/pycom/pycom-esp-idf/blob/master/components/esp32/include/xtensa/xt_perfmon.h

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PySourceRootDetectionService">
+    <option name="sourcePathsSet">
+      <set>
+        <option value="$PROJECT_DIR$/etc" />
+        <option value="$PROJECT_DIR$/etc/scope_client" />
+        <option value="$PROJECT_DIR$/.git/refs/heads/main" />
+        <option value="$PROJECT_DIR$/managed_components/brianpugh__tamp/idf_component.yml" />
+        <option value="$PROJECT_DIR$/managed_components/brianpugh__tamp/tamp/decompressor.c" />
+        <option value="$PROJECT_DIR$/managed_components/brianpugh__tamp/tamp/compressor.c" />
+        <option value="$PROJECT_DIR$/managed_components/brianpugh__tamp/CMakeLists.txt" />
+        <option value="$PROJECT_DIR$/managed_components/brianpugh__tamp/compressor_esp32.cpp" />
+        <option value="$PROJECT_DIR$/managed_components/brianpugh__tamp/tamp/common.c" />
+      </set>
+    </option>
+  </component>
+</project>

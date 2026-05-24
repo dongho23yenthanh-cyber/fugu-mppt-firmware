@@ -8,6 +8,7 @@
 // network loop. Control + status ride the existing console: `otab` commands in, OTAB_* lines out
 // (mirrored to the BLE client). Stubs link when WITH_BLE is off.
 
+#ifdef WITH_BLE
 bool otaBleBegin(uint32_t size, const char *sha256hex); // arm: esp_ota_begin(erase) + READY + first CRED
 bool otaBleEnd();                                       // finalize: verify sha + set_boot; restarts on OK
 void otaBleAbort();                                     // esp_ota_abort, free staging, re-enable ADC (net loop)
@@ -15,3 +16,4 @@ void otaBleRequestAbort();                               // ask the net-loop tic
 bool otaBleActive();                                    // true between begin and end/abort
 void otaBleStageBytes(const uint8_t *data, size_t len); // FW-char onWrite (host task): copy into ring only
 void otaBleTick(unsigned long nowMs);                   // network loop: drain ring -> esp_ota_write
+#endif

@@ -106,15 +106,14 @@ If we find the converter to be in DCM, we compute LS on-time as follows.
 
 ### DCM Rectifier timing
 
-During HS on-time ($0<t<t_{on,HS}$), coil current rises:
-
+During HS on-tim
 $$I_L(t) = \frac{1}{L} \int_{0}^{t} V_i-V_o \,dt$$
 
 We calculate the peak inductor current:
 
 $$I_{L,max} = I_L(t_{on,HS}) = \frac{1}{L} (V_i-V_o) \cdot t_{on,HS}$$
 
-During LS conduction ($t_{on,HS}<t<t_{on,HS}+t_{on,LS}$), the inductor
+During LS conduction asdf ($t_{on,HS} < t < t_{on,HS}+t_{on,LS}$), asdf the inductor
 current falls:
 
 $$I_L(t) = I_{L,max} - \frac{1}{L} (V_o) \cdot (t- t_{on,HS})$$
@@ -163,12 +162,94 @@ of the actual value, V_out -1%: we will get an M which is around -2%
 below the actual value ( precisely $0.99/1.01≈0.98$ ). Rectification time is reciprocal to M and
 this will cause a +4% error rectification on time at D=0.5. If we double
 the voltage error, we get approximately double the error for
-rectification time. Longer rectification time will cause reverse current
+rectification time.
+
+```
+   I_L ▲
+       │      ▲ I_peak
+       │     ╱╲
+       │    ╱  ╲
+       │   ╱    ╲
+       │  ╱      ╲
+       │ ╱        ╲
+       │╱          ╲
+     0 ●────────────●────────●─────▶ t
+       │             ╲      ╱
+       │              ╲    ╱   ◄── reverse current
+       │               ╲  ╱        (slope = −Vout/L
+       │                ╲╱          continues through 0)
+       │                 ●
+       │
+       │← HS →│←── LS ──→│
+```
+
+```
+
+   I_L ▲
+       │            ▲ I_peak
+       │           ╱╲
+       │          ╱  ╲
+       │         ╱    ╲
+       │        ╱      ╲
+       │       ╱        ╲ ◄── LS opens early
+       │      ╱          ╲╲
+       │     ╱            ╲╲   ◄── body diode picks up
+       │    ╱              ╲╲       remaining I_L (Vf loss)
+     0 ┼───●────────────────●●●────────────▶ t
+       │
+       │←── HS on ──→│ LS on │diode│  idle  │
+                     (short)
+
+```
+
+
+
+Longer rectification time will cause reverse current
 flow and additional loss (it can reduce ripple voltage, refer to forced
 PWM or FPWM)
 
 If we measure V_out with -1% error and V_out +1%, the rectification time
 will be 4% too short.
+
+### Fixed dead-time offset (`rect_offset`)
+
+The timing above is the *ideal* zero crossing. In hardware a fixed delay sits between the commanded
+LS count and the moment the FET actually stops conducting: gate-driver propagation, dead-time and
+FET turn-off. This delay is constant in time (a fixed number of LEDC counts, ~12.5 ns/count), so —
+unlike the voltage errors above — it does **not** scale with M or D, and it is **independent of
+`L0`** (both the ideal and the true zero crossing obey the same L-cancelling ratio `1/M − 1`). It is
+a per-board constant of the gate driver / FETs / layout.
+
+To measure it, hold a fixed HS duty in DCM and sweep the LS on-time up from zero. `Iout` **rises**
+(the FET replaces the body diode, recovering its `Vf` loss and lengthening the conduction),
+**peaks** when LS turns off exactly at the zero crossing, then **falls** as reverse current sets in:
+
+```
+ Iout                      peak = LS off exactly at i_L=0  (clean ideal triangle)
+   |                       .--''''--.
+   |                  .--''          ''--.
+   |              .-''                    ''-.        reverse current:
+   | body-diode .-'                          '-.     LS held past zero,
+   |  only   _.-'                                '   i_L goes negative,
+   |     _.-'                                         charge pulled back
+   +----+-----------------------+-------------------> LS on-time (rect counts)
+      LS=0                  t_on,LS = (1/M - 1) * t_on,HS
+   (Vf loss, low Iout)         = rectCtrlRatio(M) * pwmCtrl
+```
+
+The body-diode side is a broad plateau — turning LS off early just hands conduction to the diode (a
+small `Vf` loss, no `Iout` cliff) — so the informative feature is the sharp reverse-current edge
+just past the peak. The peak's offset from the firmware's predicted `rectCtrlRatio(M)·pwmCtrl` is
+the dead-time offset.
+
+`etc/measure_coil.py --ls-sweep --hs N` brackets this peak (it reads the applied LS count back from
+the status line). `--apply` writes `peak − ideal − --apply-margin` to `coil.conf::rect_offset`,
+which the firmware adds to the DCM low-side count at boot (`>0` = LS off later, toward the zero
+crossing). A positive offset recovers body-diode loss but eats reverse-current margin, so the margin
+(default 12 counts) keeps the applied point safely below the cliff. Use a steep-edge HS where the
+peak is genuinely locatable (a flat plateau yields no reliable peak). Measured field values: `fry`
++100, `flat` +57 counts — different boards, different gate delays, as expected for an
+`L`-independent constant.
 
 # Boost Converter
 

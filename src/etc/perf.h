@@ -1,7 +1,6 @@
 #pragma once
 
-#include "sdkconfig.h"
-#include <stdio.h>
+#include "logging.h" // printf_mux
 
 #ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
 
@@ -53,8 +52,7 @@ static SemaphoreHandle_t sync_stats_task;
  *  - ESP_ERR_INVALID_SIZE  Insufficient array size for uxTaskGetSystemState. Trying increasing ARRAY_SIZE_OFFSET
  *  - ESP_ERR_INVALID_STATE Delay duration too short
  */
-static esp_err_t print_real_time_stats(TickType_t xTicksToWait)
-{
+static esp_err_t print_real_time_stats(TickType_t xTicksToWait) {
     TaskStatus_t *start_array = NULL, *end_array = NULL;
     UBaseType_t start_array_size, end_array_size;
     uint32_t start_run_time, end_run_time;
@@ -63,7 +61,7 @@ static esp_err_t print_real_time_stats(TickType_t xTicksToWait)
 
     //Allocate array to store current task states
     start_array_size = uxTaskGetNumberOfTasks() + ARRAY_SIZE_OFFSET;
-    start_array = (decltype(start_array))malloc(sizeof(TaskStatus_t) * start_array_size);
+    start_array = (decltype(start_array)) malloc(sizeof(TaskStatus_t) * start_array_size);
     if (start_array == NULL) {
         ret = ESP_ERR_NO_MEM;
         goto exit;
@@ -79,7 +77,7 @@ static esp_err_t print_real_time_stats(TickType_t xTicksToWait)
 
     //Allocate array to store tasks states post delay
     end_array_size = uxTaskGetNumberOfTasks() + ARRAY_SIZE_OFFSET;
-    end_array = (decltype(end_array))malloc(sizeof(TaskStatus_t) * end_array_size);
+    end_array = (decltype(end_array)) malloc(sizeof(TaskStatus_t) * end_array_size);
     if (end_array == NULL) {
         ret = ESP_ERR_NO_MEM;
         goto exit;
@@ -115,7 +113,8 @@ static esp_err_t print_real_time_stats(TickType_t xTicksToWait)
         if (k >= 0) {
             uint32_t task_elapsed_time = end_array[k].ulRunTimeCounter - start_array[i].ulRunTimeCounter;
             uint32_t percentage_time = (task_elapsed_time * 100UL) / (total_elapsed_time * portNUM_PROCESSORS);
-            printf_mux("| %s | %"PRIu32" | %"PRIu32"%%\n", start_array[i].pcTaskName, task_elapsed_time, percentage_time);
+            printf_mux("| %s | %"PRIu32" | %"PRIu32"%%\n", start_array[i].pcTaskName, task_elapsed_time,
+                       percentage_time);
         }
     }
 
@@ -132,14 +131,13 @@ static esp_err_t print_real_time_stats(TickType_t xTicksToWait)
     }
     ret = ESP_OK;
 
-    exit:    //Common return path
+exit: //Common return path
     free(start_array);
     free(end_array);
     return ret;
 }
 
-static void spin_task(void *arg)
-{
+static void spin_task(void *arg) {
     xSemaphoreTake(sync_spin_task, portMAX_DELAY);
     while (1) {
         //Consume CPU cycles
@@ -151,8 +149,8 @@ static void spin_task(void *arg)
 }
 }
 #else
-static esp_err_t print_real_time_stats(TickType_t xTicksToWait) {
-    printf("CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS not enabled");
+inline esp_err_t print_real_time_stats(TickType_t xTicksToWait) {
+    printf_mux("CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS not enabled\n");
     return ESP_FAIL;
 }
 #endif

@@ -1,0 +1,57 @@
+#pragma once
+
+#include <cstdint>
+#include <cmath>
+#include <algorithm>
+
+#include "sim/vconv.h"
+
+// PwmDriver replacement that forwards LEDC-style update_pwm calls to the
+// VirtualConverter singleton (g_vconv). Mirrors PWM_Mock / PWM_ESP32_ledc API.
+// MCPWM-only members (setHsOff/setLsOff/forceShutdown/...) are NOT provided;
+// MCPWM-dependent code in buck.h is excluded under #if WITH_MCPWM.
+class PWM_VConv {
+public:
+    const char *name = "vconv";
+    uint16_t pwmMax = 0;
+
+    PWM_VConv() = default;
+
+    void init_pwm(int channel, int /*pin*/, uint32_t freq) {
+        // Mirror PWM_ESP32_ledc: pick the largest resolution such that the
+        // APB-tick divider is >= 2^resolution, capped at 14 bits.
+        uint32_t div = 80'000'000u / freq;
+        int resolution = std::min((int) std::log2((double) div), 14);
+        if (resolution < 1) resolution = 1;
+        uint16_t pm = (uint16_t) ((2u << (resolution - 1)) - 1u);
+        if (pwmMax == 0) pwmMax = pm;
+        (void) channel;
+        g_vconv.setPwmMax(pwmMax);
+        g_vconv.setPwmFreq(freq);
+    }
+
+    // LEDC: set duty (single-arg form). `duty` is the high-level DURATION.
+    //   ch=0 (HS):     duty = pwmCtrl              -> HS on-count = duty
+    //   ch=1 EnLogic:  duty = pwmCtrl + pwmRect    -> LS on-count = duty - pwmCtrl
+    //   ch=1 HiLi reset: duty = 0                  -> LS on-count = 0
+    // The shim subtracts the last-set HS count for ch=1 (works for both modes).
+    void update_pwm(int channel, uint32_t duty) {
+        if (channel == 1) {
+            uint32_t hs = g_vconv.getPwm().pwmCtrl;
+            g_vconv.setPwmCount(1, duty > hs ? duty - hs : 0);
+        } else {
+            g_vconv.setPwmCount((uint8_t) channel, duty);
+        }
+    }
+
+    // LEDC: set duty with hpoint (HiLi path). `duty` is the on-count directly;
+    // hpoint just shifts where in the period the pulse sits and doesn't change
+    // the duration. The plant places LS strictly after HS, so hpoint is ignored.
+    void update_pwm(int channel, uint32_t /*hpoint*/, uint32_t duty) {
+        g_vconv.setPwmCount((uint8_t) channel, duty);
+    }
+
+    void stop(int channel, uint8_t /*idleLevel*/) {
+        g_vconv.stopChannel((uint8_t) channel);
+    }
+};

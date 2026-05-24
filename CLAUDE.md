@@ -12,7 +12,7 @@ Before any `idf.py` invocation, source ESP-IDF into the shell. The repo ships a 
 ```bash
 . ./idf-export.sh          # sources ../../esp/idf5.5/export.sh, sets IDF_TARGET=esp32s3, autodetects $ESPPORT
 idf.py set-target esp32s3  # only needed once per build dir
-WITH_BINARY_TELE=1 WITH_BLE=1 idf.py build
+WITH_BINARY_TELE=1 idf.py build   # BLE on by default; pass WITH_BLE=0 to drop the NimBLE stack
 idf.py -p $ESPPORT flash monitor
 ```
 
@@ -184,6 +184,7 @@ for noise debugging.
 - if you want to `git revert` but there are local dirty files, do a `git stash` before and `git stash pop` after
 - **Never ever run `git reset --hard`**
 - if you cannot find the `timeout` command, run `brew install coreutils` and try again
+- Never copy/mirror an existing `#define` that defines a constant value  to another file, just because you cannot include the file were it is defined. Look for a header file that both files already include and put it there (e.g. util.h).
 
 # Connecting to devices
 
@@ -203,9 +204,16 @@ When connected to the 192.168.1.x network, these devices might be behind a NAT r
 | fry      | 192.168.4.2 | 192.168.1.173:232    |
 | flat     | 192.168.4.3 | 192.168.1.173:233    |
 
-Confirm the hostname in the welcome message (`Welcome to <hostname> (192.168.4.2)`), as IPs are not static.
+**IMPORTANT: fry & flat are both real power converters connected to solar panels and a battery.
+Driving their Half-Bridge must be taken with care!**
 
-You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200` 
+Devices with hostnames like `fugu-esp32s3-*` are bench devices, not real power converters.
+
+Confirm the hostname in the welcome message (`Welcome to <hostname> (192.168.4.2)`), as IPs are not static.
+Confirm the device ip address with the `ip` command.
+You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200`
+You can find battery data with `batmon()` in
+`/Users/fab/dev/ha/home-assistant-addons/batmon-ha/tools/impedance/datasets.py`, use default device="bat_caravan"
 
 # Important
 
@@ -214,12 +222,15 @@ You have a device log history available through `ssh havan.local` `tail pv/fugu_
 - no `#include <>` hints
 - when describing a function, interface or class, describe it with a local scope, not how it is used in the application
 - when writing code, focus on low memory usage and small code size. re-use data that is available and when in non-
-  time-critical code write a transformation or cast if necessary. think twice before creating a new member variable.
+  time-critical code write a transformation or cast if necessary. think twice before creating a new member variable. if
+  you could use a non-accessible (private) member, expose this with a getter. for vendor libraries ask for confirmation
+  to change.
 - keep code comments at a minimum and short
 - if your identity is 'OpenCode (powered by moonshotai/kimi-k2.6)', set your git username to "kimi" and always commit
   with this name
-- if your identity is 'Claude Code, Anthropic's official CLI for Claude', et your git username to "claude" and always
-  commit with this name
+- if your identity is 'Claude Code, Anthropic's official CLI for Claude', do commits under my name.
+- before `git commit ...`, always check for staged files and unstage those changes that are unrelated to what you just
+  did.
 - a mock-ADC configuration for physical devices is in [dry_mock](config/lab/dry_mock)
     - [wokwi_mock](config/lab/wokwi_mock) is for work with the Wokwi simulator
 - in commit messages, try to be short, it's not necessary to point out which functions are called, just an abstract

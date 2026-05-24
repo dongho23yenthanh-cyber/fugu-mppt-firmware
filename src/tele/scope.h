@@ -2,6 +2,8 @@
 
 //#include <sstream>
 #include <cassert>
+#include <cstdio>
+#include <string>
 
 #include "../etc/rt.h"   // TaskNotification
 
@@ -312,13 +314,22 @@ public:
     }*/
 
 
+    std::string hostname;
+
     void sendHeader(TCPClient &cl) {
-        /* std::stringstream ss;
-        ss << "###ScopeHead:";
-        for (auto &ch: channels)
-            ss << int(ch.cid) << '$' << ch.name << "=" << ch.typ << (int) ch.bitLen << ',';
-        ss << "###ENDHEAD\n";
-        cl.write(ss.str().c_str()); */
+        std::string s = "###ScopeHead:";
+        if (!hostname.empty()) {
+            s += "@host=";
+            s += hostname;
+            s += ',';
+        }
+        char ent[64];
+        for (auto &ch: channels) {
+            snprintf(ent, sizeof(ent), "%d$%s=%c%d,", (int) ch.cid, ch.name, (char) ch.typ, (int) ch.bitLen);
+            s += ent;
+        }
+        s += "###ENDHEAD\n";
+        cl.write((const uint8_t *) s.c_str(), s.length());
     }
 
     void _updateClient(TCPClient &cl) {

@@ -19,11 +19,11 @@ fi
 
 echo "SRC=$SRC"
 
-PINS_CONF="$SRC/conf/pins.conf"
-if [[ -f "$PINS_CONF" ]]; then
-  MCU=$(grep -E '^mcu=' "$PINS_CONF" | head -n1 | cut -d= -f2)
+BOARD_CONF="$SRC/conf/board.conf"
+if [[ -f "$BOARD_CONF" ]]; then
+  MCU=$(grep -E '^mcu=' "$BOARD_CONF" | head -n1 | cut -d= -f2)
   if [[ -n "$MCU" ]] && [[ -n "$IDF_TARGET" ]] && [[ "$MCU" != "$IDF_TARGET" ]]; then
-    echo "ERROR: pins.conf mcu='$MCU' does not match IDF_TARGET='$IDF_TARGET'"
+    echo "ERROR: board.conf mcu='$MCU' does not match IDF_TARGET='$IDF_TARGET'"
     exit 1
   fi
 fi

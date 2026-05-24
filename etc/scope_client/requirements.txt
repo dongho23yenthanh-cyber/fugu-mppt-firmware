@@ -1,7 +1,14 @@
 
-matplotlib
-#fastplotlib
-pandas
+# fugu_scope.py (GPU client)
+fastplotlib
+pygfx
+glfw
+imgui-bundle
+numpy
 scipy
-
 zeroconf
+pyyaml
+
+# scope-client.py (legacy matplotlib reference)
+matplotlib
+pandas

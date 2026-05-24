@@ -184,7 +184,9 @@ void MpptController::update() {
         if (controlMode == MpptControlMode::None or controlMode == MpptControlMode::MPPT or
             (controlMode == MpptControlMode::CV && converter.getCtrlOnPwmCnt() > targetDutyCycle)) {
             controlMode = MpptControlMode::Sweep;
-            controlValue = (float) constrain(targetDutyCycle - converter.getCtrlOnPwmCnt(), -8, 2);
+            controlValue = (float) constrain(targetDutyCycle - converter.getCtrlOnPwmCnt(),
+                                             -(converter.pwmCounts() / 64) - 1,
+                                             converter.pwmCounts() / 128 + 1);
             if (std::fabs(controlValue) <= 1) {
                 ESP_LOGI("mppt", "Reached target duty cycle %hu", targetDutyCycle);
                 targetDutyCycle = 0;
@@ -352,7 +354,23 @@ void MpptController::updateCV() {
 
 
 void MpptController::updateManual() {
-    if (targetDutyCycle) {
+    // Keep lastUs fresh so the first mppt.update() after `mppt` sees a normal dt_us
+    lastUs = wallClockUs();
+
+    if (_targetDisable) {
+        // dc 0 from the console: ramp pwmCtrl down on the RT core, then disable().
+        // disable() from the console task would race an in-flight ledc_update_duty
+        // (re-asserts sig_out_en=true on LEDC); doing it here keeps all PWM writes on core 1.
+        if (converter.disabled()) {
+            _targetDisable = false;
+        } else if (converter.getCtrlOnPwmCnt() <= converter.pwmCtrlMin) {
+            ESP_LOGI("mppt", "Reached target duty cycle 0, disabling");
+            converter.disable();
+            _targetDisable = false;
+        } else {
+            converter.pwmPerturb(-4);
+        }
+    } else if (targetDutyCycle) {
         int16_t step = constrain(targetDutyCycle - converter.getCtrlOnPwmCnt(), -4, 4);
         if (step == 0) {
             ESP_LOGI("mppt", "Reached target duty cycle %hu", targetDutyCycle);
@@ -361,7 +379,6 @@ void MpptController::updateManual() {
             converter.pwmPerturb(step);
         }
     }
-
 }
 
 
@@ -398,6 +415,7 @@ void MpptController::begin(const ConfFile &trackerConf, const ConfFile &boardCon
 }
 
 void MpptController::telemetry() {
+#ifdef WITH_NETW
     if (!WiFi.isConnected() || !tele.influxdbHost || !timeSynced)
         return;
 
@@ -461,4 +479,5 @@ void MpptController::telemetry() {
 
     telemetryAddPoint(point, 80);
     _lastPointWrite = wallClockUs();
+#endif
 }

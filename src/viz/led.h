@@ -26,9 +26,9 @@ class LedIndicator {
 public:
     bool begin(const ConfFile &pinConfig) {
         std::string k = "led_WS2812";
-        auto pin = pinConfig.getByte(k, 0);
-        if (!pin) pin = pinConfig.getLong(k + "B", 0);
-        if (!pin)return false;
+        auto pin = pinConfig.getByte(k, 255);
+        //if (pin == 255) pin = pinConfig.getLong(k + "B", 0);
+        if (pin==255)return false;
 
         //ESP_LOGI("led", "pin = %d", pin);
         //for (auto &s: pinConfig.keys())

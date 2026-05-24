@@ -51,6 +51,7 @@ wifi.conf
 mqtt.conf
 etc/mqtt.env
 etc/influx.env
+etc/nat.env
 secrets.py
 
 etc/__pycache__/
@@ -80,3 +81,13 @@ etc/bat-resistance/result.png
 build_ble/
 
 etc/bat-resistance/result60.png
+
+# fugu_scope.py local UI settings
+etc/scope_client/fugu_scope.yaml
+
+config/backup-*
+
+
+
+
+build-*

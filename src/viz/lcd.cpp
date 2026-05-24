@@ -979,6 +979,7 @@ class LCD_Menu {
                     }
                 }
             }
+#ifdef WITH_NETW
             ///// SETTINGS MENU ITEM: WIFI FEATURE /////
             else if (subMenuPage == 8) {
                 lcd.setCursor(0, 0);
@@ -1015,6 +1016,7 @@ class LCD_Menu {
                     }
                 }
             }
+#endif
 
             ///// SETTINGS MENU ITEM: AUTOLOAD /////
             else if (subMenuPage == 9) {

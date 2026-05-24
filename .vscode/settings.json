@@ -1,3 +1,6 @@
 {
-    "idf.pythonInstallPath": "/Users/fab/.platformio/penv/bin/python"
+    "idf.pythonInstallPath": "/Users/fab/.platformio/penv/bin/python",
+    "clangd.arguments": [
+        "--query-driver=/Users/fab/.espressif/tools/**/xtensa-esp32s3-elf-*"
+    ]
 }

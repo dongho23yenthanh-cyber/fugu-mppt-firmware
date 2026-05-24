@@ -6,9 +6,9 @@ see `doc/Console.md`) over any transport. Modes: a single command (`-c`), the te
 walks every console command in a meaningful order — read-only diagnostics, config round-trips and
 service ops, then the converter/PWM commands that move power — and reports PASS/FAIL/SKIP), or —
 given a transport but no mode flag — an interactive REPL (the default). With *no arguments at all*
-it scans every transport for reachable devices (serial port globs, mDNS scope/telnet hosts, BLE
-NUS, and — when `$MQTT_HOST` is set — hostnames seen on the broker's `pv/log/`) and prints what to
-pass to connect, without connecting. The transport and the line-console mechanics live in
+it scans every transport for reachable devices (serial port globs, mDNS scope/telnet hosts, the
+NAT-forwarded telnet endpoints in `nat.env`, BLE NUS, and — when `$MQTT_HOST` is set — hostnames
+seen on the broker's `pv/log/`) and prints what to pass to connect, without connecting. The transport and the line-console mechanics live in
 the `fugu` package (`fugu.transport`, `fugu.console.Console`); this file is the CLI and the plan.
 Defaults to serial; `--ble`/`--ip` select BLE or TCP/telnet.
 
@@ -33,8 +33,10 @@ Examples:
 """
 
 import argparse
+import asyncio
 import glob
 import os
+import re
 import sys
 import time
 
@@ -90,6 +92,96 @@ def scan_serial():
     return ports
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_WELCOME_RE = re.compile(r"Welcome to (\S+)")  # banner: "Welcome to <hostname> (192.168.4.2)"
+_HOSTNAME_RE = re.compile(r"Hostname:\s*(\S+)")  # reply of the bare `hostname` command
+
+
+def query_hostname(con: Console) -> str | None:
+    """Ask the device for its hostname (the bare `hostname` command), or None on failure."""
+    for ln in con.command("hostname", timeout=2.0):
+        m = _HOSTNAME_RE.search(ln)
+        if m:
+            return m.group(1)
+    return None
+
+
+def nat_endpoints():
+    """Telnet endpoints behind the NAT router, from `$NAT_TELNET` (comma-separated host:port).
+
+    Filled from `nat.env` beside this script (see the device table in CLAUDE.md). Returns a list
+    of (host, port); empty when unset.
+    """
+    out = []
+    if not os.environ.get("NAT_TELNET"):
+        load_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "nat.env"))  # NAT_TELNET
+    for ep in (os.environ.get("NAT_TELNET") or "").split(","):
+        ep = ep.strip()
+        if not ep:
+            continue
+        host, _, port = ep.partition(":")
+        out.append((host.strip(), int(port) if port else SocketTransport.DEFAULT_PORT))
+    return out
+
+
+async def probe_welcome(host, port, timeout=4.0):
+    """Connect to a telnet endpoint and return the hostname from its welcome banner (or None)."""
+    try:
+        writer: asyncio.StreamWriter
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout)
+    except (OSError, asyncio.TimeoutError):
+        return None
+    buf = b""
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                chunk = await asyncio.wait_for(reader.read(1024), remaining)
+            except (OSError, asyncio.TimeoutError):
+                break
+            if not chunk:
+                break
+            buf += chunk
+            m = _WELCOME_RE.search(_ANSI.sub("", buf.decode("utf-8", "replace")))
+            if m:
+                return m.group(1)
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+    return None
+
+
+async def scan_nat_async(timeout=4.0, reachable_only=False):
+    """asyncio twin of `scan_nat`: probe all NAT endpoints concurrently.
+
+    Returns a list of (host, port, hostname|None) for every configured endpoint (None = no
+    banner / unreachable), or None when none are configured.
+    """
+    endpoints = nat_endpoints()
+    if not endpoints:
+        return []
+    names = await asyncio.gather(
+        *(probe_welcome(host, port, timeout) for host, port in endpoints))
+    return [(host, port, name) for (host, port), name in zip(endpoints, names) if
+            not reachable_only or name is not None]
+
+
+def scan_nat(timeout=4.0):
+    """Probe the NAT-forwarded telnet endpoints in `nat.env`, resolving each hostname.
+
+    Returns a list of (host, port, hostname|None) for every configured endpoint (None = no
+    banner / unreachable), or None when none are configured.
+    """
+    return asyncio.run(scan_nat_async(timeout))
+
+
 def scan_telnet(timeout=2.0):
     """mDNS-advertised scope/telnet hosts; None if zeroconf isn't installed."""
     try:
@@ -101,7 +193,6 @@ def scan_telnet(timeout=2.0):
 def scan_ble(timeout=5.0):
     """BLE peripherals advertising the NUS console; None if bleak isn't installed."""
     try:
-        import asyncio
         from bleak import BleakScanner
     except ImportError:
         return None
@@ -118,7 +209,7 @@ def scan_ble(timeout=5.0):
 
 
 def scan_mqtt(timeout=5.0):
-    """Hostnames a broker has seen publishing under `pv/log/<hostname>`.
+    """ Returns Hostnames a broker has seen publishing under `pv/log/<hostname>`.
 
     Needs a broker (no default is compiled in): `$MQTT_HOST` (`$MQTT_PORT`/`$MQTT_USER`/`$MQTT_PASS`
     refine it). Returns None when no broker is configured or `paho-mqtt` isn't installed.
@@ -165,13 +256,15 @@ def discover_devices():
     from concurrent.futures import ThreadPoolExecutor
     print("scanning for Fugu devices on all transports …\n")
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=5) as ex:
         f_serial = ex.submit(scan_serial)
         f_telnet = ex.submit(scan_telnet)
         f_ble = ex.submit(scan_ble)
         f_mqtt = ex.submit(scan_mqtt)
-        ports, hosts, devs, mqtt_hosts = (
-            f_serial.result(), f_telnet.result(), f_ble.result(), f_mqtt.result())
+        f_nat = ex.submit(scan_nat)
+        ports, hosts, devs, mqtt_hosts, nat = (
+            f_serial.result(), f_telnet.result(), f_ble.result(), f_mqtt.result(),
+            f_nat.result())
 
     print("serial:")
     for p in ports:
@@ -186,6 +279,16 @@ def discover_devices():
         for addr, port, name in hosts:
             print(f"  {name} {addr}:{port:<8} →  --ip {addr}")
         if not hosts:
+            print("  (none)")
+
+    print("\ntelnet via NAT (nat.env):")
+    if nat is None:
+        print("  (skipped — set $NAT_TELNET, or edit etc/nat.env)")
+    else:
+        for host, port, name in nat:
+            label = name or "(unreachable)"
+            print(f"  {label:<24} {host}:{port:<8} →  --ip {host}:{port}")
+        if not nat:
             print("  (none)")
 
     print("\nBLE (NUS):")
@@ -218,9 +321,15 @@ def discover_devices():
 #                      (e.g. no fan / no panel switch / wrong topology for this hardware).
 GROUP_ALWAYS, GROUP_MOCK, GROUP_NET = "always", "mock", "net"
 
-# Per-command timeout overrides (seconds). The default 4 s is plenty for most commands; the I2C
-# bus scan is slower, more so amid the mock's ADC-timeout chatter.
-TIMEOUT_OVERRIDE = {"scan-i2c": 12.0}
+# Per-command timeout overrides (seconds), keyed by command verb (first token). The default 4 s
+# fits most commands; the I2C bus scan is slower (more so amid the mock's ADC-timeout chatter),
+# and `ota <url>` blocks until the firmware finishes downloading and reboots (or its 10 s connect
+# timeout fires + recovery) — ~40 s for a successful flash, so 180 s gives comfortable headroom.
+TIMEOUT_OVERRIDE = {"scan-i2c": 12.0, "ota": 180.0}
+
+
+def _timeout_for(cmd: str, default: float = 4.0) -> float:
+    return TIMEOUT_OVERRIDE.get(cmd.split(None, 1)[0] if cmd else cmd, default)
 
 PLAN = [
     # --- read-only diagnostics --------------------------------------------------------------
@@ -229,7 +338,7 @@ PLAN = [
     ("rt-stats", None, GROUP_ALWAYS, False),
     ("reset-lag", None, GROUP_ALWAYS, False),
     ("ip", "IP Address", GROUP_ALWAYS, False),
-    ("scan-i2c", None, GROUP_ALWAYS, True),       # may report no devices on a mock
+    ("scan-i2c", None, GROUP_ALWAYS, True),  # may report no devices on a mock
     ("svc list", "NAME", GROUP_ALWAYS, False),
     # --- config: dump, then a non-destructive round-trip on a scratch file ------------------
     ("get-config board.conf", "board.conf", GROUP_ALWAYS, False),
@@ -238,7 +347,7 @@ PLAN = [
     ("get-config selftest.conf probe", "4242", GROUP_ALWAYS, False),
     # --- harmless actuators ------------------------------------------------------------------
     ("led 030", None, GROUP_ALWAYS, False),
-    ("fan 30", None, GROUP_ALWAYS, True),         # declined if no fan is configured (e.g. mock)
+    ("fan 30", None, GROUP_ALWAYS, True),  # declined if no fan is configured (e.g. mock)
     ("fan 0", None, GROUP_ALWAYS, True),
     ("led 000", None, GROUP_ALWAYS, False),
     # --- service management: log level + restart (reversible; skip if the service isn't built) -
@@ -252,23 +361,24 @@ PLAN = [
     ("iset 10", None, GROUP_MOCK, False),
     ("speed 1.0", None, GROUP_MOCK, False),
     # --- PWM / converter: enter manual mode, exercise switches, return to tracking ----------
-    ("dc 0", None, GROUP_MOCK, False),            # switches to manual PWM at zero duty
+    ("dc 0", None, GROUP_MOCK, False),  # switches to manual PWM at zero duty
     ("+5", None, GROUP_MOCK, False),
     ("-5", None, GROUP_MOCK, False),
     ("sync on", None, GROUP_MOCK, False),
     ("sync off", None, GROUP_MOCK, False),
     ("sync forced", None, GROUP_MOCK, False),
     ("sync off", None, GROUP_MOCK, False),
-    ("bf 1", None, GROUP_MOCK, True),             # rejected if no backflow switch configured
+    ("bf 1", None, GROUP_MOCK, True),  # rejected if no backflow switch configured
     ("bf 0", None, GROUP_MOCK, True),
-    ("short-ls", None, GROUP_MOCK, True),         # only valid in boost with Vin~0
+    ("short-ls", None, GROUP_MOCK, True),  # only valid in boost with Vin~0
     ("dc 0", None, GROUP_MOCK, False),
-    ("mppt", None, GROUP_MOCK, False),            # back to tracking (valid only in manual mode)
+    ("mppt", None, GROUP_MOCK, False),  # back to tracking (valid only in manual mode)
     ("sweep", None, GROUP_MOCK, False),
     # --- network / NVS / reboot (opt-in only) -----------------------------------------------
     ("wifi on", None, GROUP_NET, False),
     ("hostname fugu-test", None, GROUP_NET, False),
     # `ota <url>` and `wifi off`/`wifi-add` intentionally omitted: they flash/reboot or wipe NVS.
+    # `wifi off <minutes>` (temporary, keeps the SSID) has its own test: e2e-test/test_wifi_off_timeout.py
 ]
 
 
@@ -282,7 +392,7 @@ def run_plan(con: Console, mock: bool, include_net: bool):
             results.append((cmd, "SKIP", "mutates NVS/Wi-Fi — needs --include-network"))
             continue
 
-        reply = con.command(cmd, timeout=TIMEOUT_OVERRIDE.get(cmd, 4.0))
+        reply = con.command(cmd, timeout=_timeout_for(cmd))
 
         if reply.ok:
             if expect is not None and expect not in reply.text:
@@ -317,13 +427,15 @@ def run_plan(con: Console, mock: bool, include_net: bool):
 
 def interactive(con: Console):
     print("interactive console — type commands, Ctrl-C / EOF to quit (live output streams below)")
+    hostname = query_hostname(con)
+    prompt = f"{hostname}> " if hostname else "> "
     # Tap the reader's line stream so periodic status lines (and command replies) print as they
     # arrive, instead of being thrown away by command()'s drain() while we wait at the prompt.
     con.on_line = lambda ln: print(ln)
     try:
         while True:
             try:
-                cmd = input().strip()
+                cmd = input(prompt).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return
@@ -344,8 +456,10 @@ def make_transport(args):
                              username=args.mqtt_user, password=args.mqtt_pass,
                              device=args.name, writable=not args.mqtt_readonly)
     if args.ip:
-        print(f"connecting to {args.ip}:23 (telnet)")
-        return SocketTransport(args.ip)
+        host, _, port = args.ip.partition(":")  # host:port for NAT-forwarded endpoints
+        port = int(port) if port else SocketTransport.DEFAULT_PORT
+        print(f"connecting to {host}:{port} (telnet)")
+        return SocketTransport(host, port=port)
     port = args.port or autodetect_port()
     print(f"opening {port} @ {args.baud}")
     return SerialTransport(port, baud=args.baud, timeout=0.2)
@@ -382,13 +496,15 @@ def main():
 
     print(f"({'MOCK' if args.mock else 'REAL-HARDWARE'} mode)")
     try:
-        con = Console(make_transport(args))
+        transport = make_transport(args)
+        # Telnet drops the first byte sent during the post-connect handshake; wait for the banner.
+        con = Console(transport, wait_banner=isinstance(transport, SocketTransport))
     except Exception as e:
         print(e)
         return 1
     try:
         if args.command:
-            for ln in con.command(args.command):
+            for ln in con.command(args.command, timeout=_timeout_for(args.command)):
                 print(ln)
             return 0
         if args.test:
@@ -406,4 +522,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        pass

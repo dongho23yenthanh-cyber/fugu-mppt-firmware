@@ -10,11 +10,21 @@
 
 #include <Arduino.h>
 //#include "pinconfig.h"
+#if WITH_VCONV
+#include "pwm/vconv.h"
+using PwmDriver = PWM_VConv;
+#elif WITH_MCPWM
+#include "pwm/mcpwm.h"
+using PwmDriver = MCPWM_SyncLeg;
+#else
 #include "pwm/ledc.h"
+using PwmDriver = PWM_ESP32_ledc;
+#endif
 
 #else
 
 #include "pwm/mock.h"
+using PwmDriver = PWM_Mock;
 
 #endif
 
@@ -29,8 +39,6 @@ class SynchronousConverter {
     static constexpr uint8_t pwmCh_Ctrl = 0; // Ctrl FET; buck: IN, HI (HS signal)
     static constexpr uint8_t pwmCh_Rect = 1; // Rect FET; buck: EN or LO, depending on `pwmEnLogic`
 
-    static constexpr float MinDutyCycleLS = 0.06f; // to keep the HS bootstrap circuit running
-
     /**
      * instead of the %µi-curve we simply use a constant drop factor
      * this appears to be sufficient for CCM/DCM decision
@@ -38,11 +46,29 @@ class SynchronousConverter {
      */
     static constexpr float InductivityDcBias = 0.95f;
 
+    // --- diode-emulation tuning (see doc/Diode Emulation.md) ---
+    // DCM is entered when half the ripple exceeds the dc current (ΔI/2 > Io, i.e. ir > 2·Io).
+    // Hysteresis: once in DCM, stay there until ir drops below 1.8·Io to avoid mode chatter.
+    static constexpr float DcmEnterRippleRatio = 2.0f;
+    static constexpr float DcmExitRippleRatio = 1.8f;
+    // Below this dc current the converter is treated as DCM regardless of the ripple comparison.
+    static constexpr float DcmForceCurrent = 0.1f; // A
+    // In DCM, fully disable sync rectification below these: the body diode handles the small
+    // discharge and this avoids reverse current at near-zero load / output.
+    static constexpr float SyncRectOffCurrent = 0.01f; // A
+    static constexpr float SyncRectOffVoltage = 1.0f; // V
+    // Minimum side voltage for the M=vl/vh (buck) / vh/vl (boost) ratio to be trustworthy.
+    static constexpr float MinRatioVoltage = 0.1f; // V
+    // M clamp: floor keeps rectCtrlRatio() finite (no div-by-zero); UnityRatioMargin keeps M off
+    // 1.0 so rectCtrlRatio() stays finite and positive on both sides.
+    static constexpr float MinVoltageRatio = 1e-2f;
+    static constexpr float MaxBoostRatio = 10.f;
+    static constexpr float UnityRatioMargin = 1e-2f;
 
-#ifdef ARDUINO
-    PWM_ESP32_ledc pwmDriver;
-#else
-    PWM_Mock pwmDriver;
+
+    PwmDriver pwmDriver;
+#if WITH_MCPWM
+    MCPWM_FaultBrake faultBrake;
 #endif
 
     bool pwmEnLogic = false; // whether the driver has a IN/SD input logic (instead of HI/LO)
@@ -53,7 +79,11 @@ class SynchronousConverter {
     uint16_t pwmCtrl = 0; // buck: HS
     uint16_t pwmRect = 0; // buck: LS
     uint16_t pwmRectMax = 0;
+    int32_t manualRect = -1; // >=0: hold LS at this count (bench), -1: auto diode emulation
     float pwmRectRatioDCM = 0; // t_onRect/t_onCtrl when in DCM
+    float rectDitherErr = 0; // carried LS-count rounding remainder (DCM error-feedback dither)
+    bool rectDither = true; // false: plain round() (fallback)
+    int16_t rectOnOffset = 0; // DCM LS-count dead-time/gate-delay offset (counts; >0 = LS off later, toward zero crossing)
 
     float outInVoltageRatio = 0; // M
     float directionFloatBuffer = 0.0f; // fractional perturbation buffer
@@ -82,7 +112,20 @@ public:
 
     [[nodiscard]] const uint16_t &pwmMaxDriver() const { return pwmDriver.pwmMax; };
 
+    [[nodiscard]] uint16_t getDtTicks() const {
+#if WITH_MCPWM
+        return pwmDriver.getDtTicks();
+#else
+        return 0;
+#endif
+    }
+
+    [[nodiscard]] bool isEnLogic() const { return pwmEnLogic; }
+
+    [[nodiscard]] uint32_t getPwmFrequency() const { return pwmFrequency; }
+
     uint16_t pwmCtrlMax{}, pwmRectMin{}, pwmCtrlMin{};
+    uint32_t pwmFrequency{};
 
     [[nodiscard]] bool disabled() const { return pwmCtrl == 0; }
 
@@ -102,7 +145,34 @@ public:
 
     [[nodiscard]] uint16_t getRectOnPwmMin() const { return pwmRectMin; }
 
+    [[nodiscard]] int16_t getRectOnOffset() const { return rectOnOffset; }
+
+    void setRectOnOffset(int o) { rectOnOffset = (int16_t) o; } // DCM LS dead-time offset, counts
+
     [[nodiscard]] float voltageRatio() const { return outInVoltageRatio; } // M
+
+    [[nodiscard]] bool manualRect_() const { return manualRect >= 0; }
+
+    // Bench: pin the low-side on-count to `ls`, held against the auto diode-emulation logic
+    // (lets you sweep LS timing by hand). `ls<0` restores automatic control. Clamped to
+    // [pwmRectMin, complementary max]. NOTE: exceeding the natural zero-crossing draws reverse
+    // current - same envelope as forced PWM; protections stay active.
+    void setManualRect(int ls) {
+        if (ls < 0) {
+            manualRect = -1;
+            return;
+        }
+        // -1: cmpLS == pwmMax would land on the timer-wrap, never firing the turn-off event;
+        // LS would stay HIGH the whole period.
+        manualRect = constrain(ls, (int) pwmRectMin, (int) (pwmDriver.pwmMax - pwmCtrl - 1));
+        pwmRect = (uint16_t) manualRect;
+#if WITH_MCPWM
+        pwmDriver.setLsOff(pwmCtrl + pwmRect);
+#else
+        if (pwmEnLogic) pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl + pwmRect);
+        else pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl, pwmRect);
+#endif
+    }
 
     void init(const ConfFile &converterConf, const ConfFile &boardConf, const ConfFile &coilConf) {
         auto topo = converterConf.getString("topo", "buck");
@@ -114,10 +184,11 @@ public:
             ESP_LOGW("converter", "%s", "forced_pwm");
 
         auto L0 = coilConf.getFloat("L0");
+        rectOnOffset = (int16_t) coilConf.getLong("rect_offset", 0);
 
-        ESP_LOGI("converter", "Coil L0=%.1f µH", L0 * 1e6f);
+        ESP_LOGI("converter", "Coil L0=%.1f µH rect_offset=%d", L0 * 1e6f, rectOnOffset);
 
-        uint32_t pwmFrequency = boardConf.getLong("pwm_freq"); //39000; //  converter switching frequency
+        pwmFrequency = boardConf.getLong("pwm_freq"); //39000; //  converter switching frequency
         assert_throw(pwmFrequency > 5e3 && pwmFrequency < 5e5, "");
 
         fL = (float) pwmFrequency * L0 * InductivityDcBias; // for ripple current computation
@@ -167,41 +238,82 @@ public:
             throw std::runtime_error("unrecognized pwm_driver_logic " + drvInpLogic);
         }
 
+#if WITH_MCPWM
+        // pwmMax pinned to LEDC-equivalent so rect_offset/pwmRectMin calibration stays bit-identical.
+        constexpr uint32_t kFixedTicks = 2048;
+        uint32_t dtTicks = (uint32_t) std::lround(
+            boardConf.getFloat("pwm_deadtime_ns", 0.f) * 1e-9f
+            * (float) pwmFrequency * (float) kFixedTicks);
+        pwmDriver.init(0, pwmFrequency, pinCtrl, pinRect, dtTicks, pwmEnLogic, kFixedTicks);
+        uint8_t faultPin = boardConf.getByte("pwm_fault_pin", 255);
+        if (faultPin != 255) {
+            faultBrake.initGpio(0, faultPin, boardConf.getByte("pwm_fault_active_high", 0));
+            faultBrake.bindLeg(pwmDriver.oper(), pwmDriver.genHS(), pwmDriver.genLS());
+        }
+        pwmDriver.start();
+#else
         pwmDriver.init_pwm(pwmCh_Ctrl, pinCtrl, pwmFrequency);
         pwmDriver.init_pwm(pwmCh_Rect, pinRect, pwmFrequency);
+#endif
 
         if (pinSd != 255) {
             pinMode(pinSd, OUTPUT);
             digitalWrite(pinSd, 1);
         }
 
-        pwmRectMin = std::ceil(
-            (float) pwmDriver.pwmMax * (isBoost ? 0.f : MinDutyCycleLS)); // keeping the bootstrap circuit powered
+        // Minimum LS on-time refreshing the HS gate-driver bootstrap cap when the switch node is
+        // not otherwise pulled low (high duty, or DCM/zero coil current). Fixed time, not a duty
+        // fraction: the recharge need is set by HS gate charge, independent of fsw. During normal
+        // conversion the LS body diode refreshes the cap, so this only binds in those corners.
+        auto bootRefreshNs = boardConf.getFloat("boot_refresh_ns", 500.f);
+        pwmRectMin = isBoost ? 0 : (uint16_t) std::ceil(
+                         bootRefreshNs * 1e-9f * (float) pwmFrequency * (float) pwmDriver.pwmMax);
         pwmCtrlMax = (uint16_t) (pwmDriver.pwmMax - pwmRectMin);
         pwmCtrlMin = 1; //isBoost ? 0 : 0;
         // note that mosfets have different Vg(th) and switching times worst case is Vi/o=80/12
         // ^ set pwmMinHS a bit lower than pwmMinLS (might cause no-load output over-voltage otherwise)
 
-        ESP_LOGI("converter", "f=%lu boost=%d pwmMax=%hu minLS=%hu minHS=%hu maxHS=%hu",
-                 pwmFrequency, isBoost, pwmDriver.pwmMax, pwmRectMin, pwmCtrlMin, pwmCtrlMax);
+        ESP_LOGI("converter", "drv=%s f=%lu boost=%d pwmMax=%hu minLS=%hu minHS=%hu maxHS=%hu",
+                 pwmDriver.name, pwmFrequency, isBoost, pwmDriver.pwmMax, pwmRectMin, pwmCtrlMin, pwmCtrlMax);
     }
 
     void computePwmRectMax() {
         // update pwmRectMax for DCM or DCM case
         if (dcmHysteresis) {
-            // DCM
-            pwmRectMax = (uint16_t) std::round((float) pwmCtrl * pwmRectRatioDCM);
+            // DCM: the LS turn-off count is the fractional ideal pwmCtrl*ratio quantized to whole
+            // PWM ticks. Plain round() stair-steps it, so as duty sweeps the turn-off lands a tick
+            // before/after the inductor zero crossing, modulating delivered charge (the duty-pinned
+            // SR reverse-current oscillation). First-order error feedback carries the rounding
+            // remainder forward so the time-average turn-off tracks the ideal and the beat averages
+            // out. Same conservative target (convRatioWCE), so no extra reverse-current bias.
+            // rectOnOffset compensates a fixed dead-time/gate-delay between the commanded LS count
+            // and the true zero crossing (measure_coil.py --ls-sweep). >0 turns LS off later,
+            // recovering body-diode loss but eating reverse-current margin; default 0 = unchanged.
+            float ideal = (float) pwmCtrl * pwmRectRatioDCM + (float) rectOnOffset;
+            if (rectDither) {
+                float v = ideal + rectDitherErr;
+                long ls = std::lround(v);
+                rectDitherErr = v - (float) ls;
+                pwmRectMax = (uint16_t) std::max<long>(0, ls);
+            } else {
+                pwmRectMax = (uint16_t) std::round(ideal);
+            }
         } else {
             // CCM
-            pwmRectMax = pwmDriver.pwmMax - pwmCtrl;
+            pwmRectMax = pwmDriver.pwmMax - pwmCtrl - 1;   // -1: keep cmpLS < period (timer-wrap)
         }
-        pwmRectMax = std::min<uint16_t>(std::max(pwmRectMin, pwmRectMax), pwmDriver.pwmMax - pwmCtrl);
+        pwmRectMax = std::min<uint16_t>(std::max(pwmRectMin, pwmRectMax), pwmDriver.pwmMax - pwmCtrl - 1);
     }
 
     void pwmPerturb(int16_t direction) {
         if (unlikely(disabled() and direction > 0 and pinSd != 255)) {
             UART_LOG("Converter enabled");
             digitalWrite(pinSd, 0);
+#if WITH_MCPWM
+            // disable() latched the gens LOW via forceShutdown; release them now so the
+            // generator actions resume driving the pins.
+            pwmDriver.clearForce();
+#endif
         }
 
         pwmCtrl = constrain(pwmCtrl + direction, pwmCtrlMin, pwmCtrlMax);
@@ -210,7 +322,11 @@ public:
         bool largerDecrease = (-direction > pwmDriver.pwmMax / 50);
 
         // update pwmRect block
-        {
+        if (manualRect >= 0) {
+            // bench: hold LS at the requested count (clamped to the complementary max)
+            pwmRect = (uint16_t) constrain(manualRect, (int) pwmRectMin,
+                                           (int) (pwmDriver.pwmMax - pwmCtrl - 1));
+        } else {
             if (largerDecrease && !forcedPwm)
                 // assume DCM as it will always give equal or less pwmRectMax
                 dcmHysteresis = true;
@@ -239,6 +355,13 @@ public:
         }
 
 
+#if WITH_MCPWM
+        // Both comparators latch together on TEZ -> order-independent, glitch-free.
+        // The largerDecrease/direction ordering dance is only needed for LEDC's two-write update.
+        pwmDriver.setHsOff(pwmCtrl);
+        pwmDriver.setLsOff(pwmCtrl + pwmRect);
+        (void) largerDecrease;
+#else
         if (largerDecrease) {
             /*
              * with larger decreases of duty cycle do a "safe" update
@@ -277,6 +400,7 @@ public:
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl, pwmRect);
             }
         }
+#endif
     }
 
 
@@ -305,11 +429,12 @@ public:
 
     void disable() {
         if (pinSd != 255)digitalWrite(pinSd, 1);
-        //pwmDriver.update_pwm(pwmCh_Ctrl, 0);
-        //pwmDriver.update_pwm(pwmCh_Rect, 0);
-
+#if WITH_MCPWM
+        pwmDriver.forceShutdown();
+#else
         pwmDriver.stop(pwmCh_Ctrl, 0);
         pwmDriver.stop(pwmCh_Rect, 0);
+#endif
 
         if (pwmCtrl > pwmCtrlMin)
             UART_LOG("PWM disabled (duty cycle was %d)\n", (int) pwmCtrl);
@@ -333,7 +458,8 @@ public:
      */
     [[nodiscard]] bool computeDCM(float vh, float vl, float il) {
         auto ir = rippleCurrent(vh, vl);
-        auto dcm = ir > il * (dcmHysteresis ? 1.8f : 2.f) || il < 0.1f; // TODO: il < 0.1f
+        auto dcm = ir > il * (dcmHysteresis ? DcmExitRippleRatio : DcmEnterRippleRatio)
+                   || il < DcmForceCurrent;
         if (forcedPwm) dcm = false;
         if (dcm != dcmHysteresis) {
             dcmHysteresis = dcm;
@@ -391,17 +517,21 @@ public:
         constexpr float voltageRatioWCEF = (1.f - voltageMaxErr) / (1.f + voltageMaxErr); // < 1.0
 
 
-        const float convRatioWCE =
+        float convRatioWCE =
         (isBoost
-             ? ((vh > vl && vl > 0.1f) ? constrain(vh / vl, 1e-2f, 10.f) : 10.0f) // boost
-             : ((vh > vl && vh > 0.1f) ? constrain(vl / vh, 1e-2f, 1.f - 1e-2f) : 1.0f) //buck
+             ? ((vh > vl && vl > MinRatioVoltage) ? constrain(vh / vl, MinVoltageRatio, MaxBoostRatio) : MaxBoostRatio) // boost
+             : ((vh > vl && vh > MinRatioVoltage) ? constrain(vl / vh, MinVoltageRatio, 1.f - UnityRatioMargin) : 1.0f) //buck
         ) / voltageRatioWCEF;
+
+        // the WCEF division can push M past its physical bound (buck: <1, boost: >1),
+        // which would make rectCtrlRatio() negative; clamp back
+        convRatioWCE = isBoost ? std::max(convRatioWCE, 1.f + UnityRatioMargin)
+                               : std::min(convRatioWCE, 1.f - UnityRatioMargin);
 
         outInVoltageRatio = convRatioWCE;
 
         if (computeDCM(vh, vl, il)) {
-            if (il < 0.01f || vl < 1.0f) // TODO get rid of magic constants
-            {
+            if (il < SyncRectOffCurrent || vl < SyncRectOffVoltage) {
                 if (pwmRectRatioDCM > 0.2f && pwmRect > pwmRectMin)
                     ESP_LOGI("converter", "Disable sync rect, low I(%.2f)/V(%.2f) pwm=%hu|%hu", il,
                          vl, pwmCtrl, pwmRect);
@@ -418,6 +548,7 @@ public:
         auto &vl(isBoost ? vin : vout);
 
         computeSyncRectRatio(vh, vl, il);
+        if (manualRect >= 0) return outInVoltageRatio; // bench: hold manual LS, skip clamp
         computePwmRectMax();
 
         if (pwmRect > pwmRectMax) {
@@ -425,11 +556,15 @@ public:
                 UART_LOG("Set pwmLS %hu -> pwmMaxLS=%hu (VR=%.3f)", pwmRect, pwmRectMax, outInVoltageRatio);
             }
             pwmRect = pwmRectMax;
+#if WITH_MCPWM
+            pwmDriver.setLsOff(pwmCtrl + pwmRect); // instantly commit if limit decreases
+#else
             if (pwmEnLogic) {
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl + pwmRect); // instantly commit if limit decreases
             } else {
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl, pwmRect);
             }
+#endif
         }
 
         return outInVoltageRatio;
@@ -463,21 +598,33 @@ public:
                          pwmRectMin, outInVoltageRatio, pwmRectMax);
             }
             pwmRect = pwmRectMin;
+#if WITH_MCPWM
+            pwmDriver.setLsOff(pwmCtrl + pwmRect);
+#else
             if (pwmEnLogic) {
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl + pwmRect);
             } else {
                 pwmDriver.update_pwm(pwmCh_Rect, pwmCtrl, pwmRect);
             }
+#endif
         }
     }
 
     void shortLs() {
         disable();
 
+#if WITH_MCPWM
+        // Hold-LS-high diagnostic mode not supported by force_level shutdown.
+        // Drop SD if available; otherwise just stays in forceShutdown state.
+        ESP_LOGW("buck", "shortLs() is a LEDC-only diagnostic; ignored under WITH_MCPWM");
+#else
         auto pwmChLS = boost() ? pwmCh_Ctrl : pwmCh_Rect;
         auto pwmChHS = !boost() ? pwmCh_Ctrl : pwmCh_Rect;
         pwmDriver.stop(pwmChLS, 1);
         pwmDriver.stop(pwmChHS, 0);
+#endif
         if (pinSd != 255)digitalWrite(pinSd, 0);
     }
+
+    [[nodiscard]] const uint16_t &pwmCounts()  const { return pwmDriver.pwmMax; }
 };

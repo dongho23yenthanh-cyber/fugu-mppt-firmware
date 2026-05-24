@@ -21,6 +21,10 @@ void wifi_load_conf();
 
 void connect_wifi_async();
 
+// Tear down WiFi. Ends mDNS first (while the netif is still up) so its tcpip-thread group-leave
+// doesn't run against a freed netif when `off` deinits the stack. `off` mirrors WiFi.disconnect().
+void disconnect_wifi(bool off);
+
 bool wait_for_wifi();
 
 void wifiLoop(bool connect = false);
@@ -44,10 +48,6 @@ inline TelePoint makeTelePoint(const char *measurement) { return LineProtocol(me
 #endif
 
 void telemetryAddPoint(TelePoint &p, uint16_t maxQueue = 40);
-
-#if defined(BENCH_TELE) && WITH_BINARY_TELE
-void benchTele();   // one-shot encode/compress microbench, prints via ESP_LOGW("bench", ...)
-#endif
 
 class ADC_Sampler;
 struct Sensor;

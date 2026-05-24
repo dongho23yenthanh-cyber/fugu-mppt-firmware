@@ -1,0 +1,15 @@
+{
+  "name": "fugu-conf-editor-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Tests for conf-editor.html (run in jsdom against the live HTML).",
+  "scripts": {
+    "test":          "node --test --test-reporter spec test/*.test.js",
+    "test:browser":  "playwright test",
+    "test:all":      "npm test && npm run test:browser"
+  },
+  "devDependencies": {
+    "jsdom":             "^24.0.0",
+    "@playwright/test":  "^1.45.0"
+  }
+}

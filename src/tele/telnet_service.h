@@ -20,6 +20,13 @@ public:
                    : "";
     }
 
+    // Reboot teardown helpers (see systemRestart): half-close the client (send FIN, keep the socket
+    // readable so the close can be observed), then poll closePending() until the peer closes or a
+    // timeout. Avoids leaving the telnet client half-open when our FIN is lost on a weak link.
+    void beginClose();
+
+    bool closePending() { return telnet.isConnected(); }
+
 protected:
     bool onStart() override;
 

@@ -12,6 +12,7 @@ class PWM_ESP32_ledc {
 #endif
 
 public:
+    const char *name = "ledc";
     uint16_t pwmMax;
 
     PWM_ESP32_ledc() : pwmMax(0) {}

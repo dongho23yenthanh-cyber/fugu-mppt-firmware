@@ -229,6 +229,21 @@ V=56.45/29.18 I= 1.5/ 2.83A  85.1W -34℃31℃ 1136sps  0㎅/s PWM(H|L|Lm)= 498|
 V=56.45/29.18 I= 1.6/ 2.96A  89.0W -34℃31℃ 1135sps  0㎅/s PW
 ```
 
+# Deferred logging still mallocs on the RT core
+
+Logging from `loopRT` (core1) is deferred: once `loggingEnableDefer()` runs (just before the RT loop starts),
+`ESP_LOGx`/`UART_LOG`/`printf_mux` on core1 take the `enqueue_log()` path instead of writing UART/USB synchronously
+(`src/logging.cpp`). So the UART blocking is *not* on the RT path. But `enqueue_log()` still does `new char[l+1]` per
+entry, and `new` takes the global heap lock. During boot core0 is bringing up Wi-Fi/LWIP/MQTT-TLS with large
+allocations that hold that lock for milliseconds, so the core1 `new` can stall on it.
+
+Symptom: a one-shot multi-ms spike in `adc.update.handleSensorCalib` (e.g. max=9ms at an early `maxNum`), mean ~1µs.
+The first sensor-calibration completion fires 2-3 `ESP_LOGI`s back-to-back (`src/adc/sampling.h`), each a contended
+`new`, all attributed to that one rtcount window. It does not recur once boot allocation traffic settles.
+
+To remove it, get the allocation off the RT path: preallocated buffer pool / fixed-size ring for the async log queue
+instead of `new char[l+1]` per entry.
+
 # Flash Cache
 
 * IRAM

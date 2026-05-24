@@ -1,0 +1,134 @@
+#pragma once
+
+#include <cstdint>
+#include <cmath>
+
+#include "adc.h"
+#include "conf.h"
+#include "etc/rt.h"
+#include "sim/vconv.h"
+#include "tele/scope.h"
+
+// AsyncADC backend that reads from the VirtualConverter singleton (g_vconv).
+// Channel mapping (fixed): 0=Vin, 1=Vout, 2=Iout, 4=NTC. Iin is left as a
+// VirtualSensor (computed from the other side + power_conversion_eff).
+//
+// On every periodic timer tick we step the plant by (1/adc_freq) seconds and
+// notify the consumer task. Channels are read with scheme=all, mirroring
+// ADC_Fake. Optional per-channel zero-mean Gaussian noise is added in
+// getSample (Box-Muller on xorshift32).
+class ADC_VConv;
+
+static bool adc_vconv_periodic_timer_callback(void *arg);
+
+class ADC_VConv : public AsyncADC<float> {
+public:
+    [[nodiscard]] SampleReadScheme scheme() const override {
+        return SampleReadScheme::all;
+    }
+
+    bool init(const ConfFile &boardConf) override {
+        // Local vconv.conf: ADC tick rate + noise σ per channel.
+        ConfFile vconvConf{"/littlefs/conf/vconv.conf"};
+        adcFreq_ = (uint32_t) vconvConf.getLong("adc_freq",
+                       boardConf.getLong("adc_fake_freq", 3000));
+        noiseVin_  = vconvConf.f("noise_vin",  0.0f);
+        noiseVout_ = vconvConf.f("noise_vout", 0.0f);
+        noiseIout_ = vconvConf.f("noise_iout", 0.0f);
+        noiseNtc_  = vconvConf.f("noise_ntc",  0.0f);
+        ntcConst_  = vconvConf.f("ntc_v",      0.9f); // 25 °C equivalent
+
+        rngState_ = 0x9E3779B9u; // deterministic seed -> tests stay reproducible
+        periodicTimer_.begin(adcFreq_, &adc_vconv_periodic_timer_callback, this);
+        periodicTimer_.start();
+        return true;
+    }
+
+    void deinit() override {
+        periodicTimer_.destroy();
+    }
+
+    float getSamplingRate(uint8_t /*channel*/) override {
+        return (float) periodicTimer_.freq();
+    }
+
+    void startReading(uint8_t channel) override {
+        taskNotification_.subscribe();
+        readingChannel_ = channel;
+    }
+
+    bool hasData() override {
+        bool got = taskNotification_.wait(10);
+        if (got) {
+            const float dt = 1.0f / (float) adcFreq_;
+            g_vconv.stepSeconds(dt, 39000);
+        }
+        return got;
+    }
+
+    void setMaxExpectedVoltage(uint8_t, float) override {}
+
+    float getSample() override {
+        float x;
+        float sigma = 0.0f;
+        switch (readingChannel_) {
+            case 0: x = g_vconv.getVin();     sigma = noiseVin_;  break;
+            case 1: x = g_vconv.getVout();    sigma = noiseVout_; break;
+            case 2: x = g_vconv.getIoutAvg(); sigma = noiseIout_; break;
+            case 4: x = ntcConst_;            sigma = noiseNtc_;  break;
+            default: x = 0.0f; break;
+        }
+        if (sigma > 0.0f) x += sigma * gaussian01();
+        if (scope) scope->addSample12(this, readingChannel_, x / 3.0f * 4000.0f);
+        return x;
+    }
+
+    float getInputImpedance(uint8_t) override { return 1e9f; } // ideal voltage divider
+
+    void reset(uint8_t) override {}
+
+    bool periodicTimerCallback() {
+        return taskNotification_.notifyFromIsr();
+    }
+
+private:
+    uint8_t readingChannel_ = 0;
+    uint32_t adcFreq_ = 3000;
+    float noiseVin_ = 0.0f, noiseVout_ = 0.0f, noiseIout_ = 0.0f, noiseNtc_ = 0.0f;
+    float ntcConst_ = 0.9f;
+    TaskNotification taskNotification_{};
+    PeriodicTimer periodicTimer_{};
+
+    // xorshift32 PRNG. Single-task consumer (RT core), no locking needed.
+    uint32_t rngState_ = 0x9E3779B9u;
+    inline uint32_t xorshift32() {
+        uint32_t x = rngState_;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        rngState_ = x;
+        return x;
+    }
+    // Box-Muller, one sample per call (caches partner).
+    bool haveSpare_ = false;
+    float spare_ = 0.0f;
+    inline float gaussian01() {
+        if (haveSpare_) { haveSpare_ = false; return spare_; }
+        // u1 in (0, 1] to keep log finite
+        float u1, u2;
+        do {
+            u1 = (float) (xorshift32() >> 8) * (1.0f / 16777216.0f);
+        } while (u1 <= 0.0f);
+        u2 = (float) (xorshift32() >> 8) * (1.0f / 16777216.0f);
+        float r = std::sqrt(-2.0f * std::log(u1));
+        float t = 6.28318530717958647692f * u2;
+        spare_ = r * std::sin(t);
+        haveSpare_ = true;
+        return r * std::cos(t);
+    }
+};
+
+static IRAM_ATTR bool adc_vconv_periodic_timer_callback(void *arg) {
+    auto adc = static_cast<ADC_VConv *>(arg);
+    return adc->periodicTimerCallback();
+}

@@ -12,6 +12,10 @@
 #include "adc/mock.h"
 #include "adc/ina226.h"
 #include "adc/sampling.h"
+#if WITH_VCONV
+#include "adc/vconv.h"
+#include "sim/vconv.h"
+#endif
 #include "mppt.h"
 #include "conf.h"
 #include "util.h"
@@ -36,6 +40,10 @@ static AsyncADC<float> *createAdcInstance(const std::string &adcName, const Conf
         ((ADC_ESP32_Cont *) adc)->setNtcCh(sensConf.getByte("ntc_ch", 255));
     } else if (adcName == "fake") {
         adc = new ADC_Fake();
+#if WITH_VCONV
+    } else if (adcName == "vconv") {
+        adc = new ADC_VConv();
+#endif
     } else {
         throw std::runtime_error("unknown ADC '" + adcName + "'" + " " + chnDebug);
     }
@@ -48,9 +56,41 @@ static AsyncADC<float> *createAdcInstance(const std::string &adcName, const Conf
     return adc;
 }
 
+#if WITH_VCONV
+static void configureVirtualConverter() {
+    ConfFile vc{"/littlefs/conf/vconv.conf"};
+    if (!vc) {
+        ESP_LOGW("vconv", "no vconv.conf found, using defaults");
+    }
+    float isc = vc.f("isc", 8.0f);
+    float voc = vc.f("voc", 40.0f);
+    float k   = vc.f("pv_k", 0.8f);
+    g_vconv.setPv(isc, voc, k);
+
+    g_vconv.setBat(vc.f("v_bat", 28.0f), vc.f("r_bat", 0.05f));
+    g_vconv.setBatRipple(vc.f("vbat_ac_amp", 0.0f), vc.f("vbat_ac_freq", 100.0f));
+
+    ConfFile coil{"/littlefs/conf/coil.conf"};
+    float L0 = coil.f("L0", 50e-6f);
+    g_vconv.setPassives(vc.f("c_in", 470e-6f), vc.f("c_out", 470e-6f), L0);
+
+    // Seed cap voltages near steady-state so the model doesn't start in the
+    // sub-MinRatioVoltage relaxation branch.
+    g_vconv.setVin(voc * 0.5f);
+    g_vconv.setVout(vc.f("v_bat", 28.0f));
+
+    ESP_LOGI("vconv", "PV Isc=%.2fA Voc=%.2fV k=%.2f  Bat=%.2fV/%.3fΩ  L0=%.1fµH",
+             isc, voc, k, vc.f("v_bat", 28.0f), vc.f("r_bat", 0.05f), L0 * 1e6f);
+}
+#endif
+
 void setupSensors(const ConfFile &boardConf, const Limits &lim) {
     loopWallClockUs_ = micros();
     heap_caps_check_integrity_all(true);
+
+#if WITH_VCONV
+    configureVirtualConverter();
+#endif
 
     /// compute voltage factor for a resistor divider network with 2 parallel R_low (Rh+(Rl+Ra))
     auto adcVDiv = [](float Rh, float Rl, float Ra) {
@@ -151,6 +191,12 @@ void setupSensors(const ConfFile &boardConf, const Limits &lim) {
         } else {
             sensors.Iin = adcSampler.addVirtualSensor(
                 [&]() {
+                    // Sensor.reset() leaves last=NaN until the first post-reset sample arrives
+                    // (calibration phase, ADC reInit, etc.). |NaN|<x is false, so without this
+                    // guard the division below would propagate NaN into power/MPPT.
+                    if (!std::isfinite(sensors.Iout->last) || !std::isfinite(sensors.Vin->last) ||
+                        !std::isfinite(sensors.Vout->last))
+                        return 0.f;
                     if (std::abs(sensors.Iout->last) < .01f or sensors.Vin->last < 0.1f)
                         return 0.f;
                     return sensors.Iout->last * sensors.Vout->last / sensors.Vin->last / conversionEfficiency;
@@ -177,6 +223,9 @@ void setupSensors(const ConfFile &boardConf, const Limits &lim) {
         } else {
             sensors.Iout = adcSampler.addVirtualSensor(
                 [&]() {
+                    if (!std::isfinite(sensors.Iin->last) || !std::isfinite(sensors.Vin->last) ||
+                        !std::isfinite(sensors.Vout->last))
+                        return 0.f;
                     if (std::abs(sensors.Iin->last) < .05f or sensors.Vout->last < 0.1f)
                         return 0.f;
                     return sensors.Iin->last * sensors.Vin->last / sensors.Vout->last * conversionEfficiency;

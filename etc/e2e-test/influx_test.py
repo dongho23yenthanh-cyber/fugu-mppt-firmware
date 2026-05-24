@@ -24,11 +24,11 @@ device goes silent — no more datagrams arrive once the producer and flush task
 then re-enables the service to leave the device as it found it. Skip with `--no-stop-test`.
 
 Examples:
-    python etc/influx_test.py --mock                       # auto-detect port + LAN IP
-    python etc/influx_test.py --host 192.168.1.50          # force the advertised host IP
-    python etc/influx_test.py --provision config/lab/dry_mock
-    python etc/influx_test.py --duration 20                # collect for 20 s after sync
-    python etc/influx_test.py --no-stop-test               # skip the svc-off silence check
+    python etc/e2e-test/influx_test.py --mock                       # auto-detect port + LAN IP
+    python etc/e2e-test/influx_test.py --host 192.168.1.50          # force the advertised host IP
+    python etc/e2e-test/influx_test.py --provision config/lab/dry_mock
+    python etc/e2e-test/influx_test.py --duration 20                # collect for 20 s after sync
+    python etc/e2e-test/influx_test.py --no-stop-test               # skip the svc-off silence check
 """
 
 import argparse
@@ -38,7 +38,7 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo/etc (fugu pkg + fugu_console)
 from fugu.console import Console  # noqa: E402
 from fugu.transport import SerialTransport  # noqa: E402
 from fugu_console import autodetect_port  # noqa: E402

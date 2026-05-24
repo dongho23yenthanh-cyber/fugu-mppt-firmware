@@ -20,7 +20,7 @@ rejection message for invalid arguments / wrong context.
 
 | Command | Description |
 | --- | --- |
-| `wifi on`, `wifi off` | Enable / disable Wi-Fi (and with it all network services). Disabling Wi-Fi usually increases the control-loop rate. `wifi off` also clears the stored SSID in NVS. |
+| `wifi on`, `wifi off [minutes]` | Enable / disable Wi-Fi (and with it all network services). Disabling Wi-Fi usually increases the control-loop rate. Bare `wifi off` disables for good and clears the stored SSID in NVS; `wifi off <minutes>` disables temporarily and re-enables after the timeout, keeping the stored SSID. |
 | `wifi add <ssid>:<password>` | Store a new Wi-Fi network. |
 | `ip` | Show the local IP address. |
 | `hostname <hostname>` | Set the device hostname (persisted in NVS, applied on next boot). |
@@ -33,8 +33,9 @@ rejection message for invalid arguments / wrong context.
 | --- | --- |
 | `fan <float>` | Set fan speed, 0–100. |
 | `led <RRGGBB>`, `led <RGB>` | Set the LED color in hex or short hex (e.g. `led 33ff33` or `led 3f3`). |
-| `sensor` | Dump per-sensor state (last/raw value, EWM average and std, adaptive notch filter stats). |
+| `sensor` | Dump per-sensor state (last/raw value, EWM average and std, adaptive notch filter stats). `sensor avg` prints one compact line of EWM averages (`sens: vin=… iout=… …`) for fast polling. |
 | `mem` | Display heap and PSRAM size (total and free). |
+| `uptime` | Print seconds since boot (monotonic; resets only on reboot) and the running app description (name, version, build date/time, IDF version). |
 | `rt-stats` | Print FreeRTOS per-task runtime statistics (sampled over 1 s). |
 | `reset-lag` | Reset the max-lag statistic and print [rtcount](Real-time%20Counter.md) timings. |
 | `scan-i2c` | Run an I²C bus scan. |
@@ -86,6 +87,7 @@ These override the running charger parameters only; use `set-config charger.conf
 | `mppt` | Switch back to MPP tracking mode (only valid while in manual PWM mode). |
 | `sweep` | Start a global MPP scan / search. |
 | `speed <float>` | Set tracking speed scale, range 0–10 (default 1.0). |
+| `measure-coil l0\|ls [steps\|hs] [dwell_ms] [apply]` | Measure the coil on-device by driving a DCM sweep (takes over manual PWM, restores MPPT when done). `l0` sweeps duty and reports the inductance (median over the DCM band); `ls` holds HS and sweeps the low-side count to find the `rect_offset` timing. `apply` writes the result to `coil.conf`. Needs `Vin > Vout` (sun/headroom). Port of `etc/measure_coil.py`; see [Coil Inductance Measurement](Coil%20Inductance%20Measurement.md). |
 
 The following commands require manual PWM mode:
 

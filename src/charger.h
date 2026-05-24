@@ -87,11 +87,16 @@ class Li_ChgTerminationCondition {
      * Charge termination condition for LFP (LiFePo4, Lithium Iron Phosphate) and other (?) Lithium Batteries
      * as described in https://nordkyndesign.com/charging-marine-lithium-battery-banks/
      * also see discussion https://github.com/fl4p/fugu-mppt-firmware/issues/31
+     *
+     * when full charged, the battery voltage is pinned. todo regulate battery current towards 0?
      */
+
+    static constexpr uint8_t VFLOOR_STREAK_REQ = 4; // consecutive sub-threshold BMS frames to release on voltage
 
     const BatChargerParams &p;
     bool terminated = false;
-    float _v_term; // termination cell voltage; single writer (RT thread), atomic 32-bit float store/load
+    float _v_term;
+    uint8_t _vfloorStreak = 0; // sustained sub-threshold counter (transient I·R sag → 1-frame dips, ignore)
 
 public:
     [[nodiscard]] float v_term() const { return _v_term; }
@@ -107,6 +112,7 @@ public:
     void reset() {
         terminated = false;
         _v_term = p.cv_min;
+        _vfloorStreak = 0;
     }
 
     bool update(float vcell_high, float ibat, float ahSinceFull) {
@@ -118,6 +124,7 @@ public:
         _v_term = fminf(p.cv_min + fmaxf(0.f, vo), p.cv_eoc); // don't go beyond cv_eoc to avoid BMS cut-off
         if (!terminated and ibat > 0 and vcell_high > p.cv_min + vo) {
             terminated = true;
+            _vfloorStreak = 0;
         } else if (terminated and shouldRelease(vcell_high, ahSinceFull)) {
             terminated = false;
         }
@@ -127,16 +134,27 @@ public:
     }
 
 private:
-    [[nodiscard]] bool shouldRelease(float vcell_high, float ahSinceFull) const {
-        // in case sth is wrong with our coulomb counter we release based on voltage
-        constexpr float RECHARGE_VFLOOR_BAND = 0.05f;
+    bool shouldRelease(float vcell_high, float ahSinceFull) {
+        // Voltage-floor backstop in case the coulomb counter is misbehaving.
+        // Require a sustained streak so a single I·R sag (50 A load spike →
+        // vcell drops a few hundred mV for one BMS frame) doesn't release a
+        // still-near-full pack.
+        constexpr float RECHARGE_VFLOOR_BAND = 0.1f;
         if (vcell_high < p.cv_min - RECHARGE_VFLOOR_BAND) {
-            ESP_LOGW("charger", "Termination release due to vcell_high(%.3f)<%.3f - %.3f", vcell_high, p.cv_min,
-                     RECHARGE_VFLOOR_BAND);
+            if (++_vfloorStreak >= VFLOOR_STREAK_REQ) {
+                ESP_LOGW("charger", "Termination release due to vcell_high(%.3f)<%.3f - %.3f (sustained %u frames)",
+                         vcell_high, p.cv_min, RECHARGE_VFLOOR_BAND, (unsigned) _vfloorStreak);
+                _vfloorStreak = 0;
+                return true;
+            }
+        } else {
+            _vfloorStreak = 0;
+        }
+        if (std::isfinite(p.Cbat) && p.recharge_dod > 0.f && ahSinceFull > p.recharge_dod * p.Cbat) {
+            ESP_LOGW("charger", "Termination release due to DoD: ahSinceFull(%.2f)>%.2f Ah (recharge_dod=%.2f)",
+                     ahSinceFull, p.recharge_dod * p.Cbat, p.recharge_dod);
             return true;
         }
-        if (std::isfinite(p.Cbat) && p.recharge_dod > 0.f && ahSinceFull > p.recharge_dod * p.Cbat)
-            return true;
         return false;
     }
 };
@@ -155,6 +173,14 @@ class BatteryCharger {
     // 5 s linear glide of vpack_pin into Vbat_fallback when BMS data goes stale
     // (avoids a ~1 V step on the converter setpoint).
     LinearGlide _fallbackGlide{5'000'000};
+
+    // 5 s linear glide of vpack_pin on termination transitions. Rising edge:
+    // current pin → Vbat_fallback (LFP "float" voltage ≈ N_cells × cv_min) so
+    // the converter holds the pack at a fixed reference and supplies the load
+    // (i_bat ≈ 0). Falling edge: Vbat_fallback → Vbat_max so the recharge ramp
+    // doesn't step the converter setpoint.
+    LinearGlide _floatGlide{5'000'000};
+    bool _wasTerminated = false;
 
 public:
     BatChargerParams params{};
@@ -194,8 +220,17 @@ public:
     }
 
     void _updatePackVoltagePinning(float vbat = INFINITY) {
-        // EOC voltage regulation "pack voltage pinning"
-        // once a cell reaches termination voltage we capture pack voltage and set it as max output voltage
+        // Pack-voltage-pinning state machine. Four regimes:
+        //   1) Terminated + BMS data: hold an absolute float voltage
+        //      (Vbat_fallback ≈ N_cells × cv_min) so the converter supplies the
+        //      load and the pack sits at i_bat ≈ 0. Cell-voltage feedback and
+        //      the vout EWMA are skipped here — either would drift the setpoint
+        //      down with discharge and starve the float.
+        //   2) Not terminated + cells above v_eoc: EOC taper with cell-voltage
+        //      feedback (existing behaviour).
+        //   3) BMS-stale fallback (existing behaviour).
+        //   4) Bulk charging: free push to Vbat_max.
+        // Termination transitions are glided to avoid stepping the setpoint.
 
         float v_eoc = fmin(params.cv_eoc, termCond.v_term());
         //  ^ v_eoc: we could go beyond cv_eoc if ibat is sufficiently high. however a "dumb" BMS will
@@ -203,9 +238,28 @@ public:
         //  which we like to avoid. so never go beyond cv_eoc
 
         bool batDataOk = batSt.haveValidCellVoltage() and std::isfinite(params.Cbat);
+        bool nowTerm = bool(termCond);
+        auto nowUs = wallClockUs();
 
-        if (batDataOk and batSt.vcell_high >= v_eoc) {
+        if (nowTerm != _wasTerminated) {
+            float from = std::isfinite(vpack_pin) ? vpack_pin : params.Vbat_fallback;
+            float to = nowTerm ? params.Vbat_fallback : params.Vbat_max;
+            _floatGlide.start(from, to, nowUs);
+            ESP_LOGI("charger", "Term %s, gliding vpPin %.3fV -> %.3fV over %ums",
+                     nowTerm ? "latched" : "released", from, to,
+                     (unsigned) (_floatGlide.durationUs() / 1000));
+            _wasTerminated = nowTerm;
+        }
+
+        if (nowTerm && batDataOk) {
+            // terminated float: hold an absolute target, ignore feedback/EWMA
+            _vPinFilt.reset();
             _fallbackGlide.reset();
+            vpack_pin = _floatGlide.value(nowUs);
+        } else if (batDataOk and batSt.vcell_high >= v_eoc) {
+            // battery is full
+            _fallbackGlide.reset();
+            _floatGlide.reset();
             constexpr auto OV_FEEDBACK_GAIN = 2; // 4
             float vPin_raw = fmin(batSt.vout_avg.get(), vbat) - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN;
             _vPinFilt.add(vPin_raw);
@@ -215,21 +269,25 @@ public:
                      vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
             vpack_pin = vPin;
         } else if (!batDataOk && params.Vbat_fallback >= 0) {
+            // missing bat data and we have a fallback -> glide theres
             _vPinFilt.reset();
+            _floatGlide.reset();
             if (!_fallbackGlide.active()) {
                 // entering fallback — capture current pin as the glide origin
                 float from = std::isfinite(vpack_pin) ? vpack_pin : params.Vbat_fallback;
-                _fallbackGlide.start(from, params.Vbat_fallback, wallClockUs());
+                _fallbackGlide.start(from, params.Vbat_fallback, nowUs);
                 auto what = !batSt.haveValidCellVoltage() ? "Cell Voltage" : "Pack Capacity";
                 ESP_LOGW("charger", "%s n/a, gliding vpPin %.3fV -> %.3fV over %ums",
                          what, from, params.Vbat_fallback,
                          (unsigned)(_fallbackGlide.durationUs() / 1000));
             }
-            vpack_pin = _fallbackGlide.value(wallClockUs());
+            vpack_pin = _fallbackGlide.value(nowUs);
         } else {
+            // bulk charging or (missing batData and no fallback)
             _vPinFilt.reset();
             _fallbackGlide.reset();
-            vpack_pin = params.Vbat_max;
+            // ride the falling-edge glide if it's still ramping, otherwise jump
+            vpack_pin = _floatGlide.active() ? _floatGlide.value(nowUs) : params.Vbat_max;
         }
     }
 

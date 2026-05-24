@@ -2,11 +2,12 @@
 
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <lwip/sockets.h>
 
 #include "../logging.h"   // set_logging_telnet
+#include "../etc/version.h"
 #include "telemetry.h"    // getHostname, handleCommand
 
-extern const char *VER_STRING;
 extern unsigned long lastTimeOutUs;
 
 void TelnetService::closeConnection() {
@@ -14,6 +15,14 @@ void TelnetService::closeConnection() {
         telnet.flush();
         telnet.disconnectClient();
     }
+}
+
+void TelnetService::beginClose() {
+    if (!telnet.isConnected()) return;
+    telnet.flush();
+    // Half-close: send our FIN now but keep the socket readable so closePending() can watch the peer
+    // close in response. A full disconnectClient() here would shut the fd and abort that observation.
+    shutdown(telnet.getClient().fd(), SHUT_WR);
 }
 
 bool TelnetService::onStart() {
@@ -68,7 +77,7 @@ void TelnetService::onConnect(String ip) {
     ESP_LOGI("telnet", "Client %s connected", ip.c_str());
     t.println("\nWelcome to " + String(getHostname().c_str()) + " (" +
               WiFi.localIP().toString().c_str() + ")");
-    t.println(VER_STRING);
+    t.println(format_version());
     t.println("(Use ^] + q  to disconnect.)");
 
     set_logging_telnet(&t);

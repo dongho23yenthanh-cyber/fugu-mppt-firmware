@@ -326,6 +326,12 @@ void setup() {
 
     // the compress+send task is now spawned by TelemetryService::onStart (and deleted on stop)
 
+#if CONFIG_HEAP_POISONING_COMPREHENSIVE
+    ESP_LOGW("main", "HEAP_POISONING=COMPREHENSIVE: every alloc has head/tail canaries + fill, expect 5-10%% perf hit and ~16B/alloc RAM cost. Debug-only.");
+#elif CONFIG_HEAP_POISONING_LIGHT
+    ESP_LOGW("main", "HEAP_POISONING=LIGHT: every alloc has tail canary, free() asserts on overrun. Debug-only — revert sdkconfig when done.");
+#endif
+
     ESP_LOGI("main", "setup() done.");
 
     /*manualPwm = true;

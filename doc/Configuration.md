@@ -131,9 +131,10 @@ See [Topology notes & examples](#topology-notes--examples) below for worked ACS7
 
 ## tracker.conf — MPPT
 
-| key                 | unit | type  | default | description                                              |
-|---------------------|------|-------|---------|----------------------------------------------------------|
-| `target_duty_cycle` |      | float | 0.0     | Fixed duty cycle fraction; if > 0 disables MPPT tracking |
+| key                 | unit | type  | default | description                                                          |
+|---------------------|------|-------|---------|----------------------------------------------------------------------|
+| `target_duty_cycle` |      | float | 0.0     | Fixed duty cycle fraction; if > 0 disables MPPT tracking             |
+| `sweep_speed`       |      | float | 4.0     | Global-sweep speed; scales both per-tick cap and limit-tracking gain (clamp ≥ 0.1) |
 
 ---
 

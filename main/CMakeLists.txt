@@ -45,8 +45,39 @@ if (NOT WITH_NETW)
     set(NETW_SRC "")
 endif ()
 
+set(BLE_SRC
+        "../src/console_ble.cpp"
+        "../src/etc/ota_ble.cpp"
+)
+
+# WITH_BLE on by default; set WITH_BLE=0 to drop the NimBLE console + OTA path.
+# Keep in sync with the sdkconfig.ble layering in the top-level CMakeLists.
+set(WITH_BLE 1)
+if (DEFINED ENV{WITH_BLE} AND NOT $ENV{WITH_BLE})
+    set(WITH_BLE 0)
+endif ()
+
+if (NOT WITH_BLE)
+    set(BLE_SRC "")
+endif ()
+
+# WITH_VCONV=1 replaces the physical gate driver + ADC with a software converter plant
+# (src/sim/vconv.*). Mutually exclusive with WITH_MCPWM. See
+# docs/superpowers/specs/2026-05-23-virtual-converter-design.md.
+set(WITH_VCONV 0)
+if ($ENV{WITH_VCONV})
+    if ($ENV{WITH_MCPWM})
+        message(FATAL_ERROR "WITH_VCONV and WITH_MCPWM are mutually exclusive")
+    endif ()
+    set(WITH_VCONV 1)
+    set(VCONV_SRC "../src/sim/vconv.cpp")
+else ()
+    set(VCONV_SRC "")
+endif ()
+
 idf_component_register(SRCS
         ${MAIN_SRC}
+        ${VCONV_SRC}
         "../src/sensor_setup.cpp"
         "../src/mppt.cpp"
         "../src/logging.cpp"
@@ -54,11 +85,10 @@ idf_component_register(SRCS
         "../src/adc/adc_esp32_cont.cpp"
         "../src/viz/lcd.cpp"
         "../src/console.cpp"
-        "../src/console_ble.cpp"
         "../src/etc/rt.cpp"
-        "../src/etc/ota_ble.cpp"
         "../src/math/float16.cpp"
         ${NETW_SRC}
+        ${BLE_SRC}
         INCLUDE_DIRS "." "../src"
         REQUIRES
         # if we start to list components here we need to list them all
@@ -81,9 +111,7 @@ if ($ENV{FUGU_BAT_V})
     component_compile_definitions("FUGU_BAT_V=$ENV{FUGU_BAT_V}")
 endif ()
 
-# WITH_BLE=1 compiles the BLE NUS console (console_ble.cpp) and registers BleConsoleService.
-# Must be paired with the NimBLE sdkconfig (top-level CMakeLists pulls in sdkconfig.ble).
-if ($ENV{WITH_BLE})
+if (WITH_BLE)
     component_compile_definitions("WITH_BLE=1")
 endif ()
 
@@ -91,6 +119,10 @@ endif ()
 # hardware dead-time, GPIO OST brake, glitch-free comparator updates. See doc/mcpwm-sync-buck-driver.md.
 if ($ENV{WITH_MCPWM})
     component_compile_definitions("WITH_MCPWM=1")
+endif ()
+
+if (WITH_VCONV)
+    component_compile_definitions("WITH_VCONV=1")
 endif ()
 
 # WITH_BINARY_TELE=1 sends telemetry as the binary symbol-table wire (sym_line_protocol.h) +

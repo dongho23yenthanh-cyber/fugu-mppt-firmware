@@ -25,13 +25,14 @@ Three units with one responsibility each:
 ```
 
 - **`PWM_VConv`** — replaces `PwmDriver` (the LEDC backend) at compile time. Implements the same surface as `PWM_Mock`
-  (`pwmMax`, `init_pwm`, `update_pwm(ch, duty)`, `update_pwm(ch, hpoint, duty)`, `stop`). Each `update_pwm` call
-  forwards into `g_vconv.setPwm(ch, hpoint, duty)`; `stop(ch, idleLevel)` zeroes the latched counts for that channel so
-  the coil idles.
+  (`pwmMax`, `init_pwm`, `update_pwm(ch, duty)`, `update_pwm(ch, hpoint, duty)`, `stop`). The shim translates LEDC's
+  two call shapes into an absolute on-count and calls `g_vconv.setPwmCount(ch, on)` — see §PWM-input for the per-shape
+  rules; `stop(ch, idleLevel)` zeroes the latched counts for that channel so the coil idles.
 - **`VirtualConverter`** — the model. Pure C++ (no `<Arduino.h>`, no FreeRTOS, no `esp_*`). Owns the converter state
-  (`V_in`, `V_out`, `I_L_end`), holds the configuration (passives + sources/sinks), exposes `setPwm()` (input) and
-  `step(dt_seconds)` / `getVin() / getVout() / getIout() / getIin()` (outputs). Stepping is decoupled from PWM updates:
-  `step` advances the model by N PWM cycles using the most recently latched PWM counts.
+  (`V_in`, `V_out`, `I_L_end`), holds the configuration (passives + sources/sinks), exposes
+  `setPwmCount`/`setPwmMax`/`setPwmFreq` (input) and `stepSeconds(dt, freqFallback)` / `getVin / getVout / getIoutAvg /
+  getIinAvg / getIL` (outputs). Stepping is decoupled from PWM updates: each call advances the model by
+  `N = round(dt · pwmFreq)` PWM cycles using the most recently latched PWM counts.
 - **`ADC_VConv`** — implements `AsyncADC<float>`. Wraps the existing `PeriodicTimer` + `TaskNotification` pattern from
   `ADC_Fake` to schedule samples. On each tick: calls `g_vconv.step(1.0 / adc_freq)`, then `getSample(ch)` returns the
   channel's current model state. NTC channel returns a constant.

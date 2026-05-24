@@ -278,6 +278,14 @@ output back into V_in via the HS body diode). Modelling the `backflow.h` GPIO sw
 for v1: the firmware closes it as part of normal operation, and the regimes that depend on it being 
 open (full-disable hold-off) are tested separately.
 
+**Open-circuit output.** No new state — degenerate case of the same equation: set `v_bat=0` and
+`r_bat=1e9` (console preset `vconv bat open`). `I_bat = V_out / 1e9 ≈ 0` so the output cap just
+integrates whatever the converter delivers, and V_out climbs until the firmware OVP trips (or
+the model's defensive ceiling at `max(2·V_bat, 2·Voc)`, which is why the ceiling falls back to
+`2·Voc` when `V_bat ≈ 0` — otherwise it would pin V_out at zero and erase every interesting
+open-circuit transient). Mains ripple is skipped when `V_bat == 0`: a bipolar swing around zero
+is unphysical and meaningless when there's no sink.
+
 **Mains ripple on V_bat.** Inverter-fed topologies (see [[project_inverter_fed_topology]]) put 2·f_grid 
 ripple on the DC bus — at kW it's *volts* peak, bulk caps don't filter it, and the battery is the only sink.
 The plant injects this as a sinusoidal modulation:
@@ -353,6 +361,7 @@ in mock board configs. (Existing `wokwi_mock` and `dry_mock` already do somethin
 vconv                           # dump state: V_in, V_out, I_L_end, I_in_avg, I_out_avg, mode (CCM/DCM)
 vconv pv <isc> <voc> [k]        # update PV params at runtime
 vconv bat <v>                   # update battery voltage at runtime
+vconv bat open                  # open-circuit output preset (v_bat=0, r_bat=1e9)
 vconv set <key> <value>         # generic setter (c_in, c_out, r_bat, ...)
 ```
 
@@ -363,28 +372,93 @@ Registered in `src/cli.cpp` alongside the existing commands. Dispatch reads / wr
 
 Two layers:
 
-1. **Math unit test** — `test/host-stub/vconv-test.cpp`. Builds in host-stub mode (no Arduino, no IDF). Exercises:
-   - Steady-state CCM: known V_in, V_out, D → expected I_L_avg
+1. **Math unit test** — `test/host-stub/vconv-test.cpp`. Builds in host-stub mode (no Arduino, no IDF). This test block
+   is meant to test the vconv model only, not the firmware.
+
+   **Physical invariants** (cheapest checks that the per-cycle solver is dimensionally + signwise correct):
+   - **Volt-second balance on L (CCM steady state).** After settle: `Vout/Vin ≈ tHS/(tHS+tLS)` to 0.5%.
+   - **Coil ripple amplitude.** Settled cycle: `max(IL) − min(IL) = (Vin − Vout)·tHS/L` to 1%. Capture `a/b/c` via
+     friend or by querying `iLEnd` over one cycle.
+   - **Per-cycle charge balance on Cout.** `mean(iOutAvg) ≈ Ibat` to ~1% after `T·N ≫ Rbat·Cout`.
+   - **Energy conservation (lossless plant).** `Vin·iInAvg ≈ Vout·iOutAvg` to 1% in CCM steady state. Plant has no
+     Rds(on) / diode drop, so a failure exposes an area-integration bug.
+
+   **Operating-point sweeps:**
+   - Steady-state CCM: known V_in, V_out, D → expected I_L_avg.
    - DCM zero-crossing: at fixed `pwmCtrl`/`pwmRect`, sweep the load (vary `V_bat`) and assert the model's `inDcm()`
      flips true exactly when the closed-form ripple half-amplitude `ΔI_L/2 = (V_in − V_out)·D·T/(2L)` exceeds the
-     steady-state `I_out_avg` — purely a model-vs-analytic check, no firmware involved. The firmware-boundary alignment
-     is the separate on-target risk item (§Difficulties #1).
-   - Sweep: PV IV-curve has a peak at the expected V
-   - Cap dynamics: step change in PV current → V_in settles with the right time constant
-   - **Reverse-current regime:** force LS-on past the zero crossing (set `pwmRect` such that the analytic phase-2 ends
-     with `I_L_after_LS < 0`). Run N cycles, assert: V_in rises, V_out drops, I_bat goes negative (battery sources).
-     Confirms the HS-body-diode pumping path and the bidirectional I_bat clause.
-   - **Notch rejection:** set `vbat_ac_amp=1.0`, `vbat_ac_freq=100`. Run the firmware's vout sensor chain over many
-     cycles; assert post-notch ripple is attenuated ≥20 dB vs raw. With the notch disabled (or mis-tuned to e.g. 120
-     Hz), assert the ripple leaks through. Confirms the notch is wired into the V_out path and actually tuned to
-     `notch_f`.
-   - **Noise tolerance:** set `noise_vin=0.05` (V σ). Run steady-state with constant duty; assert the
-     median+EWM-filtered V_in stays within ±2σ/√N_window of the deterministic plant value across a long window. Confirms
-     the filter chain isn't degraded by added jitter.
+     steady-state `I_out_avg`. **`D` here is `tHS/T` (HS-only duty), not `pwmCtrl + pwmRect`** — using EnLogic duty
+     introduces an off-by-(1+dLS) factor at high load. Purely a model-vs-analytic check; firmware-boundary alignment is
+     the on-target risk item (§Difficulties #1).
+   - Sweep: PV IV-curve has a peak at the expected V.
+   - Cap dynamics: step change in PV current → V_in settles with the right time constant.
+
+   **Corner cases:**
+   - **D=0 idle** (`pwmCtrl=0`): after 1000 cycles assert `iInAvg=0`, `iOutAvg=0`, `iLEnd=0`, Vin → Voc, Vout → Vbat
+     exactly. Pins the `tHS=0` branch against state carry from prior runs.
+   - **D=1 saturation** (`pwmCtrl=pmax, pwmRect=0`): `tOff=0`, `dcm_==false`, IL grows monotonically until Vout → Vin.
+     Catches sign bugs in the phase-3 guard.
+   - **Vout ≈ Vin** (D≈1, light load): phase-2 slope `−Vout/L` is large vs phase-1 slope `≈ 0` — assert no NaN, IL stays
+     bounded.
+   - **Iload ≈ 0** (set `v_bat = Vout_target`): assert steady `iOutAvg ≈ (Vout − Vbat)/Rbat` to 1%.
+   - **Battery at termination** (sweep Vbat up to `cv_eoc`): raising Vbat above MPP·D collapses `iOutAvg → 0` without
+     instability.
+
+   **Numerical / stability:**
+   - **Forward-Euler stability sweep.** Per §"Capacitor dynamics" the cliff is at `T/(Rbat·Cout) = 2`. Set Cout so the
+     ratio is `{0.5, 1.0, 1.5, 1.9}` → step response bounded and ≤2× initial error; at `2.1` it diverges. Locks the
+     documented stability boundary into CI.
+   - **`vbatAcPhase_` wrap.** Assert phase stays in `[−2π, 2π]` after 1e6 cycles at `vbat_ac_freq=1 Hz` (slow phase
+     accumulation is where float precision bites).
+   - **No hidden L derate.** Compute `ΔIL_pp` from `vconv.conf` `L` (== `coil.conf::L0`) and compare to the model — the
+     plant must use nameplate L exactly, with the firmware's 5% `InductivityDcBias` showing up only on the controller
+     side as a real mismatch.
+
+   **Reverse-current regime:** force LS-on past the zero crossing (set `pwmRect` such that the analytic phase-2 ends
+   with `I_L_after_LS < 0`). Run N cycles, assert:
+   - V_in rises, V_out drops, I_bat goes negative (battery sources) — confirms HS-body-diode pumping path.
+   - **Bidirectional charge balance:** `iInAvg·Vin + iOutAvg·Vout ≈ 0` over one settled cycle (lossless plant, energy
+     flows source → sink reversed). Pins the path quantitatively, not just by sign.
+   - **`iInAvg` sign + magnitude** match the analytic phase-1 triangle area `(a + b)·tHS/(2T)` with `a < 0, b = 0` to
+     1%. Documents whether negative `iInAvg` is the physically-correct "HS body-diode reverse pump" reading, or a
+     plant artefact that needs clamping.
+
+   **Punch list (concrete assertions):**
+
+   | # | Test                            | Quantity                                                | Expected                       | Tol          |
+   |---|---------------------------------|---------------------------------------------------------|--------------------------------|--------------|
+   | A | CCM volt-sec balance            | `Vout/Vin` after settle                                 | `tHS/(tHS+tLS)`                | 0.5%         |
+   | B | CCM ripple amplitude            | `max(IL) − min(IL)` settled                             | `(Vin − Vout)·tHS/L`           | 1%           |
+   | C | Energy conservation             | `Vin·iInAvg / (Vout·iOutAvg)`                           | 1.0                            | 1%           |
+   | D | D=0 idle                        | `iInAvg, iOutAvg, iLEnd` @ 1000 cyc                     | 0, 0, 0                        | exact        |
+   | E | D=1 saturation                  | `tOff=0`, `dcm_==false`, IL monotone                    | —                              | —            |
+   | F | Iload≈0 (Vbat = Vout_target)    | steady `iOutAvg`                                        | `(Vout − Vbat)/Rbat`           | 1%           |
+   | G | FE stability sweep              | ratio ∈ {0.5, 1, 1.5, 1.9} bounded; 2.1 diverges        | —                              | —            |
+   | H | Reverse-pump charge balance     | `iInAvg·Vin + iOutAvg·Vout`                             | 0                              | 1%           |
+   | I | `iInAvg` in reverse regime      | sign + magnitude vs analytic triangle                   | match                          | 1%           |
+   | J | DCM boundary                    | sweep Vbat at fixed PWM, find Iout where `dcm_` flips   | matches `ΔIL/2 = Iout`         | 1 sweep step |
+   | K | Phase wrap                      | `\|vbatAcPhase_\| ≤ 2π` after 1e6 cyc @ 1 Hz            | —                              | —            |
+
+   **Implementation notes flagged during review** (must be addressed before tests J / H / I are meaningful):
+   - `vconv.cpp:109` — `dcm_ = (tOff > 0) || …` flags DCM whenever the firmware leaves any off-time, even if phase 3
+     never reaches zero. Per the spec, DCM should mean "coil hit zero this cycle":
+     `dcm_ = (cEnd == 0.0f) && (c != 0.0f || iLEnd_ == 0.0f)`. Risk item §1 cannot be tested cleanly until `inDcm()`
+     matches its definition.
+   - `vconv.cpp:46` — `Ibat = (Vout − Vbat)/rbat_` has no guard against `rbat_ = 0`. Add `rbat_ > 1e-6f` check or
+     assert at `setBat`.
+   - `vconv.cpp:122` — `Vout` clamp at `2·vbat_` can be hit during reverse-pump tests or with large `vbat_ac_amp`.
+     Either clamp on `vBatEff` or document that tests must stay below.
 2. **On-target integration test** — flash `wokwi_mock` (or a new `vconv_mock` board config) with vconv enabled. Boot,
    let it run: MPPT tracker should find an MPP near `pv_k * Voc`, PD loops should regulate, charger should reach CV.
    Pass = no protection trips, MPP within ±10% of expected, Iout > 0 at MPP. A second pass with `vbat_ac_amp=0.5` +
    `noise_vin=0.02` must still converge — that's the "realistic bench" smoke test.
+    - **Noise tolerance:** set `noise_vin=0.05` (V σ). Run steady-state with constant duty; assert the
+      median+EWM-filtered V_in stays within ±2σ/√N_window of the deterministic plant value across a long window. Confirms
+      the filter chain isn't degraded by added jitter.
+    - **Notch rejection:** set `vbat_ac_amp=1.0`, `vbat_ac_freq=100`. Run the firmware's vout sensor chain over many
+      cycles; assert post-notch ripple is attenuated ≥20 dB vs raw. With the notch disabled (or mis-tuned to e.g. 120
+      Hz), assert the ripple leaks through. Confirms the notch is wired into the V_out path and actually tuned to
+      `notch_f`.
 
 The host-stub already has `converter-test.cpp` and infrastructure — `vconv-test.cpp` slots in next to it.
 

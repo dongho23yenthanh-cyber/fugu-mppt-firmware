@@ -91,8 +91,11 @@ static int enqueue_log(const char *fmt, size_t l, const va_list &args, bool appe
         len = snprintf(buf, l + 1, "(%lu): ", micros());
         if (len <= 0) return len;
     }
-    auto r2 = vsnprintf(buf + len, l + 1 - len - size_t(appendBreak), fmt, args);
+    size_t cap = l + 1 - len - size_t(appendBreak);
+    auto r2 = vsnprintf(buf + len, cap, fmt, args);
     if (r2 <= 0) return len; // error or empty
+    // vsnprintf returns the untruncated length; clamp so buf[len]='\n' stays in bounds.
+    if ((size_t) r2 >= cap) r2 = (int) cap - 1;
     len += r2;
     if (appendBreak) {
         buf[len] = '\n';
@@ -190,18 +193,18 @@ static int printf_old(const char *fmt, ...) {
 }
 
 void flush_async_uart_log() {
+    // Cap entries drained per call so the network loop can pet the TWDT.
+    // printf_old() blocks in uart_tx_char waiting on FIFO room: at 115200 baud a 60-byte
+    // line costs ~5 ms, and if the RT core keeps enqueueing faster than UART drains (e.g.
+    // a vconv saturation that spams Vin-OV warnings every sample), the while-loop never
+    // sees an empty queue and core-0 sits inside flush past TASK_WDT_TIMEOUT_S → reset.
+    // 32 entries ≈ 160 ms worst-case; the remainder drains on the next loop tick after
+    // vTaskDelay(1). RT-side cap at queue>200 already drops overflow.
+    constexpr int kMaxPerCall = 32;
     AsyncLogEntry entry;
-    while (uart_async_log_queue.try_dequeue(entry)) {
+    for (int i = 0; i < kMaxPerCall && uart_async_log_queue.try_dequeue(entry); ++i) {
         if (!entry.telnetOnly) {
-            // we call the old vprintf here for convenience.
-            // otherwise we can write the string to UART and JTAG USB
-            // see esp-idf/console, which does the multiplexing for us
-
-            //va_list l{};
-            //old_vprintf(entry.str, l);
-            //old_vprintf("%s", entry.str);
             printf_old(entry.str);
-            //uart_write_bytes(0, entry.str, entry.len);
         }
 
         if (log_telnet)

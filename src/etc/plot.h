@@ -9,6 +9,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,7 +25,7 @@ struct Series {
     }
 
     void add(float x, float y, float xMax) {
-        if (vec.empty() or abs(vec.back().first - x) > (xMax / (expectedLen * 0.9f))) {
+        if (vec.empty() or std::fabs(vec.back().first - x) > (xMax / (expectedLen * 0.9f))) {
             if (vec.size() >= expectedLen) vec.pop_back();
             vec.emplace_back(x, y);
         }

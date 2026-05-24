@@ -295,6 +295,7 @@ const META = {
 
   // tracker.conf
   target_duty_cycle:{unit:"",desc:"Fixed duty cycle fraction; if set, disables MPPT tracking",type:"float"},
+  sweep_speed:{unit:"",desc:"Global-sweep speed; scales both per-tick cap and limit-tracking gain (default 4.0)",type:"float"},
 
   // mqtt.conf
   broker_uri:{unit:"",desc:"MQTT broker URI, e.g. mqtt://host:port",type:"string"},
@@ -370,7 +371,7 @@ const FILE_KEYS = {
   "converter.conf":["forced_pwm","topo"],
   "charger.conf":["bat_c","cv_eoc","cv_float","ibat_max","recharge_dod","tail_c_rate","vout_max",
     "vout_max_fallback"],
-  "tracker.conf":["target_duty_cycle"],
+  "tracker.conf":["sweep_speed","target_duty_cycle"],
   "mqtt.conf":["broker_uri","cell_voltages_max_topic","cmd_input","enabled","ibat_lim_topic",
     "ibat_topic","log_level","password","username"],
   "tele.conf":["enabled","influxdb_host","log_level"],
@@ -396,7 +397,7 @@ const TYPE_KEYS = {
     "i2c_scl","led_WS2812","led_WS2812B","pwm_freq","rect_offset","sprofiler_hz","switch_delay"]),
   float: new Set(["L0","bat_c","boot_refresh_ns","cv_eoc","cv_float","ibat_max","iin_max",
     "ina22x_range","ina22x_resistor","iout_max","iout_short","p_max","power_conversion_eff",
-    "pwm_deadtime_ns","recharge_dod","tail_c_rate","target_duty_cycle","temp_derate","temp_max",
+    "pwm_deadtime_ns","recharge_dod","sweep_speed","tail_c_rate","target_duty_cycle","temp_derate","temp_max",
     "vin_max","vin_min","vout_max","vout_max_fallback"]),
   string: new Set(["adc","ble_security","broker_uri","cell_voltages_max_topic","ftp_pass",
     "ftp_user","ibat_lim_topic","ibat_topic","influxdb_host","log_level","mcu","password",
@@ -427,7 +428,7 @@ const DEFAULTS = {
   // charger.conf
   "cv_eoc":"3.6","cv_float":"3.37","recharge_dod":"0.2","tail_c_rate":"0.05",
   // tracker.conf
-  "target_duty_cycle":"0.0",
+  "sweep_speed":"4.0","target_duty_cycle":"0.0",
   // mqtt.conf
   "broker_uri":"\"\"","cell_voltages_max_topic":"\"\"","cmd_input":"0","enabled":"1",
   "ibat_lim_topic":"\"\"","ibat_topic":"\"\"","log_level":"\"info\"","password":"\"\"",

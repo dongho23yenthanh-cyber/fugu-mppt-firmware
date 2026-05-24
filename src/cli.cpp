@@ -281,8 +281,11 @@ static void cmdScanI2c(cmd *) { scan_i2c(); }
 
 static void cmdLs(cmd *) { ESP_LOGE("main", "not impl"); }
 
+static void cmdUptime(cmd *);
+
 #ifdef WITH_NETW
 static void cmdOta(cmd *c) {
+    cmdUptime(c);
     auto url = Command(c).getArg(0).getValue();
     if (url.length() == 0)
         CMD_FAIL_RETURN("ota: expected url");

@@ -1,5 +1,20 @@
 cmake_minimum_required(VERSION 3.16)
 
+# Catch WITH_* env-var typos early. CMake silently treats unknown $ENV{WITH_FOO} as empty,
+# so e.g. WITH_BINRAY_TELE=1 would build with the option *off* and no warning.
+set(_known_with_vars
+        WITH_BLE WITH_NETW WITH_SPROFILER WITH_VCONV WITH_MCPWM WITH_BINARY_TELE)
+execute_process(COMMAND ${CMAKE_COMMAND} -E environment OUTPUT_VARIABLE _all_env)
+string(REPLACE "\n" ";" _all_env "${_all_env}")
+foreach (_line IN LISTS _all_env)
+    if (_line MATCHES "^(WITH_[A-Za-z0-9_]+)=")
+        if (NOT CMAKE_MATCH_1 IN_LIST _known_with_vars)
+            message(FATAL_ERROR
+                    "Unknown env var ${CMAKE_MATCH_1}. Known: ${_known_with_vars}")
+        endif ()
+    endif ()
+endforeach ()
+
 # Layer optional sdkconfig fragments on top of the defaults so flag-gated features (and their
 # flash cost) are only baked into builds that ask for them. Order matters — later fragments win.
 set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")

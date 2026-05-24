@@ -91,9 +91,12 @@ class Li_ChgTerminationCondition {
      * when full charged, the battery voltage is pinned. todo regulate battery current towards 0?
      */
 
+    static constexpr uint8_t VFLOOR_STREAK_REQ = 4; // consecutive sub-threshold BMS frames to release on voltage
+
     const BatChargerParams &p;
     bool terminated = false;
     float _v_term;
+    uint8_t _vfloorStreak = 0; // sustained sub-threshold counter (transient I·R sag → 1-frame dips, ignore)
 
 public:
     [[nodiscard]] float v_term() const { return _v_term; }
@@ -109,6 +112,7 @@ public:
     void reset() {
         terminated = false;
         _v_term = p.cv_min;
+        _vfloorStreak = 0;
     }
 
     bool update(float vcell_high, float ibat, float ahSinceFull) {
@@ -120,6 +124,7 @@ public:
         _v_term = fminf(p.cv_min + fmaxf(0.f, vo), p.cv_eoc); // don't go beyond cv_eoc to avoid BMS cut-off
         if (!terminated and ibat > 0 and vcell_high > p.cv_min + vo) {
             terminated = true;
+            _vfloorStreak = 0;
         } else if (terminated and shouldRelease(vcell_high, ahSinceFull)) {
             terminated = false;
         }
@@ -129,17 +134,27 @@ public:
     }
 
 private:
-    [[nodiscard]] bool shouldRelease(float vcell_high, float ahSinceFull) const {
-        // in case sth is wrong with our coulomb counter we release based on voltage
-        constexpr float RECHARGE_VFLOOR_BAND = 0.1f; // TODO make this configurable, was 0.05f;
-        // TODO add ewm smoothing
+    bool shouldRelease(float vcell_high, float ahSinceFull) {
+        // Voltage-floor backstop in case the coulomb counter is misbehaving.
+        // Require a sustained streak so a single I·R sag (50 A load spike →
+        // vcell drops a few hundred mV for one BMS frame) doesn't release a
+        // still-near-full pack.
+        constexpr float RECHARGE_VFLOOR_BAND = 0.1f;
         if (vcell_high < p.cv_min - RECHARGE_VFLOOR_BAND) {
-            ESP_LOGW("charger", "Termination release due to vcell_high(%.3f)<%.3f - %.3f", vcell_high, p.cv_min,
-                     RECHARGE_VFLOOR_BAND);
+            if (++_vfloorStreak >= VFLOOR_STREAK_REQ) {
+                ESP_LOGW("charger", "Termination release due to vcell_high(%.3f)<%.3f - %.3f (sustained %u frames)",
+                         vcell_high, p.cv_min, RECHARGE_VFLOOR_BAND, (unsigned) _vfloorStreak);
+                _vfloorStreak = 0;
+                return true;
+            }
+        } else {
+            _vfloorStreak = 0;
+        }
+        if (std::isfinite(p.Cbat) && p.recharge_dod > 0.f && ahSinceFull > p.recharge_dod * p.Cbat) {
+            ESP_LOGW("charger", "Termination release due to DoD: ahSinceFull(%.2f)>%.2f Ah (recharge_dod=%.2f)",
+                     ahSinceFull, p.recharge_dod * p.Cbat, p.recharge_dod);
             return true;
         }
-        if (std::isfinite(p.Cbat) && p.recharge_dod > 0.f && ahSinceFull > p.recharge_dod * p.Cbat)
-            return true;
         return false;
     }
 };

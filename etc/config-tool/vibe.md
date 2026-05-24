@@ -96,6 +96,22 @@ It uses the same protocol as the wired serial console described earlier.
 Put another button next to the Serial Connect button to scan for a BLE device, connect to the NUS console and fetch the
 files.
 
+
+# mqtt
+Another way to communicate with the device is mqtt. See `scan_mqtt()` in `fugu_console.py` to learn how to discover host.
+Implement the MQTT in JS, the browser will connect to the broker directly. Then use `MqttTransport` as reference on how
+to communicate with the device. It uses the same protocol as the other transports (serial, BLE).
+Add another button that opens a modal and scans the MQTT broker for devices and show them in a list in the modal.
+The user can then chose one device to connect to, edit the files and upload (same procedure as serial, BLE)
+
+
+# console
+the user can open the device log, the one that opens when uploading changes to BLE/Serial/MQTT. 
+The user can send commands on with a text input below the log.
+the log container scroll follows new log lines when scrolled to the bottom. when the user scrolls up, it halts following.
+the log lines have ANSI color codes. use this parser https://github.com/rburns/ansi-to-html/blob/master/lib/ansi_to_html.js to display the text in the right
+color.
+lines in the log should not wrap.
 # upload
 
 Add an upload button that uploads *only changed* fields to the device.
@@ -112,3 +128,5 @@ scan the firmware code for ConfFile keys and update the html tool
 
 
 show all tabs for all known files, regardless of their existence in the load (allow user can create a new files).
+
+

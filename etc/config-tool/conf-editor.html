@@ -90,11 +90,19 @@
     font-family:ui-monospace,monospace; font-size:12px; display:none; z-index:50; box-shadow:0 8px 30px rgba(0,0,0,.55); }
   #uploadlog .ulhdr { display:flex; gap:8px; align-items:center; margin-bottom:8px; color:var(--fg); font-family:inherit; }
   #uploadlog .ulhdr .spacer { flex:1; }
-  #uploadlog-body div { white-space:pre-wrap; word-break:break-all; line-height:1.5; }
+  #uploadlog-body div { white-space:pre; line-height:1.5; }
   #uploadlog .sent { color:var(--accent); }
   #uploadlog .resp { color:var(--muted); }
   #uploadlog .resp.ok { color:var(--accent2); }
   #uploadlog .resp.err { color:var(--warn); }
+  #uploadlog-input { display:flex; gap:6px; margin-top:8px; padding-top:8px; border-top:1px solid var(--line); }
+  #uploadlog-input input { flex:1; background:var(--bg); color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; padding:6px 9px; font-family:ui-monospace,monospace; font-size:12px; }
+  #uploadlog-input input:focus { outline:none; border-color:var(--accent); }
+  #uploadlog-input input:disabled { opacity:.5; }
+  #uploadlog-input button { padding:5px 11px; font-family:inherit; font-size:12px; }
+  #open-console { position:fixed; right:16px; bottom:16px; z-index:40;
+    box-shadow:0 4px 14px rgba(0,0,0,.45); }
   /* MQTT modal */
   .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; z-index:100;
     align-items:flex-start; justify-content:center; padding:60px 16px; overflow:auto; }
@@ -144,17 +152,21 @@
   <button id="download" class="primary" style="display:none">Download .zip</button>
 </header>
 
+<button id="open-console" style="display:none">Device log</button>
+
 <div id="drop">
   <h2>Drop a config .zip here</h2>
   <div>…or open a <code>.zip</code> / a folder structured like <code>config/fmetal</code> (with a <code>conf/</code> dir of <code>*.conf</code> files).</div>
   <div class="controls">
     <label class="btn">Choose .zip<input id="pick-zip" type="file" accept=".zip"></label>
     <label class="btn">Choose folder<input id="pick-dir" type="file" webkitdirectory directory multiple></label>
+  </div>
+  <div style="margin-top:18px;color:var(--muted);font-size:12px">…or read the live config straight off the device over USB serial, Bluetooth (NUS; Chrome/Edge, https or localhost), or MQTT (via WebSocket).</div>
+  <div class="controls" style="margin-top:10px">
     <button id="connect-serial" class="btn">Connect serial (115200)</button>
     <button id="connect-ble" class="btn">Connect Bluetooth</button>
     <button id="connect-mqtt" class="btn">Connect MQTT</button>
   </div>
-  <div style="margin-top:10px;color:var(--muted);font-size:12px">…or read the live config straight off the device over USB serial, Bluetooth (NUS; Chrome/Edge, https or localhost), or MQTT (via WebSocket).</div>
   <div id="drop-msg" class="err" style="margin-top:14px"></div>
 </div>
 
@@ -164,14 +176,18 @@
 </div>
 
 <div id="uploadlog">
-  <div class="ulhdr"><strong>Upload</strong><span id="uploadlog-stat" class="pill"></span><span class="spacer"></span><button id="uploadlog-close">close</button></div>
+  <div class="ulhdr"><strong id="uploadlog-title">Device log</strong><span id="uploadlog-stat" class="pill"></span><span class="spacer"></span><button id="uploadlog-close">close</button></div>
   <div id="uploadlog-body"></div>
+  <form id="uploadlog-input" autocomplete="off">
+    <input id="uploadlog-cmd" type="text" placeholder="type a console command and press Enter">
+    <button type="submit">Send</button>
+  </form>
 </div>
 
 <div id="mqtt-modal" class="modal-bg">
   <div class="modal">
     <h2>Connect via MQTT</h2>
-    <div class="field"><label>Broker URL</label><input id="mqtt-url" placeholder="ws://192.168.1.200:9001"></div>
+    <div class="field"><label>Broker URL</label><input id="mqtt-url" placeholder="ws://192.168.1.200:1885"></div>
     <div class="field"><label>Username</label><input id="mqtt-user" placeholder="pv"></div>
     <div class="field"><label>Password</label><input id="mqtt-pass" type="password"></div>
     <div style="color:var(--muted);font-size:11px;margin-top:6px">
@@ -188,6 +204,15 @@
 </div>
 
 <script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+<script type="module">
+  // ESP_LOG output is ANSI-coloured. Use rburns/ansi-to-html
+  // (https://github.com/rburns/ansi-to-html/blob/master/lib/ansi_to_html.js) to
+  // turn the SGR escapes into safe <span style="color:..."> markup.
+  // escapeXML:true makes the library escape its input before wrapping it in
+  // colour spans, so the resulting HTML is safe to splice into the log DOM.
+  import Convert from "https://esm.sh/ansi-to-html@0.7.2";
+  window.ansiConvert = new Convert({ newline:false, escapeXML:true });
+</script>
 <script>
 "use strict";
 
@@ -328,53 +353,105 @@ const CHAN_SUFFIX = {
 
 /* Every key the firmware actually reads per file (mined from src/), so the
    editor can surface fields even when the uploaded .conf omits them.
-   wifi.conf is pattern-based (ssid_<name>/_psk) so it has no fixed list. */
+   wifi.conf is pattern-based (ssid_<name>/_psk) so it has no fixed list.
+   Run `python3 etc/config-tool/scrape_conf_keys.py --write` to refresh. */
+// SCRAPER:BEGIN FILE_KEYS
 const FILE_KEYS = {
-  "board.conf":["mcu","skip_assert","i2c_sda","i2c_scl","i2c_freq","i2c_port",
-    "ina22x_alert","ina22x_addr","ina22x_resistor","ina22x_range",
-    "pwm_freq","pwm_driver_logic","pwm_hi","pwm_li","pwm_sd","pwm_in","pwm_en","boot_refresh_ns",
-    "pwm_deadtime_ns","pwm_fault_pin","pwm_fault_active_high",
-    "panel_en","panel_sd","led_WS2812","led_WS2812B","led_simple","fan_pwm","ads_alert","adc_fake_freq"],
-  "sensor.conf":["adc","expected_hz","power_conversion_eff","ignore_calibration_constraints",
-    "esp32adc1_sr","esp32adc1_avg",
-    "vin_adc","vin_ch","vin_rh","vin_rl","vin_filt_len",
-    "vout_adc","vout_ch","vout_rh","vout_rl","vout_filt_len",
-    "iin_adc","iin_ch","iin_factor","iin_midpoint","iin_filt_len",
-    "iout_adc","iout_ch","iout_factor","iout_midpoint","iout_filt_len",
-    "ntc_adc","ntc_ch","ntc_filt_len"],
-  "limits.conf":["vin_max","vin_min","vout_max","iin_max","iout_max","iout_short",
-    "p_max","temp_max","temp_derate","reverse_current_paranoia"],
+  "board.conf":["adc_fake_freq","ads_alert","boot_refresh_ns","fan_pwm","i2c_freq","i2c_port",
+    "i2c_scl","i2c_sda","ina22x_addr","ina22x_alert","ina22x_range","ina22x_resistor",
+    "led_WS2812","led_WS2812B","led_simple","mcu","ntc_ch","panel_en","panel_sd",
+    "pwm_deadtime_ns","pwm_driver_logic","pwm_en","pwm_fault_active_high","pwm_fault_pin",
+    "pwm_freq","pwm_hi","pwm_in","pwm_li","pwm_sd","skip_assert"],
+  "sensor.conf":["adc","esp32adc1_avg","esp32adc1_sr","expected_hz",
+    "ignore_calibration_constraints","ntc_ch","power_conversion_eff"],
+  "limits.conf":["iin_max","iout_max","iout_short","p_max","reverse_current_paranoia",
+    "temp_derate","temp_max","vin_max","vin_min","vout_max"],
   "coil.conf":["L0","rect_offset"],
-  "converter.conf":["topo","forced_pwm"],
-  "charger.conf":["vout_max","cv_eoc","cv_float","vout_max_fallback","ibat_max",
-    "bat_c","tail_c_rate","recharge_dod"],
+  "converter.conf":["forced_pwm","topo"],
+  "charger.conf":["bat_c","cv_eoc","cv_float","ibat_max","recharge_dod","tail_c_rate","vout_max",
+    "vout_max_fallback"],
   "tracker.conf":["target_duty_cycle"],
-  "mqtt.conf":["broker_uri","username","password","cell_voltages_max_topic","ibat_topic","ibat_lim_topic","cmd_input","enabled","log_level"],
-  "tele.conf":["influxdb_host","enabled","log_level"],
-  "ftp.conf":["ftp_user","ftp_pass","enabled","log_level"],
+  "mqtt.conf":["broker_uri","cell_voltages_max_topic","cmd_input","enabled","ibat_lim_topic",
+    "ibat_topic","log_level","password","username"],
+  "tele.conf":["enabled","influxdb_host","log_level"],
+  "ftp.conf":["enabled","ftp_pass","ftp_user","log_level"],
   "telnet.conf":["enabled","log_level"],
   "scope.conf":["enabled","log_level"],
   "lcd.conf":["addr","enabled","log_level"],
-  "ble.conf":["ble_security","ble_passkey","enabled","log_level"],
+  "ble.conf":["ble_passkey","ble_security","enabled","log_level"],
   "pprof.conf":["sprofiler_hz"],
   "wifi.conf":["switch_delay"],
 };
+// SCRAPER:END FILE_KEYS
 
 /* Data type = the ConfFile getter the firmware reads the key with
    (getByte/getLong/getFloat/getString), determined by grepping src/. */
+// SCRAPER:BEGIN TYPE_KEYS
 const TYPE_KEYS = {
-  byte: new Set(["ads_alert","addr","enabled","fan_pwm","forced_pwm","i2c_port","i2c_sda","ignore_calibration_constraints",
-    "ina22x_addr","ina22x_alert","led_simple","led_WS2812","ntc_ch","panel_en","panel_sd",
-    "pwm_sd","pwm_hi","pwm_li","pwm_in","pwm_en","pwm_fault_pin","pwm_fault_active_high",
-    "reverse_current_paranoia","skip_assert","expected_hz"]),
-  long: new Set(["adc_fake_freq","ble_passkey","esp32adc1_avg","esp32adc1_sr","i2c_freq","i2c_scl","led_WS2812B","pwm_freq","sprofiler_hz"]),
-  float: new Set(["L0","bat_c","boot_refresh_ns","cv_eoc","cv_float","ibat_max","iin_max","ina22x_range","ina22x_resistor","pwm_deadtime_ns",
-    "iout_max","iout_short","p_max","power_conversion_eff","conversion_eff","recharge_dod","tail_c_rate",
-    "target_duty_cycle","temp_derate","temp_max","vin_calib","vin_max","vout_calib","vout_max","vout_max_fallback"]),
-  string: new Set(["adc","ble_security","broker_uri","cell_voltages_max_topic","ftp_pass","ftp_user","ibat_lim_topic",
-    "ibat_topic","influxdb_host","log_level","mcu","mode","password","pwm_driver_logic","topo","username"]),
+  byte: new Set(["addr","ads_alert","cmd_input","enabled","expected_hz","fan_pwm","forced_pwm",
+    "i2c_port","i2c_scl","i2c_sda","ignore_calibration_constraints","ina22x_addr","ina22x_alert",
+    "led_simple","ntc_ch","panel_en","panel_sd","pwm_en","pwm_fault_active_high","pwm_fault_pin",
+    "pwm_hi","pwm_in","pwm_li","pwm_sd","reverse_current_paranoia","skip_assert"]),
+  long: new Set(["adc_fake_freq","ble_passkey","esp32adc1_avg","esp32adc1_sr","i2c_freq",
+    "i2c_scl","led_WS2812","led_WS2812B","pwm_freq","rect_offset","sprofiler_hz","switch_delay"]),
+  float: new Set(["L0","bat_c","boot_refresh_ns","cv_eoc","cv_float","ibat_max","iin_max",
+    "ina22x_range","ina22x_resistor","iout_max","iout_short","p_max","power_conversion_eff",
+    "pwm_deadtime_ns","recharge_dod","tail_c_rate","target_duty_cycle","temp_derate","temp_max",
+    "vin_max","vin_min","vout_max","vout_max_fallback"]),
+  string: new Set(["adc","ble_security","broker_uri","cell_voltages_max_topic","ftp_pass",
+    "ftp_user","ibat_lim_topic","ibat_topic","influxdb_host","log_level","mcu","password",
+    "pwm_driver_logic","topo","username"]),
 };
+// SCRAPER:END TYPE_KEYS
 const CHAN_SUFFIX_TYPE = { adc:"string", ch:"byte", rh:"float", rl:"float", factor:"float", midpoint:"float", filt_len:"long" };
+
+/* Default values mined from `ConfFile::get*(key, default)` calls in src/.
+   Strings are kept quoted; absent entry = no default (key is required, or
+   dynamic, or empty/zero — the row stays unannotated). */
+// SCRAPER:BEGIN DEFAULTS
+const DEFAULTS = {
+  // board.conf
+  "adc_fake_freq":"3000","fan_pwm":"255","i2c_freq":"100000","i2c_port":"0","i2c_sda":"255",
+  "ina22x_addr":"0x40","ina22x_alert":"255","ina22x_range":"35.0","led_simple":"255",
+  "mcu":"\"\"","ntc_ch":"255","panel_en":"0","panel_sd":"0","pwm_fault_active_high":"0",
+  "pwm_fault_pin":"255","pwm_sd":"255","skip_assert":"0",
+  // sensor.conf
+  "adc":"\"\"","expected_hz":"0","ignore_calibration_constraints":"0",
+  "power_conversion_eff":"0.95",
+  // limits.conf
+  "reverse_current_paranoia":"1","temp_max":"90.0",
+  // coil.conf
+  "rect_offset":"0",
+  // converter.conf
+  "forced_pwm":"0","topo":"\"buck\"",
+  // charger.conf
+  "cv_eoc":"3.6","cv_float":"3.37","recharge_dod":"0.2","tail_c_rate":"0.05",
+  // tracker.conf
+  "target_duty_cycle":"0.0",
+  // mqtt.conf
+  "broker_uri":"\"\"","cell_voltages_max_topic":"\"\"","cmd_input":"0","enabled":"1",
+  "ibat_lim_topic":"\"\"","ibat_topic":"\"\"","log_level":"\"info\"","password":"\"\"",
+  "username":"\"\"",
+  // tele.conf
+  "influxdb_host":"\"\"",
+  // lcd.conf
+  "addr":"0",
+  // ble.conf
+  "ble_passkey":"0","ble_security":"\"justworks\"",
+  // pprof.conf
+  "sprofiler_hz":"0",
+  // wifi.conf
+  "switch_delay":"30",
+};
+// SCRAPER:END DEFAULTS
+const CHAN_SUFFIX_DEFAULT = { ch:"255", factor:"1.0", midpoint:"0.0", filt_len:"10" };
+
+function lookupDefault(file, key){
+  if (key in DEFAULTS) return DEFAULTS[key];
+  const m = key.match(/^(vin|vout|iin|iout|ntc)_(.+)$/);
+  if (m && (m[2] in CHAN_SUFFIX_DEFAULT)) return CHAN_SUFFIX_DEFAULT[m[2]];
+  return undefined;
+}
 
 function lookupType(key){
   for (const t of ["byte","long","float","string"]) if (TYPE_KEYS[t].has(key)) return t;
@@ -563,7 +640,12 @@ function load(files, sourceName){
     if (have.has(base)) continue;
     map[prefix+base] = { isConf:true, model:parseConf(""), extras:{}, order:[...FILE_KEYS[base]], original:{}, isNew:true };
   }
-  const allPaths = Object.keys(map).filter(p=>map[p].isConf).sort(confSort);
+  // synthetic (not present in the source) tabs go to the right; within each
+  // group keep the fixed TAB_ORDER ranking.
+  const allPaths = Object.keys(map).filter(p=>map[p].isConf).sort((a,b) => {
+    const an = map[a].isNew ? 1 : 0, bn = map[b].isNew ? 1 : 0;
+    return (an - bn) || confSort(a, b);
+  });
   state = { sourceName, files:map, confPaths:allPaths, active:allPaths[0] };
   renderApp();
 }
@@ -618,8 +700,11 @@ function renderPane(){
       + (meta ? "" : ' <span class="nometa" title="no metadata found in firmware">?</span>');
     left.appendChild(k);
     const d = document.createElement("div"); d.className="desc";
-    d.textContent = meta ? meta.desc : "(no description found)";
-    if (meta && meta.fromComment) d.textContent += "  ·  (from file comment)";
+    let desc = meta ? meta.desc : "(no description found)";
+    const def = lookupDefault(path, key);
+    if (def !== undefined) desc += "  ·  default: " + def;
+    if (meta && meta.fromComment) desc += "  ·  (from file comment)";
+    d.textContent = desc;
     left.appendChild(d);
 
     const right = document.createElement("div"); right.className="val";
@@ -966,7 +1051,7 @@ async function connectSerial(){
     activeWrite = serialWrite;
     showStatus("connected — reading config from device …");
     await importFromDevice("serial-device");
-    document.getElementById("upload").style.display="";
+    document.getElementById("upload").style.display=""; document.getElementById("open-console").style.display=""; ulRefreshInputState();
     // Stay connected: reopening the port can reset the device (DTR/RTS), so the
     // upload reuses this live connection instead of closing and reopening.
   } catch(e){
@@ -1055,7 +1140,7 @@ async function connectBluetooth(){
     activeWrite = bleWrite;
     showStatus("connected — reading config from device …");
     await importFromDevice("ble-device");
-    document.getElementById("upload").style.display="";
+    document.getElementById("upload").style.display=""; document.getElementById("open-console").style.display=""; ulRefreshInputState();
     // Stay connected so the upload reuses this live link (reconnecting can miss the reply).
   } catch(e){
     showErr("Bluetooth: "+e.message+" — if it was paired before, remove the device in your OS Bluetooth settings; make sure no phone or other browser tab holds the connection, then retry.");
@@ -1152,7 +1237,7 @@ function mqttModalSetStatus(msg, isErr){
 function mqttModalOpen(){
   for (const k in MQ_LS) document.getElementById(MQ_LS[k]).value = localStorage.getItem(MQ_LS[k]) || "";
   // sensible default for the URL if unseen
-  if (!document.getElementById("mqtt-url").value) document.getElementById("mqtt-url").value = "ws://192.168.1.200:9001";
+  if (!document.getElementById("mqtt-url").value) document.getElementById("mqtt-url").value = "ws://192.168.1.200:1885";
   const dl = document.getElementById("mqtt-devlist");
   dl.replaceChildren(); dl.classList.remove("show");
   mqttModalSetStatus("");
@@ -1218,7 +1303,7 @@ async function mqttConnectAndImport(hostname){
     mqttModalClose();
     showStatus("connected — reading config from "+hostname+" …");
     await importFromDevice(hostname);
-    document.getElementById("upload").style.display="";
+    document.getElementById("upload").style.display=""; document.getElementById("open-console").style.display=""; ulRefreshInputState();
   } catch(e){
     showErr("MQTT: "+(e.message||e));
     await disconnectMqtt();
@@ -1283,7 +1368,9 @@ async function uploadChanged(){
       showStatus(`uploading ${i+1}/${cmds.length}: ${c.label} …`);
       ulLine("sent", "» "+c.str);
       let got = 0;
-      const onRx = (ln)=>{ got++; ulLine("resp"+(/\bOK: /.test(ln)?" ok":/\bERR: /.test(ln)?" err":""), ln); };
+      // ulConsoleListener (attached while the panel is open) already renders the reply
+      // lines; here we only count them for the timeout-error message below.
+      const onRx = ()=>{ got++; };
       try {
         const r = await sendCommand(c.str, onRx);
         if (r){ ok++; if (c.del) delete c.f.original[c.key]; else c.f.original[c.key] = c.cur; }  // now matches device → clears the mark
@@ -1309,11 +1396,31 @@ async function uploadChanged(){
   showStatus(msg, failed.length>0);
 }
 
-// Upload log panel: shows each command sent and the device's reply lines.
-function ulOpen(statusText){
-  document.getElementById("uploadlog-body").innerHTML="";
-  ulStat(statusText, false);
+// Device-log panel: shows every line the device sends (whether triggered by an
+// upload, a manual `get-config`, or background ESP_LOG output) and lets the user
+// type commands. The listener is attached only while the panel is visible so the
+// DOM doesn't grow unbounded when the user has it closed.
+function ulConsoleListener(ln){
+  const cls = /\bOK: /.test(ln) ? "resp ok" : /\bERR: /.test(ln) ? "resp err" : "resp";
+  ulLine(cls, ln);
+}
+function ulShow(){
+  if (!lineListeners.has(ulConsoleListener)) lineListeners.add(ulConsoleListener);
   document.getElementById("uploadlog").style.display="block";
+  // panel and the floating "Device log" button share the bottom-right corner
+  document.getElementById("open-console").style.display="none";
+  ulRefreshInputState();
+}
+function ulHide(){
+  lineListeners.delete(ulConsoleListener);
+  document.getElementById("uploadlog").style.display="none";
+  // restore the floating button once a transport has been used (lastTransport set)
+  if (lastTransport) document.getElementById("open-console").style.display="";
+}
+function ulOpen(statusText){
+  document.getElementById("uploadlog-body").replaceChildren();
+  ulStat(statusText, false);
+  ulShow();
 }
 function ulStat(text, isErr){
   const s=document.getElementById("uploadlog-stat");
@@ -1321,10 +1428,46 @@ function ulStat(text, isErr){
 }
 function ulLine(cls, text){
   const log=document.getElementById("uploadlog"), body=document.getElementById("uploadlog-body");
-  const d=document.createElement("div"); d.className=cls; d.textContent=text; body.appendChild(d);
-  log.scrollTop = log.scrollHeight;
+  // tail-follow only when the user hasn't scrolled away from the bottom
+  const atBottom = log.scrollHeight - log.clientHeight - log.scrollTop < 4;
+  const d=document.createElement("div"); d.className=cls;
+  // ansi-to-html (escapeXML:true) escapes the input and wraps coloured runs in
+  // <span style="color:#xxx">. Convert that markup into real nodes via a
+  // contextual fragment so the live DOM never sees raw HTML assignment.
+  if (window.ansiConvert && /\x1b\[/.test(text)){
+    d.appendChild(document.createRange().createContextualFragment(window.ansiConvert.toHtml(text)));
+  } else {
+    d.textContent = text;
+  }
+  body.appendChild(d);
+  if (atBottom) log.scrollTop = log.scrollHeight;
 }
-document.getElementById("uploadlog-close").onclick = ()=>{ document.getElementById("uploadlog").style.display="none"; };
+function ulRefreshInputState(){
+  const i=document.getElementById("uploadlog-cmd");
+  i.disabled = !activeWrite;
+  i.placeholder = activeWrite ? "type a console command and press Enter"
+                              : "connect to a device first";
+}
+async function consoleSend(cmd){
+  cmd = cmd.replace(/[\r\n]+$/,"");
+  if (!cmd) return;
+  if (!activeWrite){ ulLine("resp err", "no active connection"); return; }
+  ulLine("sent", "» "+cmd);
+  try { await activeWrite(cmd+"\r\n"); }
+  catch(e){ ulLine("resp err", "send failed: "+(e.message||e)); }
+}
+document.getElementById("uploadlog-close").onclick = ulHide;
+document.getElementById("open-console").onclick = ()=>{
+  ulStat("device log", false);
+  ulShow();
+  document.getElementById("uploadlog-cmd").focus();
+};
+document.getElementById("uploadlog-input").addEventListener("submit", e=>{
+  e.preventDefault();
+  const i=document.getElementById("uploadlog-cmd");
+  const v=i.value; i.value="";
+  consoleSend(v);
+});
 
 document.getElementById("upload").onclick = uploadChanged;
 document.getElementById("connect-serial").onclick = connectSerial;

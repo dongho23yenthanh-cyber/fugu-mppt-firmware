@@ -209,7 +209,7 @@ def scan_ble(timeout=5.0):
 
 
 def scan_mqtt(timeout=5.0):
-    """Hostnames a broker has seen publishing under `pv/log/<hostname>`.
+    """ Returns Hostnames a broker has seen publishing under `pv/log/<hostname>`.
 
     Needs a broker (no default is compiled in): `$MQTT_HOST` (`$MQTT_PORT`/`$MQTT_USER`/`$MQTT_PASS`
     refine it). Returns None when no broker is configured or `paho-mqtt` isn't installed.

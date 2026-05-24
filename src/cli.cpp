@@ -327,7 +327,7 @@ static void cmdRtStats(cmd *) {
 
 // monotonic seconds since boot; resets only on reboot (unlike status N, which zeroes on each sweep)
 static void cmdUptime(cmd *) {
-    UART_LOG("Uptime: %lu s", (uint32_t) (esp_timer_get_time() / 1000000));
+        UART_LOG("Uptime: %lu s", (uint32_t) (esp_timer_get_time() / 1000000));
     UART_LOG("App: %s", format_version());
 }
 

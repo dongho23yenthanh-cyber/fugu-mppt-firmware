@@ -218,7 +218,15 @@ static void cmdMcpwmTest(cmd *c) {
     UART_LOG("mcpwmtest: 1kHz 50%% on GPIO %d (group 1, isolated from buck driver)", pin);
 }
 
-static void cmdSweep(cmd *) { mppt.startSweep(); }
+static void cmdSweep(cmd *) {
+    // Sweep state advances inside mppt.update(), which loopRTNewData only calls
+    // when !manualPwm. Drop manual mode here so the sweep can actually ramp PWM.
+    if (manualPwm) {
+        converter.setManualRect(-1);
+        manualPwm = false;
+    }
+    mppt.startSweep();
+}
 
 static void cmdResetLag(cmd *) {
     maxLoopLag = 0;

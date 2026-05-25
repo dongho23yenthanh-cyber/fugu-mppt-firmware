@@ -341,6 +341,9 @@ def _timeout_for(cmd: str, default: float = 4.0) -> float:
 PLAN = [
     # --- read-only diagnostics --------------------------------------------------------------
     ("mem", "Free heap", GROUP_ALWAYS, False),
+    # peek of a known DRAM address with size 4 hits the typed-print path; the device echoes
+    # `peek 0x... = 0x...`, so the address fragment is a reliable expect-substring.
+    ("peek 0x3fc88000 4", "peek 0x3fc88000 =", GROUP_ALWAYS, False),
     ("sensor", "Sensor", GROUP_ALWAYS, False),
     ("rt-stats", None, GROUP_ALWAYS, False),
     ("reset-lag", None, GROUP_ALWAYS, False),

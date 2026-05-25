@@ -195,7 +195,7 @@ def preprocess_peek(cmd: str, elf_path: str | None) -> str:
     elif size_hint > 0:
         len_arg = str(min(size_hint, 256))
     else:
-        len_arg = "16"
+        len_arg = "4"  # matches firmware default; typed u32 print is what users want most often
     return f"peek 0x{addr:08x} {len_arg}"
 
 

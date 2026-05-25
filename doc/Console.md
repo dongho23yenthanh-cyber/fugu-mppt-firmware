@@ -35,6 +35,7 @@ rejection message for invalid arguments / wrong context.
 | `led <RRGGBB>`, `led <RGB>` | Set the LED color in hex or short hex (e.g. `led 33ff33` or `led 3f3`). |
 | `sensor` | Dump per-sensor state (last/raw value, EWM average and std, adaptive notch filter stats). `sensor avg` prints one compact line of EWM averages (`sens: vin=… iout=… …`) for fast polling. |
 | `mem` | Display heap and PSRAM size (total and free). |
+| `peek <addr> [len]` | Read memory at `<addr>` (hex `0x…`, decimal, or octal). With `len ∈ {1,2,4,8}` (default 4) prints one typed hex value (`peek 0x… = 0x…`); other `len` ≤ 256 prints a hex+ASCII dump. Refuses addresses outside internal RAM / DROM / external RAM / IRAM/IROM (the latter needs 4-byte alignment for word-bus reads). The host CLI (`etc/fugu_console.py`) accepts `peek <symbol>[+offset]` and ships a `sym <pattern>` listing — both resolved client-side against the build ELF, so the device only ever sees a numeric address. |
 | `uptime` | Print seconds since boot (monotonic; resets only on reboot) and the running app description (name, version, build date/time, IDF version). |
 | `rt-stats` | Print FreeRTOS per-task runtime statistics (sampled over 1 s). |
 | `reset-lag` | Reset the max-lag statistic and print [rtcount](Real-time%20Counter.md) timings. |

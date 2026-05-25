@@ -337,29 +337,27 @@ static void cmdUptime(cmd *) {
     UART_LOG("App: %s", format_version());
 }
 
-// peek <hex-addr> [len]  — read up to 256 bytes from RAM/flash and hex-dump them. Address may be
-// 0x-prefixed or bare hex. Byte-accessible regions (DRAM + DROM flash-mapped const) are read
-// directly; executable regions (IRAM, IROM) need 4-byte aligned addr+len and go through 32-bit
-// reads. Symbol resolution lives host-side in fugu_console.py — firmware just dumps the address.
+// peek <addr> [len]  — read up to 256 bytes from internal RAM, DROM (flash-mapped const) or
+// IRAM/IROM and either print one typed value (len ∈ {1,2,4,8}) or a hex+ASCII dump (any other
+// 1..256). Address accepts `0x…`, decimal, or octal (strtoul base 0). Executable regions need
+// 4-byte aligned addr+len so we can issue 32-bit instruction-bus loads. Symbol resolution lives
+// host-side in fugu_console.py.
 static inline bool peekByteOk(const void *p) {
-    return esp_ptr_byte_accessible(p) || esp_ptr_in_drom(p);
+    return esp_ptr_internal(p) || esp_ptr_in_drom(p) || esp_ptr_external_ram(p);
 }
 static void cmdPeek(cmd *c) {
     Command cc(c);
     if (cc.countArgs() < 1)
-        CMD_FAIL_RETURN("peek: expected <hex-addr> [len]");
+        CMD_FAIL_RETURN("peek: expected <addr> [len]");
     auto sAddr = cc.getArg(0).getValue();
-    int len = cc.countArgs() >= 2 ? cc.getArg(1).getValue().toInt() : 16;
+    char *endp = nullptr;
+    unsigned long addrUl = strtoul(sAddr.c_str(), &endp, 0);
+    if (!endp || endp == sAddr.c_str() || *endp != '\0')
+        CMD_FAIL_RETURN("peek: invalid address '%s'", sAddr.c_str());
+    uint32_t addr = (uint32_t) addrUl;
+    int len = cc.countArgs() >= 2 ? cc.getArg(1).getValue().toInt() : 4;
     if (len <= 0 || len > 256)
         CMD_FAIL_RETURN("peek: len out of range (1..256)");
-
-    const char *s = sAddr.c_str();
-    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
-    char *endp = nullptr;
-    unsigned long addrUl = strtoul(s, &endp, 16);
-    if (!endp || endp == s || *endp != '\0')
-        CMD_FAIL_RETURN("peek: bad hex address '%s'", sAddr.c_str());
-    uint32_t addr = (uint32_t) addrUl;
 
     const void *first = (const void *) addr;
     const void *last  = (const void *) (addr + len - 1);
@@ -376,6 +374,16 @@ static void cmdPeek(cmd *c) {
     } else {
         CMD_FAIL_RETURN("peek: 0x%08lx not safely readable", (unsigned long) addr);
     }
+
+    // Typed scalar print for the common "what's the value of X" case.
+    if (len == 1) { UART_LOG("peek 0x%08lx = 0x%02x", (unsigned long) addr, buf[0]); return; }
+    if (len == 2) { uint16_t v; memcpy(&v, buf, 2);
+        UART_LOG("peek 0x%08lx = 0x%04x", (unsigned long) addr, (unsigned) v); return; }
+    if (len == 4) { uint32_t v; memcpy(&v, buf, 4);
+        UART_LOG("peek 0x%08lx = 0x%08lx", (unsigned long) addr, (unsigned long) v); return; }
+    if (len == 8) { uint32_t hi, lo; memcpy(&lo, buf, 4); memcpy(&hi, buf + 4, 4);
+        UART_LOG("peek 0x%08lx = 0x%08lx%08lx", (unsigned long) addr,
+                 (unsigned long) hi, (unsigned long) lo); return; }
 
     for (int off = 0; off < len; off += 16) {
         char line[100];

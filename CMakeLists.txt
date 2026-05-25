@@ -47,7 +47,7 @@ project(fugu-firmware)
 set (CMAKE_CXX_FLAGS "-fexceptions") # -mfp16-format=ieee
 
 if (IDF_TARGET STREQUAL "esp32")
-    set(FUGU_LITTLEFS_SRC config/lab/wokwi_mock_esp32)
+    set(FUGU_LITTLEFS_SRC config/fugu1/fugu1_esp32)
 else ()
     set(FUGU_LITTLEFS_SRC config/lab/dry_mock)
 endif ()

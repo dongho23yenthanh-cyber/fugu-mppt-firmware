@@ -289,6 +289,7 @@ public:
         }
         if (backoffSec) {
             auto until = wallClockUs() + (unsigned long) backoffSec * 1000000UL;
+            ESP_LOGW("mppt", "backoff in %d sec", backoffSec);
             if (until > _backoffUntilUs) _backoffUntilUs = until;
         }
     }

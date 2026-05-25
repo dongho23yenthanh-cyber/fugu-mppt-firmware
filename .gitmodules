@@ -41,3 +41,6 @@
 [submodule "components/SimpleCLI/SimpleCLI"]
 	path = components/SimpleCLI/SimpleCLI
 	url = https://github.com/SpacehuhnTech/SimpleCLI
+[submodule "test/host-stub/arduino-shim"]
+	path = test/host-stub/arduino-shim
+	url = https://github.com/fl4p/arduino-host-shim

@@ -64,8 +64,10 @@ void MpptController::update() {
     // periodic sweep / scan
     // Skip while the battery is full / output-voltage-limited (CV): there's no MPP to find,
     // and ramping duty from 0 would just dump a charge pulse into a full pack (recharge-after-full).
+    // Also wait out any pending backoff — a scheduled re-sweep firing into an active trip
+    // timer would stall under the same livelock that startCondition() guards against.
     bool batteryFull = bool(charger.termCond) || ctrlState.mode == MpptControlMode::CV;
-    if (!_sweeping && !batteryFull && (nowUs - sampler.getTimeLastCalibrationUs()) > (30 * 60000000)) {
+    if (!_sweeping && !batteryFull && !inBackoff() && (nowUs - sampler.getTimeLastCalibrationUs()) > (30 * 60000000)) {
         ESP_LOGI("mppt", "periodic sweep & sensor calibration");
         startSweep();
         rtcount("mppt.update.startSweep");

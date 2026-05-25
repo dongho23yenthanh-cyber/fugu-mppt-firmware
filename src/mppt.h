@@ -290,10 +290,17 @@ public:
         }
         if (backoffSec) {
             auto until = wallClockUs() + (unsigned long) backoffSec * 1000000UL;
-            ESP_LOGW("mppt", "backoff in %d sec", backoffSec);
+            ESP_LOGW("mppt", "backoff %lus [%s]%s", (unsigned long) backoffSec, who,
+                     _sweeping ? " mid-sweep" : "");
             if (until > _backoffUntilUs) _backoffUntilUs = until;
         }
     }
+
+    // Manual override (console `sweep`): drop any pending backoff so the user's
+    // intent isn't silently absorbed by a stale trip timer.
+    void clearBackoff() { _backoffUntilUs = 0; }
+
+    [[nodiscard]] bool inBackoff() const { return wallClockUs() < _backoffUntilUs; }
 
     [[nodiscard]] float boardPowerSupplyVoltage() const {
         constexpr auto diodeFwdVoltage = 0.3f;

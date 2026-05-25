@@ -227,6 +227,7 @@ static void cmdSweep(cmd *) {
         converter.setManualRect(-1);
         manualPwm = false;
     }
+    mppt.clearBackoff(); // user override: don't absorb the manual sweep into a stale trip timer
     mppt.startSweep();
 }
 

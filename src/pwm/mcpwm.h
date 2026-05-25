@@ -48,9 +48,10 @@ public:
     }
 };
 
-// One synchronous leg = one MCPWM operator. HS on [0, hsOff], LS on [hsOff, lsOff].
-// enLogic=true -> LS pin is the EN window [0, lsOff] (driver chip inserts dead-time).
-// Comparators latch on TEZ for glitch-free, order-independent duty updates.
+// One synchronous leg = one MCPWM operator. See doc/mcpwm-sync-buck-driver.md for the spec.
+// HiLi:  HS on [0, hsOff],         LS on [hsOff, lsOff]   (MCPWM dead-time)
+// InEn:  IN on [0, hsOff],         EN on [0, lsOff]       (driver chip dead-time, dtTicks=0)
+// Comparators latch on TEZ -> glitch-free, order-independent duty updates.
 class MCPWM_SyncLeg {
     mcpwm_timer_handle_t timer_ = nullptr;
     mcpwm_oper_handle_t  oper_  = nullptr;
@@ -68,7 +69,9 @@ public:
     mcpwm_timer_handle_t timer() const { return timer_; }
     [[nodiscard]] uint16_t getDtTicks() const { return dtTicks_; }
 
-    // fixedTicks>0 pins period_ticks (LEDC-equivalent); 0 -> bestTiming(freq).
+    // fixedTicks=0 (default, production) -> bestTiming(freq): max counts the hw can give.
+    // fixedTicks>0 overrides bestTiming with that exact period; for migration / bit-identical
+    // calibration replays only.
     void init(int group, uint32_t freq, int pinHS, int pinLS,
               uint32_t dtTicks, bool enLogic, uint32_t fixedTicks = 0) {
         ESP_LOGI("mcpwm-leg", "init grp=%d freq=%u pinHS=%d pinLS=%d dtTicks=%u enLogic=%d fixed=%u",
@@ -94,7 +97,7 @@ public:
 
         mcpwm_comparator_config_t cc = {
             .intr_priority = 0,
-            .flags = {.update_cmp_on_tez = 0, .update_cmp_on_tep = 0, .update_cmp_on_sync = 0},
+            .flags = {.update_cmp_on_tez = 1, .update_cmp_on_tep = 0, .update_cmp_on_sync = 0},
         };
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpHS_));
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpLS_));
@@ -140,7 +143,7 @@ public:
     }
 
     inline void setHsOff(uint16_t c) { mcpwm_comparator_set_compare_value(cmpHS_, c); }
-    inline void setLsOff(uint16_t c) { if (cmpLS_) mcpwm_comparator_set_compare_value(cmpLS_, c); }
+    inline void setLsOff(uint16_t c) { mcpwm_comparator_set_compare_value(cmpLS_, c); }
 
     void start() {
         ESP_ERROR_CHECK(mcpwm_timer_enable(timer_));

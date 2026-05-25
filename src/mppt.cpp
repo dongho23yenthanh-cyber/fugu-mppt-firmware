@@ -3,6 +3,8 @@
 #include "tele/telemetry.h"   // makeTelePoint / TelePoint (text or binary wire, build-time)
 
 
+constexpr auto withDebugFields = false;
+
 /**
  * - Energy counter
  * - voltage and current control
@@ -422,7 +424,7 @@ void MpptController::telemetry() {
     if (!WiFi.isConnected() || !tele.influxdbHost || !timeSynced)
         return;
 
-    if (wallClockUs() - _lastPointWrite < 20000) {
+    if (wallClockUs() - _lastPointWrite < 20'000) {
         return;
     }
 
@@ -440,37 +442,45 @@ void MpptController::telemetry() {
     point.addField("Uo", sensors.Vout->med3.get(), 2);
     //point.addField("U", V_phys_smooth, 2);
     point.addField("P", power, 2);
-    point.addField("P_smooth", power_smooth, 2);
+    if (withDebugFields)
+        point.addField("P_smooth", power_smooth, 2);
     //point.addField("U_out", Vout, 2);
-
 
     point.addField("E", meter.totalEnergy.get(), 1);
     point.addField("E_today", meter.dailyEnergyMeter.today.energyYield, 1);
 
+    if ((_teleNumPoints % 20) == 0) {
+        point.addField("pwm_dir_f", cntrlValue, 2);
+        point.addField("mppt_state", int(ctrlState.mode));
+    }
 
-    point.addField("pwm_dir_f", cntrlValue, 2);
-    point.addField("mppt_state", int(ctrlState.mode));
-    point.addField("mcu_temp", ucTemp.last(), 1);
-    point.addField("ntc_temp", ntc.last(), 1);
+    if ((_teleNumPoints % 40) == 0) {
+        point.addField("mcu_temp", ucTemp.last(), 1); // TODO to frequent
+        point.addField("ntc_temp", ntc.last(), 1); // TODO to frequent
+    }
 
     point.addField("pwm_duty", converter.getCtrlOnPwmCnt());
-    if (!converter.disabled()) {
+    if (!converter.disabled() && (_teleNumPoints % 10) == 0) {
         point.addField("pwm_ls_duty", converter.getRectOnPwmCnt());
         point.addField("pwm_ls_max", converter.getRectOnPwmMax());
         point.addField("pwm_dcm", converter.inDCM());
     }
 
+
     if (ctrlState.mode == MpptControlMode::MPPT) {
-        auto dP = tracker.dP;
-        point.addField("P_filt", tracker._curPower, 2);
-        point.addField("P_prev", tracker._lastPower, 2);
-        point.addField("dP", dP, 2);
-        //point.addField("P_filt", tracker.pwmPowerTable[buck.getBuckDutyCycle()].get(), 1);
-        //point.addField("P_filt", tracker._powerBuf.getMean(), 1);
-        if (std::abs(dP) < tracker.minPowerStep) {
-            point.addField("dP_thres", 0.0f, 2);
-        } else {
-            point.addField("dP_thres", dP, 2);
+        if (withDebugFields) {
+            auto dP = tracker.dP;
+            point.addField("P_filt", tracker._curPower, 2);
+            point.addField("P_prev", tracker._lastPower, 2);
+            point.addField("dP", dP, 2);
+
+            //point.addField("P_filt", tracker.pwmPowerTable[buck.getBuckDutyCycle()].get(), 1);
+            //point.addField("P_filt", tracker._powerBuf.getMean(), 1);
+            if (std::abs(dP) < tracker.minPowerStep) {
+                point.addField("dP_thres", 0.0f, 2);
+            } else {
+                point.addField("dP_thres", dP, 2);
+            }
         }
     }
 
@@ -482,5 +492,6 @@ void MpptController::telemetry() {
 
     telemetryAddPoint(point, 80);
     _lastPointWrite = wallClockUs();
+    _teleNumPoints++;
 #endif
 }

@@ -25,7 +25,7 @@
 [submodule "components/SimpleFTPServer/SimpleFTPServer"]
 	path = components/SimpleFTPServer/SimpleFTPServer
 	url = https://github.com/fl4p/SimpleFTPServer
-	branch = fix/list-mlsd-pathname-arg
+	branch = master
 [submodule "components/ESPTelnet/ESPTelnet"]
 	path = components/ESPTelnet/ESPTelnet
 	url = https://github.com/LennartHennigs/ESPTelnet

@@ -15,7 +15,9 @@
 #include "util.h"
 #include "buck.h"
 #include "mppt.h"
+#ifdef WITH_MEASURE_COIL
 #include "measure_coil.h"
+#endif
 #include "etc/version.h"
 #include "adc/sampling.h"
 #include "service.h"
@@ -112,10 +114,12 @@ static void cmdMppt(cmd *) {
 // [ls] the low-side on-count is pinned to that value (bench LS-timing sweep). ls<0 -> auto.
 
 static void cmdDc(cmd *c) {
-    if (adcSampler.isCalibrating() || isMeasuring())
+    if (adcSampler.isCalibrating())
         CMD_FAIL_RETURN("dc: busy calibrating");
+#ifdef WITH_MEASURE_COIL
     if (isMeasuring())
         CMD_FAIL_RETURN("dc: busy measuring");
+#endif
     Command cc(c);
     auto v = cc.getArg(0).getValue();
     if (v.length() == 0)
@@ -595,6 +599,7 @@ static void cmdService(cmd *c) {
     }
 }
 
+#ifdef WITH_MEASURE_COIL
 // measure-coil l0|ls [steps|hs] [dwell_ms] [apply]  — the sweep logic lives in measure_coil.cpp.
 static void cmdMeasureCoil(cmd *c) {
     if (adcSampler.isCalibrating())
@@ -616,6 +621,7 @@ static void cmdMeasureCoil(cmd *c) {
     if (!measureCoilStart(ls, apply, arg1, dwellMs))
         CMD_FAIL_RETURN("measure-coil: already running");
 }
+#endif // WITH_MEASURE_COIL
 
 #if WITH_VCONV
 // vconv                           dump state
@@ -777,7 +783,9 @@ void setupCli() {
 #ifdef WITH_BLE
     cli.addBoundlessCmd("ota-ble", cmdOtaBle);
 #endif
+#ifdef WITH_MEASURE_COIL
     cli.addBoundlessCmd("measure-coil", cmdMeasureCoil); // measure-coil l0|ls [steps|hs] [dwell_ms] [apply]
+#endif
 #if WITH_VCONV
     cli.addBoundlessCmd("vconv", cmdVconv); // vconv [pv|bat|set ...]
 #endif

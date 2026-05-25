@@ -16,7 +16,12 @@ elseif ($ENV{MAIN_SRC})
 else ()
     # cli.cpp and measure_coil.cpp extern main.cpp's globals, so they're only built alongside the
     # real main (not test mains).
-    set(MAIN_SRC "../src/main.cpp" "../src/cli.cpp" "../src/measure_coil.cpp")
+    set(MAIN_SRC "../src/main.cpp" "../src/cli.cpp")
+    # WITH_MEASURE_COIL=1 compiles in the on-device coil inductance sweep + `measure-coil` console
+    # command (src/measure_coil.cpp). Bench-only tool — saves ~11 KB in production builds.
+    if ($ENV{WITH_MEASURE_COIL})
+        list(APPEND MAIN_SRC "../src/measure_coil.cpp")
+    endif ()
 endif ()
 
 set(NETW_SRC
@@ -139,6 +144,36 @@ endif ()
 if ($ENV{WITH_SPROFILER})
     component_compile_definitions("WITH_SPROFILER=1")
 endif ()
+
+if ($ENV{WITH_MEASURE_COIL})
+    component_compile_definitions("WITH_MEASURE_COIL=1")
+endif ()
+
+# Per-file optimization: keep -O2 (CONFIG_COMPILER_OPTIMIZATION_PERF default) on the RT path —
+# main.cpp (loopRT itself), mppt.cpp (mppt.update per ADC sample), adc_esp32_cont.cpp (DMA ISR
+# helpers). Everything else in libmain is cold: console + cli, services, telemetry, setup helpers,
+# bench tools — compile -Os to claw back flash. -fexceptions has to stay global because service.h
+# try/catch is included by everything; selectively dropping it would mean rewiring error paths.
+set(_size_opt_srcs
+        ../src/cli.cpp
+        ../src/sensor_setup.cpp
+        ../src/logging.cpp
+        ../src/util.cpp
+        ../src/viz/lcd.cpp
+        ../src/console.cpp
+        ../src/etc/rt.cpp
+        ../src/math/float16.cpp
+)
+if (WITH_NETW)
+    list(APPEND _size_opt_srcs ${NETW_SRC})
+endif ()
+if (WITH_BLE)
+    list(APPEND _size_opt_srcs ${BLE_SRC})
+endif ()
+if ($ENV{WITH_MEASURE_COIL})
+    list(APPEND _size_opt_srcs ../src/measure_coil.cpp)
+endif ()
+set_source_files_properties(${_size_opt_srcs} PROPERTIES COMPILE_OPTIONS "-Os")
 
 component_compile_options(-Werror=missing-field-initializers)
 component_compile_options(-Werror=attributes) # IRAM_ATTR used in forward decl

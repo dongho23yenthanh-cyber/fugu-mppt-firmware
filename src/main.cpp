@@ -28,7 +28,9 @@
 #include "viz/lcd_service.h"
 #include "viz/led.h"
 #include "console_ble_service.h"
+#ifdef WITH_MEASURE_COIL
 #include "measure_coil.h"
+#endif
 #ifdef WITH_NETW
 #include "etc/ota.h"
 #endif
@@ -561,7 +563,11 @@ void loopLF(const unsigned long &nowUs) {
     }
 #endif
 
+#ifdef WITH_MEASURE_COIL
     if (sensors.Vin && !isMeasuring())
+#else
+    if (sensors.Vin)
+#endif
         UART_LOG(
             "V=%4.*f/%5.*f I=%4.*f/%5.*fA %5.1fW %.0f℃%.0f℃ %2lusps %2lu㎅/s %s(H|L|Lm)=%4hu|%4hu|%4hu"
             " st=%5s,%i lag=%lu㎲ N=%lu rssi=%hi",

@@ -194,6 +194,7 @@ private:
     unsigned long lastTimeProtectPassed = 0;
     unsigned long _lastPointWrite = 0;
     unsigned long _backoffUntilUs = 0;
+    unsigned short _teleNumPoints = 0;
 
     const VIinVout<const Sensor *> &sensors;
 

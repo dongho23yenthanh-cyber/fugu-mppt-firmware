@@ -114,36 +114,10 @@ CONFIG_ARDUHAL_LOG_DEFAULT_LEVEL=2
 CONFIG_DIAG_USE_EXTERNAL_LOG_WRAP=y
 
 
-# Pin the primary build target so a freshly regenerated sdkconfig doesn't fall back to esp32
-# (deleting sdkconfig + reconfigure otherwise picks the IDF default target). `idf.py set-target esp32`
-# still overrides this for the alternate esp32 boards.
-CONFIG_IDF_TARGET="esp32s3"
+# Target is selected by IDF_TARGET env var (idf-export.sh) or `idf.py set-target`. Don't pin it
+# here — a pin in this fragment fights `set-target esp32` (esp32 builds then see the bootloader
+# subproject's sdkconfig race and fail with a target mismatch).
 
 # Surfaced by `idf.py save-defconfig` as non-default — a RainMaker default pulled in transitively via
 # arduino-esp32 (we don't use RainMaker). Captured here so a regenerated sdkconfig is reproducible.
 CONFIG_ESP_RMAKER_ASSISTED_CLAIM=y
-
-
-# --- BLE / NimBLE console (now compiled into every build) ---
-# Moved here from sdkconfig.ble: the NimBLE stack is now part of the default config, so it is linked
-# into all firmware. The BLE NUS console code (BleConsoleService / console_ble.*) is still gated at
-# the source level by the WITH_BLE #ifdef. Flash cost: the OTA slot (partitions.csv) is ~1.87 MB and
-# the BLE build is already ~1.86 MB — watch the headroom.
-CONFIG_BT_ENABLED=y
-# NimBLE host (smaller than Bluedroid); deselects Bluedroid via the Kconfig choice.
-CONFIG_BT_NIMBLE_ENABLED=y
-# Keep Bluetooth off the RT core. Core 1 is reserved for loopRT (ADC/MPPT/PWM); the controller
-# ISR/task and the NimBLE host task live on core 0 like the rest of networking. Matches the current
-# IDF default — kept explicit as a guard against future default changes.
-CONFIG_BT_CTRL_PINNED_TO_CORE_0=y
-CONFIG_BT_NIMBLE_PINNED_TO_CORE_0=y
-# Peripheral/broadcaster only (advertise + serve GATT; never scan or connect out). Dropping the
-# central/observer roles and capping connections trims flash and RAM.
-CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
-CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
-# CONFIG_BT_NIMBLE_ROLE_CENTRAL is not set
-# CONFIG_BT_NIMBLE_ROLE_OBSERVER is not set
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
-# Persist bonding keys (LTK/IRK) in NVS so a paired central reconnects after a reboot without
-# re-pairing (default 'n' wipes bonds every boot -> stale central bond, reconnect fails).
-CONFIG_BT_NIMBLE_NVS_PERSIST=y

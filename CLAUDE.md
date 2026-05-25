@@ -175,16 +175,15 @@ for noise debugging.
   Any TU that constructs a `std::stringbuf` (directly or via `stringstream`/`ostringstream`) will fail to link with
   `undefined reference to 'basic_stringbuf_nop'`. Use `snprintf` / `UART_LOG(fmt, …)` / `std::string` concatenation
   instead.
-- `sdkconfig` is untracked and not in `.gitignore` — it drifts. If the build fails with
-  `Failed to create littlefs image for partition 'littlefs'`, the partition-table choice has flipped from `CUSTOM` to
-  `TWO_OTA` (joltwallet then looks up `littlefs` in ESP-IDF's built-in `partitions_two_ota.csv` and finds nothing). Fix
-  by setting in `sdkconfig`: `CONFIG_PARTITION_TABLE_CUSTOM=y`, `CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"`, and
-  `# CONFIG_PARTITION_TABLE_TWO_OTA is not set`. The values in `sdkconfig.defaults` are correct — only the regenerated
-  `sdkconfig` drifts.
+- `sdkconfig` is gitignored — it's a generated artifact that varies with target + `WITH_*` flags + IDF version.
+  Source of truth is `sdkconfig.defaults` (+ `sdkconfig.defaults.esp32` overlay, `sdkconfig.ble` when `WITH_BLE=1`,
+  `sdkconfig.no_netw` when `WITH_NETW=0`). Delete `sdkconfig` to force regeneration if it ever looks wrong.
 - if you want to `git revert` but there are local dirty files, do a `git stash` before and `git stash pop` after
 - **Never ever run `git reset --hard`**
 - if you cannot find the `timeout` command, run `brew install coreutils` and try again
 - Never copy/mirror an existing `#define` that defines a constant value  to another file, just because you cannot include the file were it is defined. Look for a header file that both files already include and put it there (e.g. util.h).
+- there is a console command `peek`, that allows you to read memory at an address. `fugu_console.py` implements a symbol resolver.
+
 
 # Connecting to devices
 

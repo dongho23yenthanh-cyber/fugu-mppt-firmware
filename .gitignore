@@ -15,6 +15,7 @@ web-flash/*.bin
 /build/
 dependencies.lock
 
+/sdkconfig
 sdkconfig.old
 
 sdkconfig.s3

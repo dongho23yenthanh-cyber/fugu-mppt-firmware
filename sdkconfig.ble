@@ -1,7 +1,9 @@
 # NimBLE config for the BLE NUS console. Layered on top of sdkconfig.defaults only for
-# `WITH_BLE=1` builds (see top-level CMakeLists.txt) so non-BLE firmware keeps its flash budget.
+# `WITH_BLE=1` builds (see top-level CMakeLists.txt) so WITH_BLE=0 firmware drops the whole
+# controller + host (~250 KB flash, several KB RAM). Source-level WITH_BLE gates in
+# console_ble.* / ota_ble.* keep callers linkable when BT_ENABLED=n.
 #
-# Build:  WITH_BLE=1 idf.py build
+# Build:  WITH_BLE=1 idf.py build  (default — set WITH_BLE=0 to drop)
 # Verify: build/fugu-firmware.bin must stay < 1,871,872 B (the OTA slot in partitions.csv).
 
 CONFIG_BT_ENABLED=y

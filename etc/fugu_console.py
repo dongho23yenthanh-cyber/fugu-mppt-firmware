@@ -436,17 +436,100 @@ def run_plan(con: Console, mock: bool, include_net: bool):
     return nfail
 
 
+_PEEK_TYPED_RE = re.compile(r"peek\s+0x[0-9a-fA-F]+\s+=\s+0x([0-9a-fA-F]+)")
+_PEEK_DUMP_RE = re.compile(r"0x[0-9a-fA-F]+:\s*((?:[0-9a-fA-F]{2}(?:\s+|$))+)")
+
+
+def _parse_peek_bytes(reply_lines, want_bytes: int) -> bytes:
+    """Parse one `peek` reply into raw little-endian bytes — handles typed + dump formats."""
+    buf = bytearray()
+    for ln in reply_lines:
+        m = _PEEK_TYPED_RE.search(ln)
+        if m:
+            val = int(m.group(1), 16)
+            return val.to_bytes(want_bytes, 'little')
+        m = _PEEK_DUMP_RE.search(ln)
+        if m:
+            for tok in m.group(1).split():
+                if len(tok) == 2:
+                    buf.append(int(tok, 16))
+    return bytes(buf[:want_bytes])
+
+
+def _chunked_peek(con: Console, addr: int, size: int, chunk: int = 256) -> bytes:
+    """Read `size` bytes from `addr` via repeated peek calls; reassemble in order."""
+    out = bytearray()
+    while len(out) < size:
+        n = min(chunk, size - len(out))
+        cmd = f"peek 0x{addr + len(out):08x} {n}"
+        reply = con.command(cmd, timeout=_timeout_for(cmd))
+        if not reply.ok:
+            raise RuntimeError(f"peek {cmd!r} failed: {reply.text.strip()[:200]}")
+        out.extend(_parse_peek_bytes(reply, n))
+    return bytes(out[:size])
+
+
+def _handle_peek_struct(con: Console, args: str, elf_path: str | None) -> None:
+    parts = args.strip().split()
+    if not parts:
+        print("peek-struct: expected <symbol>[.field…] [depth]", file=sys.stderr)
+        return
+    target = parts[0]
+    depth = 2
+    if len(parts) >= 2:
+        try:
+            depth = int(parts[1])
+        except ValueError:
+            print(f"peek-struct: bad depth {parts[1]!r}", file=sys.stderr)
+            return
+        if not 0 <= depth <= 16:
+            print("peek-struct: depth out of range [0,16]", file=sys.stderr)
+            return
+    if not elf_path:
+        print("peek-struct: no firmware ELF — build, set $FUGU_ELF, or pass --elf",
+              file=sys.stderr)
+        return
+    try:
+        addr, size, type_die, _ = peek_symbols.resolve_for_dump(elf_path, target)
+    except (KeyError, ValueError) as e:
+        print(f"peek-struct: {e}", file=sys.stderr)
+        return
+    if type_die.tag not in ('DW_TAG_structure_type', 'DW_TAG_class_type',
+                            'DW_TAG_union_type'):
+        print(f"peek-struct: {target} is not a struct/class/union "
+              f"({peek_symbols._type_name(type_die)}); use `peek {target}` instead.",
+              file=sys.stderr)
+        return
+    if size <= 0:
+        print(f"peek-struct: {target} has zero size", file=sys.stderr)
+        return
+    if size > 4096:
+        print(f"peek-struct: {target} is {size} B ({(size + 255) // 256} round-trips)",
+              file=sys.stderr)
+    try:
+        image = _chunked_peek(con, addr, size)
+    except RuntimeError as e:
+        print(f"peek-struct: {e}", file=sys.stderr)
+        return
+    print(peek_symbols.format_struct_dump(elf_path, target, image, addr, max_depth=depth))
+
+
 def dispatch_command(con: Console, cmd: str, elf_path: str | None) -> None:
     """Send `cmd` to the device, intercepting host-side verbs first.
 
     `sym <pattern>` never goes on the wire — it lists matching ELF symbols locally.
     `peek <symbol>[+off] [len]` is rewritten to `peek 0x<addr> <len>` before send.
+    `peek-struct <symbol>[.field…]` reads the byte image via repeated `peek`s and renders
+    each DWARF-described member with its decoded value.
     """
     head = cmd.strip().split(None, 1)
     verb = head[0] if head else ""
     if verb == "sym":
         pattern = head[1] if len(head) > 1 else ""
         print(peek_symbols.format_sym_list(elf_path, pattern))
+        return
+    if verb == "peek-struct":
+        _handle_peek_struct(con, head[1] if len(head) > 1 else "", elf_path)
         return
     if verb == "peek":
         try:
@@ -490,7 +573,8 @@ def _install_readline_completion(elf_path: str | None) -> None:
 
     def completer(text: str, state: int):
         buf = readline.get_line_buffer()
-        if not (buf.startswith("peek ") or buf.startswith("sym ")):
+        if not (buf.startswith("peek ") or buf.startswith("peek-struct ")
+                or buf.startswith("sym ")):
             return None
         try:
             syms = peek_symbols.load_symbols(elf_path) if elf_path else {}
@@ -563,6 +647,10 @@ def interactive(con: Console, elf_path: str | None = None):
             if verb == "sym":
                 pattern = head[1] if len(head) > 1 else ""
                 print(peek_symbols.format_sym_list(elf_path, pattern))
+                continue
+            if verb == "peek-struct":
+                # on_line will keep echoing status lines while chunked reads run, which is fine
+                _handle_peek_struct(con, head[1] if len(head) > 1 else "", elf_path)
                 continue
             if verb == "peek":
                 try:

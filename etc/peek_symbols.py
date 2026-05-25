@@ -3,12 +3,18 @@
 Both verbs are handled client-side in fugu_console.py: `peek <symbol>[+offset] [len]` resolves to
 `peek 0x<addr> <len>` before it's sent to the device; `sym <pattern>` is purely local and never
 goes on the wire. The ELF on disk must match the flashed image — there's no build-id check yet.
+
+Dotted member access (`peek <obj>.<field>.<sub>`) walks DWARF to compute the field offset;
+pyelftools is imported lazily — from the system environment, or the IDF venv's site-packages.
 """
 
+import glob
 import os
 import re
 import shutil
+import struct as _struct
 import subprocess
+import sys
 
 
 # `peek <symbol>[+offset]` — keep symbol alphabet narrow but include common C/C++ chars.
@@ -153,20 +159,419 @@ def load_symbols(elf_path: str) -> dict[str, tuple[int, int]]:
     return syms
 
 
-def resolve(target: str, symbols: dict[str, tuple[int, int]]) -> tuple[int, int, str]:
-    """`<symbol>[+offset]` -> (addr, size_hint_after_offset, base_name). Raises KeyError/ValueError."""
+def resolve(target: str, symbols: dict[str, tuple[int, int]],
+            elf_path: str | None = None) -> tuple[int, int, str]:
+    """`<symbol>[.field…][+offset]` -> (addr, size_hint, base_name). Raises KeyError/ValueError.
+
+    Dotted member access walks DWARF; the resolved size is the leaf field's `DW_AT_byte_size`.
+    """
     m = _PEEK_TARGET_RE.match(target)
     if not m:
         raise ValueError(f"bad peek target: {target!r}")
     name, off = m.group(1), m.group(2)
-    if name not in symbols:
+    member_path: list[str] = []
+    if name not in symbols and "." in name:
+        head, *member_path = name.split(".")
+        if head not in symbols:
+            raise KeyError(f"symbol not found: {head!r} (base of {name!r})")
+        base_addr, base_size = symbols[head]
+        if not elf_path:
+            raise KeyError(
+                f"member access {name!r} needs DWARF; pass --elf or set $FUGU_ELF")
+        moff, leaf_size, _leaf_type = resolve_member_path(elf_path, head, member_path)
+        addr, size, name = base_addr + moff, leaf_size, name
+    elif name in symbols:
+        addr, size = symbols[name]
+    else:
         raise KeyError(f"symbol not found: {name!r}")
-    addr, size = symbols[name]
     if off:
         off_n = int(off, 16) if off.startswith("0x") else int(off)
         addr += off_n
         size = max(0, size - off_n)
     return addr, size, name
+
+
+# ---- DWARF-based member resolution -----------------------------------------------------------
+
+_ELFTOOLS = None
+_ELFTOOLS_TRIED = False
+
+
+def _get_elftools():
+    """Lazy import of pyelftools; falls back to scanning the IDF venv site-packages."""
+    global _ELFTOOLS, _ELFTOOLS_TRIED
+    if _ELFTOOLS_TRIED:
+        return _ELFTOOLS
+    _ELFTOOLS_TRIED = True
+    try:
+        from elftools.elf.elffile import ELFFile  # type: ignore
+        _ELFTOOLS = ELFFile
+        return ELFFile
+    except ImportError:
+        pass
+    for candidate in sorted(glob.glob(os.path.expanduser(
+            "~/.espressif/python_env/idf*/lib/python*/site-packages")), reverse=True):
+        if os.path.isdir(os.path.join(candidate, "elftools")):
+            sys.path.insert(0, candidate)
+            try:
+                from elftools.elf.elffile import ELFFile  # type: ignore
+                _ELFTOOLS = ELFFile
+                return ELFFile
+            except ImportError:
+                sys.path.pop(0)
+    return None
+
+
+_QUAL_TAGS = {
+    'DW_TAG_typedef', 'DW_TAG_const_type', 'DW_TAG_volatile_type',
+    'DW_TAG_restrict_type', 'DW_TAG_atomic_type',
+}
+
+# (elf_path -> (mtime, file_handle, ELFFile, {var_name: type_DIE}))
+_DWARF_CACHE: dict[str, tuple] = {}
+
+
+def _strip_quals(die):
+    while die.tag in _QUAL_TAGS and 'DW_AT_type' in die.attributes:
+        die = die.get_DIE_from_attribute('DW_AT_type')
+    return die
+
+
+def _type_name(die) -> str:
+    nm = die.attributes.get('DW_AT_name')
+    if nm:
+        return nm.value.decode('utf-8', 'replace')
+    if die.tag in ('DW_TAG_reference_type', 'DW_TAG_rvalue_reference_type',
+                   'DW_TAG_pointer_type') and 'DW_AT_type' in die.attributes:
+        sigil = '*' if die.tag == 'DW_TAG_pointer_type' else '&'
+        return _type_name(die.get_DIE_from_attribute('DW_AT_type')) + sigil
+    if die.tag in ('DW_TAG_structure_type', 'DW_TAG_class_type', 'DW_TAG_union_type'):
+        return f"(anon {die.tag.split('_')[-2]})"
+    return die.tag.replace('DW_TAG_', '')
+
+
+def _byte_size(die) -> int:
+    bs = die.attributes.get('DW_AT_byte_size')
+    return int(bs.value) if bs else 0
+
+
+def _data_member_offset(attr) -> int:
+    """Decode DW_AT_data_member_location — usually a constant, sometimes a DW_OP_plus_uconst exprloc."""
+    if attr is None:
+        return 0
+    v = attr.value
+    if isinstance(v, int):
+        return v
+    if isinstance(v, list) and len(v) >= 2 and v[0] == 0x23:  # DW_OP_plus_uconst, ULEB128
+        n, shift = 0, 0
+        for b in v[1:]:
+            n |= (b & 0x7f) << shift
+            if not (b & 0x80):
+                return n
+            shift += 7
+    return 0
+
+
+def _get_dwarf_var_types(elf_path: str) -> dict[str, object]:
+    """{global var name -> stripped type DIE}. Keeps the ELF file open for DIE lifetime."""
+    mtime = os.path.getmtime(elf_path)
+    cached = _DWARF_CACHE.get(elf_path)
+    if cached and cached[0] == mtime:
+        return cached[3]
+    if cached:
+        try:
+            cached[1].close()
+        except Exception:
+            pass
+    ELFFile = _get_elftools()
+    if not ELFFile:
+        raise RuntimeError(
+            "pyelftools missing — `pip install pyelftools`, or source idf-export.sh "
+            "(the IDF venv has it)")
+    f = open(elf_path, "rb")
+    elf = ELFFile(f)
+    if not elf.has_dwarf_info():
+        f.close()
+        raise RuntimeError(f"{elf_path}: no DWARF (rebuild with -g)")
+    dw = elf.get_dwarf_info()
+    name_to_type: dict[str, object] = {}
+    for cu in dw.iter_CUs():
+        for die in cu.iter_DIEs():
+            if die.tag != 'DW_TAG_variable':
+                continue
+            nm = die.attributes.get('DW_AT_name')
+            if not nm or 'DW_AT_type' not in die.attributes:
+                continue
+            name = nm.value.decode('utf-8', 'replace')
+            if name not in name_to_type:
+                name_to_type[name] = _strip_quals(die.get_DIE_from_attribute('DW_AT_type'))
+    _DWARF_CACHE[elf_path] = (mtime, f, elf, name_to_type)
+    return name_to_type
+
+
+def _find_member(klass, field: str, base_off: int):
+    """BFS over direct members + inherited bases. Returns (member_die, absolute_offset) or None."""
+    target = field.encode('utf-8')
+    queue = [(klass, base_off)]
+    seen: set[int] = set()
+    while queue:
+        cur, off = queue.pop(0)
+        if cur.offset in seen:
+            continue
+        seen.add(cur.offset)
+        bases = []
+        for child in cur.iter_children():
+            if child.tag == 'DW_TAG_member':
+                nm = child.attributes.get('DW_AT_name')
+                if nm and nm.value == target:
+                    moff = _data_member_offset(child.attributes.get('DW_AT_data_member_location'))
+                    return child, off + moff
+            elif child.tag == 'DW_TAG_inheritance':
+                inh_off = _data_member_offset(child.attributes.get('DW_AT_data_member_location'))
+                bases.append((_strip_quals(child.get_DIE_from_attribute('DW_AT_type')),
+                              off + inh_off))
+        queue.extend(bases)
+    return None
+
+
+def resolve_member_path(elf_path: str, base_name: str,
+                        member_path: list[str]) -> tuple[int, int, str]:
+    """For `base.m1.m2…`, return (offset_within_base, leaf_byte_size, leaf_type_name)."""
+    _off, _sz, _name, _die = _walk_member_path(elf_path, base_name, member_path)
+    return _off, _sz, _name
+
+
+def _walk_member_path(elf_path: str, base_name: str, member_path: list[str]):
+    """Internal: also returns the resolved leaf type DIE (used by `peek-struct`)."""
+    types = _get_dwarf_var_types(elf_path)
+    if base_name not in types:
+        raise KeyError(f"no DWARF type info for {base_name!r}")
+    cur = types[base_name]
+    offset = 0
+    for field in member_path:
+        if cur.tag not in ('DW_TAG_structure_type', 'DW_TAG_class_type', 'DW_TAG_union_type'):
+            raise KeyError(
+                f"cannot access .{field} — {_type_name(cur)} is not a struct/class/union")
+        hit = _find_member(cur, field, 0)
+        if not hit:
+            raise KeyError(f"no member {field!r} in {_type_name(cur)}")
+        member_die, member_off = hit
+        offset += member_off
+        cur = _strip_quals(member_die.get_DIE_from_attribute('DW_AT_type'))
+    return offset, _byte_size(cur), _type_name(cur), cur
+
+
+def resolve_for_dump(elf_path: str, target: str) -> tuple[int, int, object, str]:
+    """For `peek-struct <symbol>[.field…]`, return (addr, size, struct_DIE, label)."""
+    m = _PEEK_TARGET_RE.match(target)
+    if not m or m.group(2):
+        raise ValueError(f"peek-struct: bad target {target!r} (no +offset)")
+    name = m.group(1)
+    syms = load_symbols(elf_path)
+    if "." in name:
+        head, *member_path = name.split(".")
+    else:
+        head, member_path = name, []
+    if head not in syms:
+        raise KeyError(f"symbol not found: {head!r}")
+    base_addr, _ = syms[head]
+    off, sz, _tname, leaf_die = _walk_member_path(elf_path, head, member_path)
+    return base_addr + off, sz or _byte_size(leaf_die), leaf_die, name
+
+
+# ---- struct/class field enumeration + decoding -----------------------------------------------
+#
+# `peek-struct` reads the byte image once (via chunked peek host-side) and decodes per-field
+# using DWARF: base types via DW_AT_encoding+size, enums by enumerator lookup, pointers as hex,
+# scalar arrays inline (up to 8 elts), nested aggregates summarised — drill in by extending the
+# dotted path. Bitfields, multi-dim arrays, and unions past their first variant are intentionally
+# not handled: rare in this codebase, easy to add when needed.
+
+def iter_struct_members(type_die, base_off: int = 0):
+    """Yield (offset, name, member_type_DIE) for direct members + inherited bases (recursively)."""
+    if type_die.tag not in ('DW_TAG_structure_type', 'DW_TAG_class_type', 'DW_TAG_union_type'):
+        return
+    for child in type_die.iter_children():
+        if child.tag == 'DW_TAG_inheritance':
+            inh_off = _data_member_offset(child.attributes.get('DW_AT_data_member_location'))
+            base_die = _strip_quals(child.get_DIE_from_attribute('DW_AT_type'))
+            yield from iter_struct_members(base_die, base_off + inh_off)
+        elif child.tag == 'DW_TAG_member' and 'DW_AT_type' in child.attributes:
+            # Skip static class members: DWARF emits them as DW_TAG_member with no
+            # DW_AT_data_member_location (and usually DW_AT_declaration). Including them
+            # bunches them at offset 0 of the parent, which looks like a real member but
+            # collides with the actual first field (see std::atomic<T>::_S_alignment).
+            if 'DW_AT_data_member_location' not in child.attributes:
+                continue
+            nm = child.attributes.get('DW_AT_name')
+            if not nm:
+                continue
+            moff = _data_member_offset(child.attributes['DW_AT_data_member_location'])
+            yield (base_off + moff,
+                   nm.value.decode('utf-8', 'replace'),
+                   child.get_DIE_from_attribute('DW_AT_type'))
+
+
+# (DW_AT_encoding, byte_size) -> (struct fmt, label, is_float)
+_BASE_FMT: dict[tuple[int, int], tuple[str, str, bool]] = {
+    (0x02, 1): ('?',  'bool',     False),  # DW_ATE_boolean
+    (0x04, 4): ('<f', 'float',    True),   # DW_ATE_float
+    (0x04, 8): ('<d', 'double',   True),
+    (0x05, 1): ('b',  'int8_t',   False),  # DW_ATE_signed
+    (0x05, 2): ('<h', 'int16_t',  False),
+    (0x05, 4): ('<i', 'int32_t',  False),
+    (0x05, 8): ('<q', 'int64_t',  False),
+    (0x06, 1): ('b',  'char',     False),  # DW_ATE_signed_char
+    (0x07, 1): ('B',  'uint8_t',  False),  # DW_ATE_unsigned
+    (0x07, 2): ('<H', 'uint16_t', False),
+    (0x07, 4): ('<I', 'uint32_t', False),
+    (0x07, 8): ('<Q', 'uint64_t', False),
+    (0x08, 1): ('B',  'uchar',    False),  # DW_ATE_unsigned_char
+}
+
+
+def _decode_base(die, buf: bytes) -> str:
+    enc = die.attributes.get('DW_AT_encoding')
+    sz = die.attributes.get('DW_AT_byte_size')
+    if not enc or not sz:
+        return "<base?>"
+    sz_v = int(sz.value)
+    if len(buf) < sz_v:
+        return f"<short {len(buf)}/{sz_v}>"
+    fmt = _BASE_FMT.get((int(enc.value), sz_v))
+    if not fmt:
+        return f"<enc={enc.value} sz={sz_v}> {buf[:sz_v].hex()}"
+    f, _label, is_float = fmt
+    val, = _struct.unpack_from(f, buf, 0)
+    if is_float:
+        return f"{val:.6g}"
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    return f"{val}"
+
+
+def _decode_enum(die, buf: bytes) -> str:
+    sz = _byte_size(die) or 4
+    if len(buf) < sz:
+        return f"<short {len(buf)}/{sz}>"
+    val = int.from_bytes(buf[:sz], 'little', signed=False)
+    for child in die.iter_children():
+        if child.tag == 'DW_TAG_enumerator':
+            cv = child.attributes.get('DW_AT_const_value')
+            if cv is not None and cv.value == val:
+                nm = child.attributes.get('DW_AT_name')
+                return f"{nm.value.decode('utf-8','replace') if nm else '?'} ({val})"
+    return f"{val} (<unknown enum>)"
+
+
+def _decode_pointer(buf: bytes) -> str:
+    if len(buf) < 4:
+        return "<short ptr>"
+    v = int.from_bytes(buf[:4], 'little', signed=False)
+    return f"0x{v:08x}"
+
+
+def _array_count(die) -> int | None:
+    """Total element count across one or more DW_TAG_subrange_type children."""
+    n = 1
+    found = False
+    for child in die.iter_children():
+        if child.tag == 'DW_TAG_subrange_type':
+            ub = child.attributes.get('DW_AT_upper_bound')
+            cn = child.attributes.get('DW_AT_count')
+            if cn is not None:
+                n *= cn.value
+            elif ub is not None:
+                n *= (ub.value + 1)
+            else:
+                return None
+            found = True
+    return n if found else None
+
+
+def _decode_array(die, buf: bytes) -> str:
+    elem_die = _strip_quals(die.get_DIE_from_attribute('DW_AT_type'))
+    elem_sz = _byte_size(elem_die)
+    n = _array_count(die)
+    if not elem_sz or not n:
+        return f"<array elem_sz={elem_sz} n={n}>"
+    # char[] gets a string-ish render
+    if elem_die.tag == 'DW_TAG_base_type' and elem_sz == 1:
+        enc = elem_die.attributes.get('DW_AT_encoding')
+        if enc and int(enc.value) in (0x06, 0x08):  # char / uchar
+            raw = bytes(buf[:n]).split(b'\x00', 1)[0]
+            try:
+                return f"{raw.decode('utf-8')!r} ({n} B)"
+            except UnicodeDecodeError:
+                return f"{raw!r} ({n} B)"
+    show = min(n, 8)
+    items = []
+    for i in range(show):
+        slc = buf[i * elem_sz:(i + 1) * elem_sz]
+        items.append(_decode_value(elem_die, slc, depth=1))
+    suffix = "" if show == n else f", … +{n - show}"
+    return f"[{', '.join(items)}{suffix}]"
+
+
+def _decode_value(die, buf: bytes, depth: int = 0) -> str:
+    die = _strip_quals(die)
+    if die.tag == 'DW_TAG_base_type':
+        return _decode_base(die, buf)
+    if die.tag in ('DW_TAG_pointer_type', 'DW_TAG_reference_type',
+                   'DW_TAG_rvalue_reference_type'):
+        return _decode_pointer(buf)
+    if die.tag == 'DW_TAG_enumeration_type':
+        return _decode_enum(die, buf)
+    if die.tag == 'DW_TAG_array_type':
+        return _decode_array(die, buf)
+    if die.tag in ('DW_TAG_structure_type', 'DW_TAG_class_type', 'DW_TAG_union_type'):
+        sz = _byte_size(die)
+        return f"<{_type_name(die)}, {sz} B>"
+    return f"<{_type_name(die)}>"
+
+
+_AGGREGATE_TAGS = ('DW_TAG_structure_type', 'DW_TAG_class_type', 'DW_TAG_union_type')
+
+
+def _dump_struct(type_die, image: bytes, lines: list, indent: int,
+                 depth_left: int, base_off: int) -> None:
+    """Append decoded-member lines for `type_die` whose bytes live at `image[base_off:]`.
+
+    Aggregate members expand into nested lines while `depth_left > 0`; when the budget
+    runs out the same member prints as a one-liner summary so the user can drill in
+    explicitly via a longer dotted path or larger depth.
+    """
+    prefix = "  " * indent
+    for off, name, mdie in iter_struct_members(type_die):
+        abs_off = base_off + off
+        stripped = _strip_quals(mdie)
+        sz = _byte_size(stripped) or 4
+        type_label = _type_name(stripped)
+        if abs_off + sz > len(image):
+            lines.append(f"{prefix}+0x{abs_off:04x}  {type_label:<24}  {name:<28} <out of image>")
+            continue
+        if stripped.tag in _AGGREGATE_TAGS and depth_left > 0 and sz > 0:
+            lines.append(f"{prefix}+0x{abs_off:04x}  {type_label:<24}  {name}")
+            _dump_struct(stripped, image, lines, indent + 1, depth_left - 1, abs_off)
+            continue
+        val = _decode_value(mdie, image[abs_off:abs_off + sz])
+        lines.append(f"{prefix}+0x{abs_off:04x}  {type_label:<24}  {name:<28} = {val}")
+
+
+def format_struct_dump(elf_path: str, target: str, image: bytes, base_addr: int,
+                       max_depth: int = 2) -> str:
+    """Render `image` (bytes at `base_addr`) as `target`'s DWARF-typed struct/class layout.
+
+    `max_depth` controls how many levels of embedded aggregates expand inline; deeper ones
+    keep the one-line `<TypeName, N B>` summary (drill in with a longer dotted path).
+    """
+    _, size, type_die, label = resolve_for_dump(elf_path, target)
+    if type_die.tag not in _AGGREGATE_TAGS:
+        return (f"{label}: not a struct/class/union ({_type_name(type_die)}); "
+                f"use `peek {label}` for a scalar/pointer.")
+    out = [f"{label} @ 0x{base_addr:08x}  ({_type_name(type_die)}, {size} B, depth≤{max_depth})"]
+    _dump_struct(type_die, image, out, indent=1, depth_left=max_depth, base_off=0)
+    return "\n".join(out)
 
 
 def is_hex_address(token: str) -> bool:
@@ -189,7 +594,7 @@ def preprocess_peek(cmd: str, elf_path: str | None) -> str:
         raise FileNotFoundError(
             "no firmware ELF found; build, set $FUGU_ELF, or pass --elf to resolve symbols")
     syms = load_symbols(elf_path)
-    addr, size_hint, _ = resolve(target, syms)
+    addr, size_hint, _ = resolve(target, syms, elf_path)
     if len(parts) >= 3:
         len_arg = parts[2]
     elif size_hint > 0:

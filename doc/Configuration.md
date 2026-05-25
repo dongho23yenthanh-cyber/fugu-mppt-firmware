@@ -14,7 +14,7 @@ Editing options:
 - FTP when Wi-Fi is up (1 connection, no passive mode), or `etc/config-tool/conf-tool.py`.
 - The single-page editor `etc/config-tool/conf-editor.html` which can connect via serial, BLE or read from uploads.
   Export as zip file.
-- `./provision.sh <board>` writes a whole `config/<board>` image to the littlefs partition.
+- `./provision.py <board>` writes a whole `config/<board>` image to the littlefs partition.
 
 Conventions used in the tables below:
 

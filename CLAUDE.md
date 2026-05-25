@@ -40,7 +40,7 @@ To flash a config without rebuilding the firmware:
 
 ```bash
 export ESPPORT=/dev/cu.usbmodem...
-./provision.sh fmetal       # builds image with littlefs-python, writes via parttool.py
+./provision.py fmetal       # builds image with littlefs-python, writes via parttool.py
 ```
 
 The set of conf files the firmware reads at boot (from `src/main.cpp::setup()`): `board.conf`, `sensor.conf`,

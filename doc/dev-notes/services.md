@@ -190,7 +190,7 @@ Step 6 — Config convention & provisioning
 - Each service conf gains enabled = 1 and log_level = info (lcd default enabled = 0).
   Missing file/key → defaults (silent via no_warn). Existing keys (e.g. broker_uri) untouched.
 - Add ftp.conf/telnet.conf/lcd.conf/scope.conf to config/lab/wokwi_mock/conf/ (flashed
-  with firmware) and config/fmetal/conf/. provision.sh needs no code change.
+  with firmware) and config/fmetal/conf/. provision.py needs no code change.
 - Update CLAUDE.md's boot-read conf list (documentation only) to mention the new service confs.
 
 Verification

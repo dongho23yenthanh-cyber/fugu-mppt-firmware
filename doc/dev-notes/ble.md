@@ -130,7 +130,7 @@ Verification
    ls -l build/fugu-firmware.bin must be < 1,871,872 B; also idf.py size.
 3. Core affinity: flash, then on the serial console run rt-stats and confirm no BLE/NimBLE
    task is on core 1; RT loop timing (rtcount) is unaffected.
-4. End-to-end console (provision.sh a config with ble=1, flash, idf.py monitor):
+4. End-to-end console (provision.py a config with ble=1, flash, idf.py monitor):
 - From a phone (e.g. nRF Connect / Serial Bluetooth Terminal using NUS), scan → device
   advertises under the hostname.
 - Pairing prompts for the passkey; wrong passkey is rejected, correct one bonds.
@@ -141,7 +141,7 @@ Verification
   ls -l build/fugu-firmware.bin must be < 1,871,872 B; also idf.py size.
 3. Core affinity: flash, then on the serial console run rt-stats and confirm no BLE/NimBLE
    task is on core 1; RT loop timing (rtcount) is unaffected.
-4. End-to-end console (provision.sh a config with ble=1, flash, idf.py monitor):
+4. End-to-end console (provision.py a config with ble=1, flash, idf.py monitor):
 - From a phone (e.g. nRF Connect / Serial Bluetooth Terminal using NUS), scan → device
   advertises under the hostname.
 - Pairing prompts for the passkey; wrong passkey is rejected, correct one bonds.

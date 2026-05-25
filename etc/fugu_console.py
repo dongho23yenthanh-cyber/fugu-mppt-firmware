@@ -49,6 +49,13 @@ except ImportError:
     from etc.fugu.console import Console
     from etc.fugu.discover import discover_scope_servers
 
+# `peek <symbol>` resolver + `sym <pattern>` are firmware-specific (need the build ELF), so they
+# live next to this CLI rather than in the shared `fugu/` package.
+try:
+    import peek_symbols
+except ImportError:
+    from etc import peek_symbols  # type: ignore[no-redef]
+
 _PORT_GLOBS = [
     "/dev/cu.usbmodem*", "/dev/cu.usbserial*", "/dev/cu.wchusbserial*", "/dev/cu.SLAB_USBtoUART*",
     "/dev/ttyUSB*", "/dev/ttyACM*",
@@ -425,10 +432,60 @@ def run_plan(con: Console, mock: bool, include_net: bool):
     return nfail
 
 
-def interactive(con: Console):
+def dispatch_command(con: Console, cmd: str, elf_path: str | None) -> None:
+    """Send `cmd` to the device, intercepting host-side verbs first.
+
+    `sym <pattern>` never goes on the wire — it lists matching ELF symbols locally.
+    `peek <symbol>[+off] [len]` is rewritten to `peek 0x<addr> <len>` before send.
+    """
+    head = cmd.strip().split(None, 1)
+    verb = head[0] if head else ""
+    if verb == "sym":
+        pattern = head[1] if len(head) > 1 else ""
+        print(peek_symbols.format_sym_list(elf_path, pattern))
+        return
+    if verb == "peek":
+        try:
+            cmd = peek_symbols.preprocess_peek(cmd, elf_path)
+        except (KeyError, FileNotFoundError, ValueError) as e:
+            print(f"peek: {e}", file=sys.stderr)
+            return
+    for ln in con.command(cmd, timeout=_timeout_for(cmd)):
+        print(ln)
+
+
+def _install_readline_completion(elf_path: str | None) -> None:
+    """Tab-complete symbol names after `peek ` or `sym `. Silently no-ops if readline missing."""
+    try:
+        import readline
+    except ImportError:
+        return
+
+    def completer(text: str, state: int):
+        buf = readline.get_line_buffer()
+        if not (buf.startswith("peek ") or buf.startswith("sym ")):
+            return None
+        try:
+            syms = peek_symbols.load_symbols(elf_path) if elf_path else {}
+        except Exception:
+            return None
+        prefix = [s for s in syms if s.startswith(text)]
+        if len(prefix) < 50 and text:
+            prefix.extend(s for s in syms if text in s and not s.startswith(text))
+        prefix.sort()
+        return prefix[state] if state < len(prefix) else None
+
+    readline.set_completer(completer)
+    # default delim set includes '-' which appears in command names — narrow it to whitespace
+    readline.set_completer_delims(" \t\n")
+    readline.parse_and_bind("tab: complete")
+
+
+def interactive(con: Console, elf_path: str | None = None):
     print("interactive console — type commands, Ctrl-C / EOF to quit (live output streams below)")
     hostname = query_hostname(con)
     prompt = f"{hostname}> " if hostname else "> "
+    _install_readline_completion(elf_path)
     # Tap the reader's line stream so periodic status lines (and command replies) print as they
     # arrive, instead of being thrown away by command()'s drain() while we wait at the prompt.
     con.on_line = lambda ln: print(ln)
@@ -439,8 +496,21 @@ def interactive(con: Console):
             except (EOFError, KeyboardInterrupt):
                 print()
                 return
-            if cmd:
-                con.command(cmd)  # reply lines print via on_line
+            if not cmd:
+                continue
+            head = cmd.split(None, 1)
+            verb = head[0] if head else ""
+            if verb == "sym":
+                pattern = head[1] if len(head) > 1 else ""
+                print(peek_symbols.format_sym_list(elf_path, pattern))
+                continue
+            if verb == "peek":
+                try:
+                    cmd = peek_symbols.preprocess_peek(cmd, elf_path)
+                except (KeyError, FileNotFoundError, ValueError) as e:
+                    print(f"peek: {e}", file=sys.stderr)
+                    continue
+            con.command(cmd)  # reply lines print via on_line
     finally:
         con.on_line = None
 
@@ -489,6 +559,9 @@ def main():
     ap.add_argument("-c", "--command", help="send a single command, print the reply, exit")
     ap.add_argument("--test", action="store_true",
                     help="run the PASS/FAIL/SKIP command PLAN instead of the interactive REPL")
+    ap.add_argument("--elf", default=None,
+                    help="firmware ELF for `peek <symbol>`/`sym` resolution (default: $FUGU_ELF or "
+                         "newest build*/fugu-firmware.elf)")
     args = ap.parse_args()
 
     if len(sys.argv) == 1:  # no arguments: search every transport, don't connect
@@ -502,10 +575,10 @@ def main():
     except Exception as e:
         print(e)
         return 1
+    elf_path = peek_symbols.find_elf(args.elf)
     try:
         if args.command:
-            for ln in con.command(args.command, timeout=_timeout_for(args.command)):
-                print(ln)
+            dispatch_command(con, args.command, elf_path)
             return 0
         if args.test:
             print("waiting for device to be ready …")
@@ -515,7 +588,7 @@ def main():
             print("device ready.\n")
             return 1 if run_plan(con, args.mock, args.include_network) else 0
 
-        interactive(con)  # default
+        interactive(con, elf_path)  # default
         return 0
     finally:
         con.close()

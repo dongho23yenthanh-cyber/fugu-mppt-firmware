@@ -5,7 +5,9 @@
 #include <WiFi.h>
 #endif
 #include <cmath>
+#include <cstring>
 #include <esp_timer.h>
+#include <esp_memory_utils.h>
 #include <SimpleCLI.h>
 
 #include "logging.h"
@@ -334,6 +336,70 @@ static void cmdUptime(cmd *) {
     UART_LOG("App: %s", format_version());
 }
 
+// peek <hex-addr> [len]  — read up to 256 bytes from RAM/flash and hex-dump them. Address may be
+// 0x-prefixed or bare hex. Byte-accessible regions (DRAM + DROM flash-mapped const) are read
+// directly; executable regions (IRAM, IROM) need 4-byte aligned addr+len and go through 32-bit
+// reads. Symbol resolution lives host-side in fugu_console.py — firmware just dumps the address.
+static inline bool peekByteOk(const void *p) {
+    return esp_ptr_byte_accessible(p) || esp_ptr_in_drom(p);
+}
+static void cmdPeek(cmd *c) {
+    Command cc(c);
+    if (cc.countArgs() < 1)
+        CMD_FAIL_RETURN("peek: expected <hex-addr> [len]");
+    auto sAddr = cc.getArg(0).getValue();
+    int len = cc.countArgs() >= 2 ? cc.getArg(1).getValue().toInt() : 16;
+    if (len <= 0 || len > 256)
+        CMD_FAIL_RETURN("peek: len out of range (1..256)");
+
+    const char *s = sAddr.c_str();
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    char *endp = nullptr;
+    unsigned long addrUl = strtoul(s, &endp, 16);
+    if (!endp || endp == s || *endp != '\0')
+        CMD_FAIL_RETURN("peek: bad hex address '%s'", sAddr.c_str());
+    uint32_t addr = (uint32_t) addrUl;
+
+    const void *first = (const void *) addr;
+    const void *last  = (const void *) (addr + len - 1);
+    uint8_t buf[256];
+    if (peekByteOk(first) && peekByteOk(last)) {
+        memcpy(buf, first, (size_t) len);
+    } else if (esp_ptr_executable(first) && esp_ptr_executable(last)) {
+        if ((addr & 3) || (len & 3))
+            CMD_FAIL_RETURN("peek: executable region needs 4-byte aligned addr+len");
+        for (int i = 0; i < len; i += 4) {
+            uint32_t w = *(const volatile uint32_t *) (addr + i);
+            memcpy(buf + i, &w, 4);
+        }
+    } else {
+        CMD_FAIL_RETURN("peek: 0x%08lx not safely readable", (unsigned long) addr);
+    }
+
+    for (int off = 0; off < len; off += 16) {
+        char line[100];
+        int row = std::min(16, len - off);
+        int n = snprintf(line, sizeof(line), "0x%08lx:", (unsigned long) (addr + off));
+        for (int i = 0; i < 16; ++i) {
+            int avail = (int) sizeof(line) - n;
+            if (avail <= 1) break;
+            int w = (i < row) ? snprintf(line + n, avail, " %02x", buf[off + i])
+                              : snprintf(line + n, avail, "   ");
+            n += (w < 0 || w >= avail) ? avail - 1 : w;
+        }
+        if ((int) sizeof(line) - n > 4) {
+            line[n++] = ' '; line[n++] = '|';
+            for (int i = 0; i < row && n + 2 < (int) sizeof(line); ++i) {
+                char ch = (char) buf[off + i];
+                line[n++] = (ch >= 0x20 && ch < 0x7f) ? ch : '.';
+            }
+            line[n++] = '|';
+        }
+        line[n] = 0;
+        UART_LOG("%s", line);
+    }
+}
+
 static void cmdMem(cmd *) {
     UART_LOG("Total heap:  %9ld", ESP.getHeapSize());
     UART_LOG("Free heap:   %9ld", ESP.getFreeHeap());
@@ -623,6 +689,7 @@ void setupCli() {
     cli.addCommand("ls", cmdLs);
     cli.addCommand("rt-stats", cmdRtStats);
     cli.addCommand("mem", cmdMem);
+    cli.addBoundlessCmd("peek", cmdPeek); // peek <hex-addr> [len]; symbol resolution lives host-side
     cli.addCommand("uptime", cmdUptime);
     cli.addBoundlessCmd("sensor", cmdSensor); // `sensor` full dump; `sensor avg` compact EWM line
 #ifdef WITH_NETW

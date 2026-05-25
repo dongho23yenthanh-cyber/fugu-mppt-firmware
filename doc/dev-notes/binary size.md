@@ -69,4 +69,29 @@ file size:
 - For more headroom you could switch to CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL (lets the 40 MHz crystal sleep too) — but only if the
   Fugu2 actually has a 32.768 kHz crystal populated. I left it on main-XTAL since that's safe regardless.
 
-  
+
+
+
+# matrix build
+
+```
+  ┌─────────┬──────────┬───────────┬─────────────┬───────────────────┐
+  │ target  │ WITH_BLE │ WITH_NETW │    size     │   Δ vs baseline   │
+  ├─────────┼──────────┼───────────┼─────────────┼───────────────────┤
+  │ esp32s3 │ 1        │ 1         │ 1,804,032 B │ baseline          │
+  ├─────────┼──────────┼───────────┼─────────────┼───────────────────┤
+  │ esp32s3 │ 0        │ 1         │ 1,552,432 B │ −252 KB (BLE)     │
+  ├─────────┼──────────┼───────────┼─────────────┼───────────────────┤
+  │ esp32s3 │ 1        │ 0         │ 1,515,776 B │ −288 KB (NETW)    │
+  ├─────────┼──────────┼───────────┼─────────────┼───────────────────┤
+  │ esp32s3 │ 0        │ 0         │ 1,255,136 B │ −549 KB (both)    │
+  ├─────────┼──────────┼───────────┼─────────────┼───────────────────┤
+  │ esp32   │ 1        │ 1         │ 1,790,096 B │ 4% partition free │
+  ├─────────┼──────────┼───────────┼─────────────┼───────────────────┤
+  │ esp32   │ 0        │ 1         │ 1,534,720 B │ —                 │
+  └─────────┴──────────┴───────────┴─────────────┴───────────────────┘
+```
+
+
+* The map shows esp_app_desc.c.obj actually contributes ~1 KB — the 185 KB is an esp_idf_size attribution artifact. Let me see what's really filling .rodata.
+

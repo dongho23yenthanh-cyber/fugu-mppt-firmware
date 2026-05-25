@@ -45,6 +45,12 @@ writer (stored only). No external zip dependency.
 * One tab per known conf file. The tab order is fixed within a group:
   `board, sensor, limits, coil, converter, charger, tracker, mqtt, tele,
   pprof, wifi`, then any unknown file alphabetically.
+* **Label**: the trailing `.conf` is stripped from the visible label
+  (`mqtt.conf` → `mqtt`); the tooltip still carries the full filename.
+* **Sensitive tabs** (`board`, `sensor`, `limits`, `coil`, `converter`)
+  render in a muted red (`.tab.sensitive`), with a tooltip suffix
+  "— sensitive (hardware/calibration)". Their active and hover states use a
+  lighter shade so the selected red tab is still readable.
 * **Synthetic tabs**: every file the firmware reads (the `FILE_KEYS` table)
   gets a tab even if it's missing from the source. Synthetic tabs render
   italic/faded with title "(not on device — fill a key to create)" and are
@@ -208,15 +214,23 @@ Browser ↔ broker via WebSocket only (`ws://` or `wss://`), using
 
 1. Click "Connect MQTT" → open modal pre-filled from `localStorage` (default
    URL `ws://192.168.1.200:9001`).
-2. Click **Scan for devices** → broker `connect()` then `subscribe pv/log/#`;
-   for 5 s, every topic of exactly three segments contributes its third
-   segment to a hostname set. The list re-renders every 0.8 s as devices
-   appear.
+2. Click **Scan for devices** → broker `connect()` then `subscribe pv/log/#`.
+   Immediately after the subscribe succeeds, every host previously seen on
+   *this broker URL* (cached in `localStorage["mqtt-known-hosts"]` as
+   `{<url>: [host, …]}`, up to 32 per URL) is probed by publishing the
+   benign command `ip` to `pv/log/<host>/cmd`. For 5 s, every 3-segment
+   topic `pv/log/<host>` contributes its host to a set, capturing both
+   passive chatter and probe replies. The list re-renders every 0.8 s as
+   devices appear.
 3. Click a device → the scan client is *handed off* (its message listener is
    rebound, no second CONNACK) and the regular `importFromDevice(hostname)`
-   flow runs.
+   flow runs. On success the hostname is added to the per-URL cache.
 4. The full `{url, username, password, device}` is cached as
    `grantedMqttConfig` so the upload can silently reconnect later.
+
+Brand-new devices still need to chirp once on `pv/log/<host>` before they
+can be cached; once cached they show up on subsequent scans even when
+quiet.
 
 **Wire protocol** (mirrors `etc/fugu/transport.py::MqttTransport`):
 

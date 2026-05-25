@@ -39,6 +39,8 @@
   .tab:hover { color:var(--fg); }
   .tab.active { color:var(--fg); border-bottom-color:var(--accent); }
   .tab.new:not(.active) { opacity:.55; font-style:italic; }
+  .tab.sensitive { color:#d97a7a; }
+  .tab.sensitive:hover, .tab.sensitive.active { color:#f0a0a0; }
   .tab .dot { color:var(--warn); margin-left:6px; }
   #panes { padding:18px 22px 60px; }
   .pane { display:none; }
@@ -664,11 +666,15 @@ function renderApp(){
   const sn=document.getElementById("srcname"); sn.style.display=""; sn.textContent=state.sourceName;
 
   const tabs=document.getElementById("tabs"); tabs.innerHTML="";
+  const SENSITIVE = new Set(["board","sensor","limits","coil","converter"]);
   for (const path of state.confPaths){
     const t=document.createElement("div");
-    t.className="tab"+(path===state.active?" active":"")+(state.files[path].isNew?" new":"");
-    t.title=path+(state.files[path].isNew?" (not on device — fill a key to create)":"");
-    t.innerHTML = path.split("/").pop() + '<span class="dot" data-path="'+path+'" style="display:none">●</span>';
+    const label = path.split("/").pop().replace(/\.conf$/,"");
+    t.className="tab"+(path===state.active?" active":"")+(state.files[path].isNew?" new":"")+(SENSITIVE.has(label)?" sensitive":"");
+    t.title=path+(state.files[path].isNew?" (not on device — fill a key to create)":"")+(SENSITIVE.has(label)?" — sensitive (hardware/calibration)":"");
+    t.textContent = label;
+    const dot=document.createElement("span"); dot.className="dot"; dot.dataset.path=path;
+    dot.style.display="none"; dot.textContent="●"; t.appendChild(dot);
     t.onclick=()=>{ state.active=path; renderApp(); };
     tabs.appendChild(t);
   }
@@ -1220,10 +1226,24 @@ async function mqttBindDevice(client, hostname){
 
 /* ----------------------------------------------------------------------------
    MQTT modal: scan broker for devices, let the user pick one to connect.
-   Hostnames are learned passively from `pv/log/<hostname>` traffic (devices
-   publish their own log stream continuously).
+   Hostnames are learned passively from `pv/log/<hostname>` traffic, plus an
+   active probe to previously-seen hosts (published once, cached per broker
+   URL) — devices that aren't currently chattering still show up.
 ---------------------------------------------------------------------------- */
 const MQ_LS = { url:"mqtt-url", user:"mqtt-user", pass:"mqtt-pass" };
+const MQ_HOSTS_KEY = "mqtt-known-hosts";  // {<broker-url>: [host, ...]}
+function mqttKnownHosts(url){
+  try { return (JSON.parse(localStorage.getItem(MQ_HOSTS_KEY)||"{}")[url]) || []; }
+  catch(_){ return []; }
+}
+function mqttRememberHost(url, host){
+  if (!url || !host) return;
+  let all={}; try { all = JSON.parse(localStorage.getItem(MQ_HOSTS_KEY)||"{}"); } catch(_){}
+  const list = Array.isArray(all[url]) ? all[url].filter(h=>h!==host) : [];
+  list.unshift(host);
+  all[url] = list.slice(0, 32);
+  localStorage.setItem(MQ_HOSTS_KEY, JSON.stringify(all));
+}
 function mqttModalRead(){
   return {
     url:  document.getElementById("mqtt-url").value.trim(),
@@ -1280,13 +1300,17 @@ async function mqttScanDevices(){
   client.subscribe(MQTT_LOG_ROOT + "#", {qos:0}, e=>{
     if (e){ mqttModalSetStatus("subscribe: "+e.message, true); return; }
     mqttModalSetStatus("scanning (5 s) …");
+    // poke previously-seen hosts so quiet devices reply on pv/log/<host>
+    for (const h of mqttKnownHosts(cfg.url)){
+      client.publish(MQTT_LOG_ROOT + h + "/cmd", "ip", {qos:0});
+    }
   });
   // refresh the list as devices appear; final state shown after 5 s
   const tick = setInterval(()=>mqttRenderDevices(Array.from(hosts).sort()), 800);
   setTimeout(()=>{
     clearInterval(tick);
     mqttRenderDevices(Array.from(hosts).sort());
-    mqttModalSetStatus(hosts.size ? `${hosts.size} device(s) found — click one to connect` : "no devices publishing under pv/log/", !hosts.size);
+    mqttModalSetStatus(hosts.size ? `${hosts.size} device(s) found — click one to connect` : "no devices responded under pv/log/", !hosts.size);
   }, 5000);
 }
 async function mqttConnectAndImport(hostname){
@@ -1301,6 +1325,7 @@ async function mqttConnectAndImport(hostname){
     else client.removeAllListeners("message");
     await mqttBindDevice(client, hostname);
     grantedMqttConfig = cfg;
+    mqttRememberHost(cfg.url, hostname);
     mqttModalClose();
     showStatus("connected — reading config from "+hostname+" …");
     await importFromDevice(hostname);

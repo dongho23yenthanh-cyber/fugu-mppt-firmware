@@ -134,7 +134,64 @@ struct FtpDial {
         send(std::string("PASS ") + PASS);
         return readCode();
     }
+
+    // Send PASV, parse the "227 ... (h1,h2,h3,h4,p1,p2)" reply, return the
+    // advertised data port (0 on parse failure). Reads through buf the same
+    // way readCode does, so call it instead of readCode for PASV.
+    uint16_t pasv() {
+        send("PASV");
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < deadline) {
+            auto nl = buf.find('\n');
+            while (nl != std::string::npos) {
+                std::string line = buf.substr(0, nl);
+                buf.erase(0, nl + 1);
+                if (line.rfind("227", 0) == 0) {
+                    auto lp = line.find('(');
+                    auto rp = line.find(')', lp == std::string::npos ? 0 : lp);
+                    if (lp == std::string::npos || rp == std::string::npos) return 0;
+                    unsigned a, b, c, d, p1, p2;
+                    if (std::sscanf(line.c_str() + lp + 1, "%u,%u,%u,%u,%u,%u",
+                                    &a, &b, &c, &d, &p1, &p2) != 6) return 0;
+                    return (uint16_t)((p1 << 8) | p2);
+                }
+                nl = buf.find('\n');
+            }
+            char tmp[256];
+            ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+            if (n > 0) buf.append(tmp, tmp + (size_t)n);
+            else if (n == 0) break;
+        }
+        return 0;
+    }
 };
+
+// Open a fresh TCP socket to 127.0.0.1:port for the FTP data channel.
+int openData(uint16_t port) {
+    int dfd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (dfd < 0) return -1;
+    sockaddr_in sa{};
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(port);
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (::connect(dfd, (sockaddr *)&sa, sizeof(sa)) < 0) { ::close(dfd); return -1; }
+    timeval tv{5, 0};
+    ::setsockopt(dfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    return dfd;
+}
+
+// Drain everything readable on a data socket until peer closes; return all
+// bytes received.
+std::string drainData(int dfd) {
+    std::string out;
+    char buf[1024];
+    for (;;) {
+        ssize_t n = ::recv(dfd, buf, sizeof(buf), 0);
+        if (n > 0) out.append(buf, buf + n);
+        else break;  // 0 = peer closed; -1 = timeout
+    }
+    return out;
+}
 
 // ---- per-bug regressions ---------------------------------------------------
 
@@ -221,6 +278,103 @@ void test_port_bounce() {
     assert(code == 501 && "PORT to non-peer IP must be refused");
 }
 
+// ---- data-channel coverage -------------------------------------------------
+
+// STOR then RETR a small file. Verifies the full passive-mode data path
+// (PASV → 227, parse port, open data conn, STOR → 150 → bytes → 226, then
+// RETR → 150 → bytes → 226).
+void test_upload_download() {
+    FtpDial c(kCmdPort);
+    assert(c.login() == 230);
+
+    const std::string payload = "hello fugu ftp host-shim\n";
+
+    // --- Upload ---
+    uint16_t pport = c.pasv();
+    std::fprintf(stderr, "  PASV->%u\n", pport);
+    assert(pport > 0 && "PASV must advertise a data port");
+    int dfd = openData(pport);
+    assert(dfd >= 0 && "data socket connect failed");
+
+    c.send("STOR /upload.bin");
+    int stor = c.readCode();
+    std::fprintf(stderr, "  STOR ->%d (expect 150)\n", stor);
+    assert(stor == 150);
+
+    ssize_t sent = ::send(dfd, payload.data(), payload.size(), 0);
+    assert(sent == (ssize_t)payload.size());
+    ::close(dfd);  // FIN triggers server to finalize and send 226
+
+    int done = c.readCode();
+    std::fprintf(stderr, "  STOR done ->%d (expect 226)\n", done);
+    assert(done == 226);
+
+    // --- Download (round-trip what we just uploaded) ---
+    pport = c.pasv();
+    assert(pport > 0);
+    dfd = openData(pport);
+    assert(dfd >= 0);
+
+    c.send("RETR /upload.bin");
+    int retr = c.readCode();
+    std::fprintf(stderr, "  RETR ->%d (expect 150)\n", retr);
+    assert(retr == 150);
+
+    std::string got = drainData(dfd);
+    ::close(dfd);
+    std::fprintf(stderr, "  RETR got %zu bytes (expect %zu)\n", got.size(), payload.size());
+    assert(got == payload && "RETR payload mismatch");
+
+    int complete = c.readCode();
+    std::fprintf(stderr, "  RETR done ->%d (expect 226)\n", complete);
+    assert(complete == 226);
+}
+
+// MLSD with an explicit pathname argument (recently added upstream as
+// commit 488d4d4 "Honor optional pathname argument in LIST/NLST/MLSD").
+// Setup: create /mlsdsub/ and drop a marker file in it. Verify MLSD /mlsdsub
+// lists the marker — not whatever's at cwd.
+void test_mlsd_subdir() {
+    FtpDial c(kCmdPort);
+    assert(c.login() == 230);
+
+    c.send("MKD /mlsdsub");
+    (void)c.readCode();  // 257 if fresh, 550 if it survived from a prior run
+
+    // Drop a marker file inside the subdir.
+    uint16_t pport = c.pasv();
+    assert(pport > 0);
+    int dfd = openData(pport);
+    assert(dfd >= 0);
+    c.send("STOR /mlsdsub/marker.txt");
+    assert(c.readCode() == 150);
+    const char *payload = "x";
+    ::send(dfd, payload, 1, 0);
+    ::close(dfd);
+    assert(c.readCode() == 226);
+
+    // MLSD /mlsdsub should list marker.txt — not the contents of cwd.
+    pport = c.pasv();
+    assert(pport > 0);
+    dfd = openData(pport);
+    assert(dfd >= 0);
+
+    c.send("MLSD /mlsdsub");
+    int mlsd = c.readCode();
+    std::fprintf(stderr, "  MLSD /mlsdsub ->%d (expect 150)\n", mlsd);
+    assert(mlsd == 150);
+
+    std::string listing = drainData(dfd);
+    ::close(dfd);
+    std::fprintf(stderr, "  MLSD listing (%zu B): %.120s\n", listing.size(), listing.c_str());
+    assert(c.readCode() == 226);
+
+    assert(listing.find("marker.txt") != std::string::npos
+           && "MLSD with subdir arg must list files in that subdir");
+    assert(listing.find("mlsdsub") == std::string::npos
+           && "MLSD listing must contain only entries *inside* the subdir, not the subdir name itself");
+}
+
 // ---- subprocess harness ---------------------------------------------------
 
 struct Test {
@@ -271,6 +425,8 @@ int main() {
         {"pass_without_user", test_pass_without_user},
         {"malformed_port",    test_malformed_port},
         {"port_bounce",       test_port_bounce},
+        {"upload_download",   test_upload_download},
+        {"mlsd_subdir",       test_mlsd_subdir},
         {"long_cwd_path",     test_long_cwd_path},
     };
 

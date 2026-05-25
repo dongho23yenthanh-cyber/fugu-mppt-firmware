@@ -14,23 +14,27 @@ struct BatChargerParams {
     float Ibat_lim = NAN; // [A] Max bat charge current (Ibat = Iout - Iload)
     float Cbat = NAN; // [Ah] Effective pack capacity. For parallel packs use the summed Ah (e.g. 2P 280Ah → 560).
 
-    float cv_min = NAN; // "float" where the termination line starts @Ibat=0 (LFP: 3.37V)
-    float cv_eoc = NAN; // termination line ending (LFP: 3.65V @ Ibat = tail_c_rate * Cbat)
+    float cv_min = NAN; // "float" where the termination line starts @Ibat=0 (LFP: 3.37V, LFP_longevity: 3.325V)
+    float cv_eoc = NAN; // termination line ending (LFP_longevity: 3.5V @ Ibat = tail_c_rate * Cbat)
     float tail_c_rate = 0.05f; // [1/h] ratio of EOC tail current to capacity.
     // ^ LFP: 0.05. NCR (Sanyo NCR18650GA, 67mA on 3500mAh): ~0.02. EVE INR18650: 0.033. Higher = safer (terminates later).
     float recharge_dod = 0.20f; // DoD-since-EoC to release termination. LFP  ~0.20. See doc/Termination.md.
 
     void load(const ConfFile &chargerConf) {
         Vbat_max = chargerConf.getFloat("vout_max", NAN, true);
-        cv_eoc = chargerConf.getFloat("cv_eoc", 3.6f);
-        cv_min = chargerConf.getFloat("cv_float", 3.37f);
+        cv_eoc = chargerConf.getFloat("cv_eoc", 3.5f);
+        cv_min = chargerConf.getFloat("cv_float", 3.325);
         assert_throw(cv_eoc >= cv_min, "");
-        float vout_fallback = floorf(Vbat_max / cv_eoc) * cv_min;
+        auto n_cells = (uint8_t) floorf(Vbat_max / cv_eoc);
+        float vout_fallback = n_cells * cv_min;
         Vbat_fallback = chargerConf.getFloat("vout_max_fallback", vout_fallback);
+        ESP_LOGI("charger", "N_cells=%u (Vbat_max=%.2f / cv_eoc=%.3f), Vbat_fallback=%.3fV",
+                 (unsigned) n_cells, Vbat_max, cv_eoc, Vbat_fallback);
 
         Ibat_lim = chargerConf.getFloat("ibat_max", 20.f, true); // note: iout = ibat + iload
         Cbat = chargerConf.getFloat("bat_c", NAN, true); // larger->"safer" value, doesn't overcharge small bats
         tail_c_rate = chargerConf.getFloat("tail_c_rate", 0.05f);
+        assert_throw(tail_c_rate > 0.f, "tail_c_rate must be > 0");
         recharge_dod = chargerConf.getFloat("recharge_dod", 0.20f);
     }
 };
@@ -122,7 +126,8 @@ public:
         float r = (p.cv_eoc - p.cv_min) / (p.tail_c_rate * p.Cbat);
         float vo = ibat * r;
         _v_term = fminf(p.cv_min + fmaxf(0.f, vo), p.cv_eoc); // don't go beyond cv_eoc to avoid BMS cut-off
-        if (!terminated and ibat > 0 and vcell_high > p.cv_min + vo) {
+        float iBatFloor = -p.tail_c_rate * p.Cbat * 0.02f;
+        if (!terminated and ibat > iBatFloor and vcell_high > p.cv_min + vo) {
             terminated = true;
             _vfloorStreak = 0;
         } else if (terminated and shouldRelease(vcell_high, ahSinceFull)) {
@@ -220,22 +225,24 @@ public:
     }
 
     void _updatePackVoltagePinning(float vbat = INFINITY) {
-        // Pack-voltage-pinning state machine. Four regimes:
-        //   1) Terminated + BMS data: hold an absolute float voltage
-        //      (Vbat_fallback ≈ N_cells × cv_min) so the converter supplies the
-        //      load and the pack sits at i_bat ≈ 0. Cell-voltage feedback and
-        //      the vout EWMA are skipped here — either would drift the setpoint
-        //      down with discharge and starve the float.
-        //   2) Not terminated + cells above v_eoc: EOC taper with cell-voltage
-        //      feedback (existing behaviour).
-        //   3) BMS-stale fallback (existing behaviour).
-        //   4) Bulk charging: free push to Vbat_max.
+        // Pack-voltage-pinning regimes (first match wins):
+        //   1) EOC feedback — cells above v_eoc: closed loop on vcell_high → v_eoc.
+        //      Doubles as the over-target corrector during terminated float; pulls
+        //      vpack_pin down until vcell_high reaches v_eoc (≈ cv_min at ibat≈0),
+        //      self-correcting any Vout-ADC offset. Suppressed when balancingMode
+        //      is on, to let a passive balancer act at a fixed float voltage
+        //      (unhealthy for an extended period of time, so only when explicitly
+        //      requested).
+        //   2) Terminated float — open-loop hold at Vbat_fallback.
+        //   3) BMS-stale — glide to Vbat_fallback.
+        //   4) Bulk — push to Vbat_max (or ride the falling-edge glide).
         // Termination transitions are glided to avoid stepping the setpoint.
 
+        bool balancingMode = false;
+
+        // never go beyond cv_eoc — a "dumb" BMS may cut us off at 3.65V and cause
+        // a voltage transient
         float v_eoc = fmin(params.cv_eoc, termCond.v_term());
-        //  ^ v_eoc: we could go beyond cv_eoc if ibat is sufficiently high. however a "dumb" BMS will
-        //  cut us off at max 3.65V (or whatever voltage it is configured to), possibly causing a voltage transient
-        //  which we like to avoid. so never go beyond cv_eoc
 
         bool batDataOk = batSt.haveValidCellVoltage() and std::isfinite(params.Cbat);
         bool nowTerm = bool(termCond);
@@ -251,25 +258,29 @@ public:
             _wasTerminated = nowTerm;
         }
 
-        if (nowTerm && batDataOk) {
-            // terminated float: hold an absolute target, ignore feedback/EWMA
-            _vPinFilt.reset();
-            _fallbackGlide.reset();
-            vpack_pin = _floatGlide.value(nowUs);
-        } else if (batDataOk and batSt.vcell_high >= v_eoc) {
+        bool eocFeedback = batDataOk && batSt.vcell_high >= v_eoc && !(balancingMode && nowTerm);
+
+        if (eocFeedback) {
             // battery is full
             _fallbackGlide.reset();
             _floatGlide.reset();
-            constexpr auto OV_FEEDBACK_GAIN = 2; // 4
+            constexpr auto OV_FEEDBACK_GAIN = 4;
             float vPin_raw = fmin(batSt.vout_avg.get(), vbat) - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN;
             _vPinFilt.add(vPin_raw);
             float vPin = _vPinFilt.get();
             if (isnan(vpack_pin) or vPin < vpack_pin - 0.01f)
-                ESP_LOGI("charger", "vpPin:=%.3fV (raw=%.3f cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)",
-                     vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
+                ESP_LOGI("charger", "update vpPin:=%.3fV (raw=%.3f cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)",
+                         vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
             vpack_pin = vPin;
+        } else if (nowTerm && batDataOk) {
+            // balancing mode / float
+            // terminated float: hold an absolute target, ignore feedback/EWMA
+            // this keep LFP float, with a small charge current, considered unhealthy for an extended period of time
+            _vPinFilt.reset();
+            _fallbackGlide.reset();
+            vpack_pin = _floatGlide.value(nowUs);
         } else if (!batDataOk && params.Vbat_fallback >= 0) {
-            // missing bat data and we have a fallback -> glide theres
+            // missing bat data, and we have a fallback -> glide there
             _vPinFilt.reset();
             _floatGlide.reset();
             if (!_fallbackGlide.active()) {
@@ -279,7 +290,7 @@ public:
                 auto what = !batSt.haveValidCellVoltage() ? "Cell Voltage" : "Pack Capacity";
                 ESP_LOGW("charger", "%s n/a, gliding vpPin %.3fV -> %.3fV over %ums",
                          what, from, params.Vbat_fallback,
-                         (unsigned)(_fallbackGlide.durationUs() / 1000));
+                         (unsigned) (_fallbackGlide.durationUs() / 1000));
             }
             vpack_pin = _fallbackGlide.value(nowUs);
         } else {

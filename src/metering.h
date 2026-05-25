@@ -63,7 +63,7 @@ struct DailyRingStorageState {
 
 class DailyRingStorage {
 public:
-    DailyRingStorageState<1000> state;
+    DailyRingStorageState<60> state;
     FlashValueFile<decltype(state)> flash;
 
     explicit DailyRingStorage(const char *fn = "/littlefs/daily") : flash{fn} {}

@@ -27,6 +27,9 @@ Env:
                          safe    — everything except known wedgers (default)
                          danger  — only known wedgers (adc-reset, adc-restart, ads-restart)
                          all     — both pools combined
+    FUZZ_CMDS          comma-separated list of generator names (overrides FUZZ_POOL).
+                       Names match the stat-keys printed at end of run, e.g.
+                         FUZZ_CMDS=adc-reset,ads-restart,sweep,mppt
 
 Exit codes:
     0  device still alive at end
@@ -203,6 +206,18 @@ else:
     if POOL != "safe":
         print(f"warn: unknown FUZZ_POOL={POOL!r}, defaulting to 'safe'")
     GEN = GEN_SAFE
+
+CMDS_ENV = os.environ.get("FUZZ_CMDS", "").strip()
+if CMDS_ENV:
+    wanted = {s.strip() for s in CMDS_ENV.split(",") if s.strip()}
+    all_gens = {name: gen for name, gen in (GEN_SAFE + GEN_DANGER)}
+    missing = wanted - all_gens.keys()
+    if missing:
+        print(f"warn: FUZZ_CMDS unknown names: {sorted(missing)}")
+    GEN = [(n, all_gens[n]) for n in wanted if n in all_gens]
+    if not GEN:
+        print("error: FUZZ_CMDS produced empty pool")
+        sys.exit(1)
 
 
 def speed_up_sweeps(c, watch):

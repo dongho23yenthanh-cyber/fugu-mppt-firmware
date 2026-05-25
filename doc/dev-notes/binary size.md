@@ -1,7 +1,21 @@
 # Binary size
 
 Notes on what's been done and what's still on the table to shrink the firmware image. Run `idf.py size`,
-`idf.py size-components`, `idf.py size-files` to inspect.
+`idf.py size-components`, `idf.py size-files` to inspect. The 1.87 MB OTA slot (`partitions.csv`) is the hard ceiling
+for WITH_BLE=1 builds.
+
+## Size progression (WITH_BLE=1, esp32s3)
+
+| Stage                                                                                       |       Bin size |        Δ |       Free |
+|---------------------------------------------------------------------------------------------|---------------:|---------:|-----------:|
+| Pre-2026-05-25 baseline                                                                     |  1,803,008 B |      —   |       4 %  |
+| + mbedTLS prune (curves / PEM-write / X509-CRL/CSR / SHA-512 / TLS_SERVER / SSL renegotiate) |              |          |            |
+| + WiFi SoftAP=n, WPA3 (SAE / SAE-PK / SAE-H2E / OWE) off                                    |              |          |            |
+| + Arduino selective compilation + 15 stubbed managed components                             |  1,709,968 B | **−91 KB** |     9 %  |
+| + measure_coil gated behind WITH_MEASURE_COIL (default off)                                 |  1,695,936 B |    −14 KB |     9 %  |
+| + per-file `-Os` on cold libmain TUs                                                        |**1,669,872 B** |    −25 KB | **11 %** |
+
+**Total saved: 133 KB (~7 % of the OTA slot).**
 
 ## Done
 
@@ -10,69 +24,105 @@ Notes on what's been done and what's still on the table to shrink the firmware i
   `fopen`/`fgets`. Saved ~166 KB.
 - **Drop `<sstream>` / `std::stringbuf` everywhere** — required to link at all on xtensa-esp-elf 14.2 (
   `undefined reference to 'basic_stringbuf_nop'`). See CLAUDE.md.
+- **`CONFIG_LWIP_IPV6=n`** — `~15–20 KB`. No `AF_INET6`/`in6_*` in source.
+- **`CONFIG_LIBC_NEWLIB_NANO_FORMAT=y`** — `~37–46 KB`. Audited all `src/` format strings for `%hh*`/`%ll*` first; see
+  memory note `project_newlib_nano_format`.
+- **Make sprofiler build-time optional** — `~10 KB`. `WITH_SPROFILER=1`; top-level CMakeLists `EXCLUDE_COMPONENTS
+  esp32-semihosting-profiler` when unset.
+
+### 2026-05-25 round (sdkconfig.defaults + CMakeLists.txt + main/idf_component.yml)
+
+- **mbedTLS prune** — disabled `TLS_SERVER`, `SSL_RENEGOTIATION`, `SERVER_SSL_SESSION_TICKETS`, `PKCS7`, `SHA512`,
+  `ECDSA_DETERMINISTIC`, `PEM_WRITE`, `X509_CSR/CRL_PARSE`, `PK_PARSE_EC_{EXTENDED,COMPRESSED}`, `ECDH_{ECDSA,RSA}`,
+  `GCM_SUPPORT_NON_AES_CIPHER`, all curves except `SECP256R1`. We're TLS-client only (HTTPS-OTA, MQTT-TLS).
+- **`CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n`** + WPA3 (`SAE`, `SAE_PK`, `SAE_H2E`, `OWE_STA`) off. We're STA-only, home APs
+  are WPA2. arduino-esp32's `WiFiGeneric.cpp:298` calls `esp_netif_create_default_wifi_ap()` unconditionally though, so
+  there's a weak inline stub returning `nullptr` in `main.cpp` to satisfy the link.
+- **`CONFIG_ARDUINO_SELECTIVE_COMPILATION=y`** + per-library opt-out: RainMaker / Insights / PPP / WiFiProv /
+  OpenThread / Matter / WebServer / Zigbee / ESP-SR / SimpleBLE / BluetoothSerial / SD / SD_MMC / SPIFFS / FFat /
+  NetBIOS / EEPROM / Ticker / ArduinoOTA off. Kept: WiFi / Network / SPI / Wire / Update / HTTPClient / FS / LittleFS /
+  AsyncUDP / DNSServer / ESPmDNS / NetworkClientSecure / Hash / Preferences / BLE.
+- **15 managed components stubbed** via `override_path: ../components/_idf_stubs/<name>` in `main/idf_component.yml`:
+  `esp_rainmaker`, `esp_insights`, `esp_diagnostics`, `esp_diag_data_store`, `esp_modem`, `esp_rcp_update`,
+  `esp_secure_cert_mgr`, `esp-sr`, `dl_fft`, `esp-zboss-lib`, `esp-zigbee-lib`, `esp-modbus`, `libsodium`, `qrcode`,
+  `chmorgan/esp-libhelix-mp3`. `EXCLUDE_COMPONENTS` doesn't apply to the IDF component manager's managed deps; stubbing
+  via `override_path` is the working lever. Kept: `cbor`, `mdns`, `network_provisioning`, `rmaker_common`, `esp-dsp`,
+  `led_strip`.
+- **arduino-esp32 REQUIRES patch** in top-level CMakeLists.txt — arduino-esp32's manifest is missing `esp_wifi`,
+  `esp_event`, `esp_netif`, `network_provisioning` even though its public `WiFi.h` → `WiFiType.h` transitively includes
+  `esp_wifi_types.h` (and `WiFiGeneric.h` includes `network_provisioning/manager.h` when
+  `CONFIG_NETWORK_PROV_NETWORK_TYPE_WIFI=y`, which auto-selects from `ESP_WIFI_ENABLED`). Before stubbing the optional
+  managed deps the strict-include checker tolerated this — once the stubs broke the transitive chain it didn't, so we
+  inject the missing PUBLIC requires via `target_link_libraries(${arduino_lib} PUBLIC idf::esp_wifi …)`.
+- **ESPTelnet REQUIRES esp_wifi** — same root cause, but its own REQUIRES list was the cleanest place to add it.
+- **SimpleFTPServer `DEFAULT_STORAGE_TYPE_ESP32=7` → PUBLIC** — `FtpServerKey.h` re-resolves `STORAGE_TYPE` at every
+  include site. With `SELECTIVE_FFat=n` removing `FFat.h` from the path, consumers (main.cpp via `ftp_service.h`) need
+  the LITTLEFS define to fall through correctly; moved from `component_compile_definitions` (PRIVATE) to
+  `target_compile_definitions(${COMPONENT_LIB} PUBLIC …)`.
+- **`src/web/server.cpp` trimmed** — was 36 lines of dead WebServer/SPIFFS/ArduinoOTA/AsyncTCP includes around one
+  `MDNS.addService(...)` call. Now 6 lines.
+
+### 2026-05-25 round (gating)
+
+- **`WITH_MEASURE_COIL` (default off)** — drops `src/measure_coil.cpp` (~11 KB), the `measure-coil` console command,
+  and the `isMeasuring()` guards in `cli.cpp` / `main.cpp`. Bench-only tool ported from `etc/measure_coil.py`; enable
+  with `WITH_MEASURE_COIL=1 idf.py build` when running coil sweeps on the bench.
+
+### 2026-05-25 round (per-file optimization)
+
+- **Per-file `-Os` on cold libmain TUs** — `set_source_files_properties(... COMPILE_OPTIONS "-Os")` on
+  `cli.cpp / sensor_setup.cpp / logging.cpp / util.cpp / viz/lcd.cpp / console.cpp / etc/rt.cpp / math/float16.cpp`
+  plus all `NETW_SRC` (telemetry, ftp_service, telnet_service, scope_service, mqtt, HAMqttDevice, home_assistant,
+  tamp_compress, web/server, etc/ota) and `BLE_SRC` (console_ble, etc/ota_ble), and `measure_coil.cpp` when enabled.
+  Kept `-O2` (`CONFIG_COMPILER_OPTIMIZATION_PERF`) on: `main.cpp` (hosts `loopRT`), `mppt.cpp` (`mppt.update` per ADC
+  sample), `adc/adc_esp32_cont.cpp` (DMA ISR helpers). Saved ~25 KB; no measurable RT regression.
 
 ## Candidates (not applied)
 
 ### High-confidence, safe for current config
 
 1. **Disable mbedTLS CA cert bundle** — `~70 KB`.
-   `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n`. Currently `=y` with `DEFAULT_FULL` (200 certs). Nothing actually uses HTTPS:
-   `src/etc/ota.cpp:176` sets `cert_pem = 0`, all `mqtt.conf` brokers are `mqtt://`, no `https://` anywhere in source.
-   Also consider `CONFIG_MBEDTLS_TLS_SERVER=n` (client-only) and possibly `CONFIG_MBEDTLS_TLS_CLIENT=n` if you confirm
-   no TLS use.
+   `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n`. Currently `=y` with `DEFAULT_FULL` (200 certs). Nothing actually uses HTTPS
+   *now*: `src/etc/ota.cpp:176` sets `cert_pem = 0`, all `mqtt.conf` brokers are `mqtt://`, no `https://` anywhere in
+   source. Left on because removing it slams the door on the first time we want a TLS connection. If you commit to
+   plain MQTT + HTTP-OTA forever, flip this off for an instant 70 KB.
 
-2. **Disable IPv6 in lwIP** — `~15–20 KB`.
-   `CONFIG_LWIP_IPV6=n`. `nd6.c.obj` 9 KB + `ip6.c.obj` 3.7 KB + dual-stack code paths in `sockets.c`/`tcp_in.c`. No
-   `AF_INET6` / `in6_` in source. Risk: only if LAN actually serves v6 records for `homeassistant.local` mDNS.
-
-### Requires source audit first
-
-3. **`CONFIG_LIBC_NEWLIB_NANO_FORMAT=y`** — `~46 KB`.
-   Replaces full newlib printf (~45 KB across `vfprintf`/`svfprintf`/`vfiprintf`/`svfiprintf`) with nano variants
-   (~7.6 KB). Tried once (commit `3c9fb60`, reverted in `d51a62c`): crashed in `wait_for_wifi()` because nano-printf
-   silently mis-parses the `%hh` and `%ll` length modifiers and walks the va_args off the rails — `ESP_LOGI("tele",
-   "... RSSI %hhi IP %s", WiFi.RSSI(), ip.c_str())` read the sign-extended RSSI as the `%s` pointer
-   (`0xffffffd4`) → `LoadProhibited` in `memchr`. Before retrying, audit every format string in `src/` for `%hh*`,
-   `%ll*`, `%j*`, `%z*`, `%t*` and replace with plain `%d`/`%u`/`%x` (everything gets varargs-promoted to `int`
-   anyway). Known offenders: `telemetry.cpp`, `metering.h`, `util.cpp`, `i2c.h`, `ina226.h`, `ads.h`, `cooling.h`,
-   `charger.h`, `viz/led.h`, `viz/lcd.cpp`, `adc/sampling.h`, `adc/mock.h`. Also drops `%f`/`%g` precision past
-   ~9 sig figs.
-
-### Medium-confidence
-
-4. **Drop `<sstream>`/`<iomanip>` includes in arduino-esp32 BLE code** — only matters if BLE is actually compiled in.
-   Check first.
-
-5. **`CONFIG_COMPILER_OPTIMIZATION_ASSERTION_LEVEL=0`** — `~5–15 KB`.
+2. **`CONFIG_COMPILER_OPTIMIZATION_ASSERTION_LEVEL=0`** — `~5–15 KB`.
    Currently full assertions (`__FILE__/__LINE__` strings in flash). Silent assertions strip them. Trade-off: crashes
    become opaque.
 
-6. **Make sprofiler build-time optional** — `~10 KB`.
-   `src/main.cpp:306` runtime-gates `sprofiler_initialize` on `pprof.conf::sprofiler_hz`, but the implementation (
-   `libesp32-semihosting-profiler.a`, 10 KB) is always linked. Wrap behind `#ifdef SPROFILER_ENABLE` (CLAUDE.md notes
-   it's only useful with OpenOCD attached).
+### Bigger levers, need verification
 
-### High-risk
+3. **Global `CONFIG_COMPILER_OPTIMIZATION_SIZE=y`** with per-file `-O2` overrides on the RT path —
+   potentially `~100–150 KB`. The current per-file approach only affects libmain; flipping the global default
+   recompiles all of IDF + arduino-esp32 + lwip + mbedtls at `-Os` too. Pre-conditions: measure `rtcount` numbers
+   before/after, and override `-O2` on `main.cpp / mppt.cpp / adc/adc_esp32_cont.cpp` plus any IDF code on the
+   sample-to-PWM path (likely `esp_adc/esp_adc_continuous.c`, parts of `freertos`, the ADC continuous ISR).
 
-7. **`CONFIG_COMPILER_OPTIMIZATION_SIZE=y`** (`-Os` instead of `-O2`) — `~100–150 KB`.
-   Don't do this without measuring `rtcount` numbers before/after — `loopRT` is pinned to core 1, no `vTaskDelay`,
-   ADC-sample-to-PWM latency is critical.
+4. **`-fno-asynchronous-unwind-tables`** — `~80 KB`.
+   `.eh_frame` is ~22 KB in libmain and ~61 KB in arduino-esp32. With `-fexceptions` ON, async-unwind tables aren't
+   required for C++ exception throw/catch — they're for stack walking at arbitrary instructions (signal handlers,
+   gcore-style dumps). Verify panic backtraces still resolve before merging.
 
-```
-- 
-VFS / FAT / SPIFFS / SD: Disable if only using LittleFS.
-- 
-Console / UART: If you only use your own console, disable CONFIG_ESP_CONSOLE_UART_DEFAULT.
-```
+5. **Disable `-fexceptions` globally + rewire `service.h` / `cli.cpp` / `main.cpp` try-catches as error returns** —
+   `~60–80 KB` (drops `libstdc++.a`'s 66 KB `.rodata` exception unwind tables). Mechanical but invasive: every
+   `throw std::runtime_error(...)` in conf / sensor_setup / buck / mppt construction / ADC init would have to become
+   a returned bool or `std::optional`. Not worth it until other levers are exhausted.
 
-file size:
-- For more headroom you could switch to CONFIG_BT_CTRL_LPCLK_SEL_EXT_32K_XTAL (lets the 40 MHz crystal sleep too) — but only if the
-  Fugu2 actually has a 32.768 kHz crystal populated. I left it on main-XTAL since that's safe regardless.
+## Considerations specific to this codebase
 
+- **EXCLUDE_COMPONENTS doesn't reach managed components.** It only works for components from `EXTRA_COMPONENT_DIRS` and
+  top-level `components/`. The IDF component manager registers managed deps independently. Use `override_path` to an
+  empty stub directory to exclude managed deps from the build.
+- **Stubs need matching directory names.** `override_path` swaps the *path*; the resolved component still has to be
+  registered under the original name (`espressif__esp-modbus`), because other components' `REQUIRES espressif__esp-modbus`
+  reference the name. So one stub directory per overridden component.
+- **`-fexceptions` has to stay global** as long as `service.h`'s try/catch is included widely. The 66 KB of unwind data
+  in `libstdc++.a` and the 22 KB in libmain are the cost.
+- **`esp_idf_size`'s `.rodata` attribution to `esp_app_desc.c.obj` (~185 KB)** is a tooling artifact — unowned `.rodata`
+  is attributed to the first object alphabetically. The actual `.obj` content is ~1 KB. Ignore that row in size-files.
 
-
-
-# matrix build
+# matrix build (pre-2026-05-25)
 
 ```
   ┌─────────┬──────────┬───────────┬─────────────┬───────────────────┐
@@ -92,6 +142,4 @@ file size:
   └─────────┴──────────┴───────────┴─────────────┴───────────────────┘
 ```
 
-
-* The map shows esp_app_desc.c.obj actually contributes ~1 KB — the 185 KB is an esp_idf_size attribution artifact. Let me see what's really filling .rodata.
-
+Re-run `etc/matrix_build.sh` after the 2026-05-25 changes to refresh this table.

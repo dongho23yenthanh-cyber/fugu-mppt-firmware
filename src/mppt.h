@@ -276,8 +276,9 @@ public:
     // every tick after a protection trip — otherwise OV/OC violations spam the log
     // and toggle the converter at sample rate (see Vin-OV regression with Voc>vin_max).
     // Callers that want immediate-recovery semantics (calibration done, user `dc 0`)
-    // must pass 0 explicitly.
-    void shutdownDcdc(uint32_t backoffSec = 5) {
+    // must pass 0 explicitly. `who` tags the trip path in the backoff log so a
+    // stuck post-sweep state names the responsible protect.
+    void shutdownDcdc(const char *who, uint32_t backoffSec = 5) {
         if (topologyConfig.backflowAtHV) {
             converter.disable();
             bflow.enable(false);
@@ -322,7 +323,7 @@ public:
             if (!converter.disabled())
                 ESP_LOGW("mppt", "Supply under-voltage! Vin %.1f and Vout %.1f < 10", sensors.Vin->last,
                      sensors.Vout->last);
-            shutdownDcdc();
+            shutdownDcdc("supply-UV");
             enqueue_task([&] { meter.commit(); });
             return false;
         }
@@ -358,7 +359,7 @@ public:
         if (sensors.Vin->last > limits.Vin_max) {
             // input over-voltage
             ESP_LOGW("mppt", "Vin %.1f > %.1f!", sensors.Vin->last, limits.Vin_max);
-            shutdownDcdc();
+            shutdownDcdc("Vin-OV");
             return false;
         }
 
@@ -370,7 +371,7 @@ public:
         if (sensors.Vout->last > ovTh) {
             //  && sensors.Vout->previous > ovTh * 0.9f
             bool wasDisabled = converter.disabled();
-            shutdownDcdc();
+            shutdownDcdc("Vout-OV");
 
             auto vout = std::max(sensors.Vout->last, sensors.Vout->previous);
 
@@ -398,7 +399,7 @@ public:
 
         // input over current
         if (sensors.Iin->last > limits.Iin_max * 1.3f && !converter.disabled()) {
-            shutdownDcdc();
+            shutdownDcdc("Iin-OC");
             ESP_LOGW("mppt", "Iin %.1f >1.3x lim (Iout=%.1f Vin=%.2f), shutdown",
                      sensors.Iin->last,
                      sensors.Iout->last, sensors.Vin->last);
@@ -410,7 +411,7 @@ public:
              or sensors.Iout->med3.get() > limits.Iout_max * 1.25f
              or sensors.Iout->ewm.avg.get() > limits.Iout_max * 1.15f
             ) and not converter.disabled()) {
-            shutdownDcdc(30);
+            shutdownDcdc("Iout-OC", 30);
             ESP_LOGW("mppt", "Iout %.2f (med %.2f avg %.2f) >lim %.2f, shutdown", sensors.Iout->last,
                      sensors.Iout->med3.get(), sensors.Iout->ewm.avg.get(), limits.Iout_max);
             return false;
@@ -419,7 +420,7 @@ public:
         if (sensorPhysicalI->last < -1 && sensorPhysicalI->previous < -1 && !converter.forcedPwm_()) {
             if (sensors.Iout->ewm.avg.get() > 10) {
                 //buck.halfDutyCycle();
-                shutdownDcdc();
+                shutdownDcdc("revI-highAvg");
                 ESP_LOGE("MPPT", "Reverse I %.2fA, noise? high avg, shutdown", sensorPhysicalI->last);
             } else {
                 if (bflow.state() || converter.getRectOnPwmCnt() > converter.getRectOnPwmMin())
@@ -433,7 +434,7 @@ public:
         if (sensorPhysicalI->ewm.avg.get() < -1 /*&& !converter.forcedPwm_()*/) {
             if (!converter.disabled())
                 ESP_LOGE("MPPT", "Reverse avg current %.1f A, shutdown!", sensorPhysicalI->ewm.avg.get());
-            shutdownDcdc();
+            shutdownDcdc("revI-ewm");
             return false;
         }
 
@@ -442,12 +443,12 @@ public:
                 if (!converter.disabled())
                     ESP_LOGE("MPPT", "Vout %.1f > Vin %.1f, shutdown duty=%i", sensors.Vout->ewm.avg.get(),
                          sensors.Vin->ewm.avg.get(), (int) converter.getCtrlOnPwmCnt());
-                shutdownDcdc();
+                shutdownDcdc("Vout>Vin-avg");
                 return false;
             }
             if (sensors.Vout->last > (sensors.Vin->last + .5f) * 2) {
                 ESP_LOGE("MPPT", "Vout %.1f > 2x Vin %.1f, shutdown", sensors.Vout->last, sensors.Vin->last);
-                shutdownDcdc();
+                shutdownDcdc("Vout>2Vin");
                 return false;
             }
 
@@ -477,7 +478,7 @@ public:
             if (!converter.disabled())
                 ESP_LOGE("MPPT", "Output short circuit detected! (V=%.2f, I= %.1fA)",
                      sensors.Vout->ewm.avg.get(), sensors.Iout->ewm.avg.get());
-            shutdownDcdc(30);
+            shutdownDcdc("short", 30);
             return false;
         }
 
@@ -488,7 +489,7 @@ public:
             if (sensorPhysicalI->ewm.avg.get() > 6) {
                 if (!converter.disabled())
                     ESP_LOGE("MPPT", "High-current through open backflow switch!");
-                shutdownDcdc();
+                shutdownDcdc("highI-bflowOpen");
                 return false;
             }
 
@@ -496,7 +497,7 @@ public:
                 // in case the current sensor is wrong
                 if (!converter.disabled())
                     ESP_LOGE("MPPT", "High duty cycle with open backflow switch!");
-                shutdownDcdc();
+                shutdownDcdc("highD-bflowOpen");
                 return false;
             }
         }
@@ -505,7 +506,7 @@ public:
             if (sensorPhysicalI->ewm.avg.get() > 6) {
                 if (!converter.disabled())
                     ESP_LOGE("MPPT", "High current without sync rectification!");
-                shutdownDcdc();
+                shutdownDcdc("highI-noSyncRect");
                 return false;
             }
         }
@@ -534,7 +535,7 @@ public:
                      sensors.Iout->last
             );
 
-            shutdownDcdc();
+            shutdownDcdc("Vr-sensor-fail");
             return false;
         }
 

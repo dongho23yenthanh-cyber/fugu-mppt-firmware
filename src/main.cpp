@@ -369,7 +369,7 @@ static esp_err_t disable_cpu_power_saving(void) {
 }
 
 void stopAndBackoff(uint32_t secondsDelay) {
-    mppt.shutdownDcdc();
+    mppt.shutdownDcdc("stopAndBackoff");
     delayStartUntil = wallClockUs() + secondsDelay * 1000000;
 }
 
@@ -647,7 +647,7 @@ static void loopRTNewData(unsigned long nowMs) {
 
 
     if (unlikely(adcSampler.isCalibrating())) {
-        mppt.shutdownDcdc(0); // calibration must resume MPPT immediately on completion
+        mppt.shutdownDcdc("calib", 0); // calibration must resume MPPT immediately on completion
     } else {
         if (mppt.active() or manualPwm) {
             rtcount("protect.pre");

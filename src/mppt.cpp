@@ -106,7 +106,7 @@ void MpptController::update() {
         if (!isfinite(cv) && !converter.disabled() && converter.getDutyCycle() > 0.01f) {
             ESP_LOGW("mppt", "Control value %f not finite act=%.3f tgt=%.3f idx=%i", cv, c.actual, c.target,
                      int(&c -controlValues.begin()));
-            shutdownDcdc();
+            shutdownDcdc("ctrl-nan");
             cv = -1;
         }
 
@@ -285,7 +285,7 @@ void MpptController::updateCV() {
         if (!converter.disabled()) {
             ESP_LOGW("mppt", "Control value %f not finite act=%.3f tgt=%.3f idx=%i", cv, sensors.Vout->last,
                      charger.Vout_max(), 0);
-            shutdownDcdc();
+            shutdownDcdc("updateCV-nan");
         }
         return;
     }

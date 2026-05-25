@@ -40,6 +40,29 @@ if (NOT DEFINED ENV{WITH_SPROFILER})
     set(EXCLUDE_COMPONENTS esp32-semihosting-profiler)
 endif ()
 
+# arduino-esp32 declares a lot of optional managed deps (RainMaker / Insights / Modem / ESP-SR /
+# Zigbee / Modbus / etc.) that we never use. With ARDUINO_SELECTIVE_COMPILATION (sdkconfig.defaults)
+# we already drop the corresponding arduino library .cpp's, so the only references left are inside
+# the unused managed components themselves — exclude those archives so they don't compile or link.
+# Kept: cbor (transitive header), mdns, network_provisioning (auto-selected by ESP_WIFI_ENABLED).
+list(APPEND EXCLUDE_COMPONENTS
+        espressif__esp_rainmaker
+        espressif__esp_insights
+        espressif__esp_diagnostics
+        espressif__esp_diag_data_store
+        espressif__esp_modem
+        espressif__esp_rcp_update
+        espressif__esp_secure_cert_mgr
+        espressif__esp-sr
+        espressif__dl_fft
+        espressif__esp-zboss-lib
+        espressif__esp-zigbee-lib
+        espressif__esp-modbus
+        espressif__libsodium
+        espressif__qrcode
+)
+message(STATUS "EXCLUDE_COMPONENTS = ${EXCLUDE_COMPONENTS}")
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 project(fugu-firmware)

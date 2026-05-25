@@ -89,9 +89,9 @@ idf.py flash
 
 ## Configuring Build
 
-Build-time features are toggled via environment variables read in `main/CMakeLists.txt` (and `CMakeLists.txt`
-for sdkconfig layering). Set them on the `idf.py build` invocation, e.g.
-`WITH_BLE=1 WITH_BINARY_TELE=1 idf.py build`.
+Build-time features are toggled via environment variables read. Set them on the `idf.py build` invocation, e.g.
+`WITH_BLE=1 WITH_BINARY_TELE=1 idf.py build` (windows users: `set WITH_BINARY_TELE=1 && idf.py build`).
+If you change one of the features you need to run `... idf.py reconfigure`.
 
 | Flag                | Default | What it does                                                                                                                                                                                                                |
 |---------------------|--------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -100,8 +100,10 @@ for sdkconfig layering). Set them on the `idf.py build` invocation, e.g.
 | `WITH_MCPWM`        |    off  | Swaps the LEDC gate driver for the MCPWM driver (hardware dead-time, GPIO OST brake, glitch-free comparator updates). See [`doc/mcpwm-sync-buck-driver.md`](doc/mcpwm-sync-buck-driver.md).                                  |
 | `WITH_BINARY_TELE`  |    off  | Sends telemetry as a binary symbol-table wire format (`sym_line_protocol.h`) with optional `tamp` compression. The UDP `:8086` receiver must decode it — plain InfluxDB ingestion no longer works.                          |
 | `WITH_SPROFILER`    |    off  | Compiles in the semihosting sampling profiler (`sprofiler_initialize`, only useful with OpenOCD attached). When off, the `esp32-semihosting-profiler` component is excluded entirely (~8 KB BSS).                            |
+| `WITH_VCONV`        |    off  | Replaces the physical gate driver + ADC with an in-firmware synchronous-buck plant (`src/sim/vconv.*`, configured via `vconv.conf`). For closed-loop control-algorithm work without hardware. Mutually exclusive with `WITH_MCPWM`. |
 
-Other build env vars:
+Other build env vars (prefix-style shown below is bash/zsh; on Windows use `set VAR=value && idf.py build`
+or `$env:VAR="value"; idf.py build` in PowerShell):
 
 * `RUN_TESTS=1` swaps `src/main.cpp` for `test/main.cpp` and the Unity test sources (see `main/CMakeLists.txt`).
 * `MAIN_SRC=path/to/entry.cpp` swaps in a single alternate entry point without touching CMake (e.g. `MAIN_SRC=../test/test_buck.cpp idf.py build`).
@@ -118,23 +120,26 @@ hard-coded, making them configurable is WIP.
 You find existing board configuration in the folder [`config/`](config/):
 
 * `fmetal`: [Fugu2 board](https://github.com/fl4p/Fugu2), the "standard" configuration
-* `fugu1/fugu1`: original fugu design with ADS1015 ADC
+* `fugu1/fugu1_esp32`: original fugu design with ADS1015 ADC
 * `fugu1/fugu_int_adc`: original fugu design but using the [internal ADC](doc/Internal%20ADC.md)
 * `psu_12v`: example for a 12V power supply using Forced PWM
 * `lab/dry_mock`: uses a mock ADC producing sinusoidal readings, useful for testing with ESP32 dev boards
 * `lab/dry_int`: uses the internal ADC for dry testing
+* `lab/vconv_mock`: pairs with `WITH_VCONV=1` — drives the in-firmware converter plant (`src/sim/vconv.*`) instead of real PWM/ADC
+* `lab/wokwi_mock`: setup for the [Wokwi](https://wokwi.com) ESP32-S3 simulator (mock ADC, see also `wokwi_mock_esp32` for classic ESP32)
 
-To flash these files on the ESP32, we use `littlefs-python` (install with `pip install littlefs-python`).
-Chose the board and run these commands (set `BOARD` variable to the name of the folder under `config/`):
+To flash these files on the ESP32(S3), use the `provision.py` helper. It builds a littlefs image with `littlefs-python`
+(`pip install littlefs-python`) and writes it via `parttool.py`:
 
 ```
-BOARD=dry
-littlefs-python create config/$BOARD $BOARD.bin -v --fs-size=0x20000 --name-max=64 --block-size=4096
-parttool.py --port /dev/cu.usb* write_partition --partition-name littlefs --input $BOARD.bin
+export ESPPORT=/dev/cu.usbmodem...      # windows: set ESPPORT=COM3
+./provision.py fmetal                   # windows: python provision.py fmetal
+./provision.py config/lab/dry_mock      # or a path to a dir containing conf/
 ```
 
-Alternatively, in `CMakeLists.txt`, add `FLASH_IN_PROJECT` argument for `littlefs_create_partition_image()`. Then the
-config files will be flashed with the next `idf.py flash`:
+Alternatively, in `CMakeLists.txt`, point `littlefs_create_partition_image()` at the desired board and rebuild — the
+top-level CMake already passes `FLASH_IN_PROJECT`, so the config flashes together with the firmware on the next
+`idf.py flash`:
 
 ```
 littlefs_create_partition_image(littlefs config/fmetal

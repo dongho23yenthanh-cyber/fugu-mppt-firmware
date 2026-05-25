@@ -13,7 +13,11 @@ idf_component_register(
 
 project(SimpleFTPServer)
 
-component_compile_definitions(
+# PUBLIC: SimpleFTPServer.h is included by consumers (src/tele/ftp_service.h → main.cpp), and
+# FtpServerKey.h re-resolves STORAGE_TYPE from DEFAULT_STORAGE_TYPE_ESP32 at every include site.
+# Without a public define, main.cpp falls back to the upstream default (STORAGE_FFAT=9) and tries
+# to include FFat.h — which Arduino's CONFIG_ARDUINO_SELECTIVE_FFat=n removed from the path.
+target_compile_definitions(${COMPONENT_LIB} PUBLIC
     DEFAULT_STORAGE_TYPE_ESP32=7 # STORAGE_LITTLEFS
     DEFAULT_FTP_SERVER_NETWORK_TYPE_ESP32=6
 )

@@ -8,6 +8,7 @@ idf_component_register(
             #arduino
             # Adafruit_BusIO
             arduino-esp32
+            esp_wifi
 )
 
 project(ESPTelnet)

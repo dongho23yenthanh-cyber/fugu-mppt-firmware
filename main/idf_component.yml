@@ -23,3 +23,25 @@ dependencies:
   # IDF NimBLE catches up. 3.3.7 is the last compatible release.
   espressif/arduino-esp32: '>=3.3.2,<3.3.8'
   joltwallet/littlefs: ^1.20.2
+
+  # arduino-esp32 declares these as transitive deps but we don't use the Arduino libraries that
+  # would compile them (RainMaker, Insights, PPP, WiFiProv-via-Zigbee, OpenThread, Matter, Modbus,
+  # SR/wakenet). The IDF component manager still registers and BUILDS them otherwise, which means
+  # esp_rainmaker fails to compile when we prune mbedTLS (it uses CSR/PEM write APIs). Point each
+  # to an empty stub via override_path so the slot is satisfied without any code.
+  # Keep in sync with CONFIG_ARDUINO_SELECTIVE_* in sdkconfig.defaults.
+  espressif/esp_rainmaker: { override_path: ../components/_idf_stubs/esp_rainmaker }
+  espressif/esp_insights: { override_path: ../components/_idf_stubs/esp_insights }
+  espressif/esp_diagnostics: { override_path: ../components/_idf_stubs/esp_diagnostics }
+  espressif/esp_diag_data_store: { override_path: ../components/_idf_stubs/esp_diag_data_store }
+  espressif/esp_modem: { override_path: ../components/_idf_stubs/esp_modem }
+  espressif/esp_rcp_update: { override_path: ../components/_idf_stubs/esp_rcp_update }
+  espressif/esp_secure_cert_mgr: { override_path: ../components/_idf_stubs/esp_secure_cert_mgr }
+  espressif/esp-sr: { override_path: ../components/_idf_stubs/esp-sr }
+  espressif/dl_fft: { override_path: ../components/_idf_stubs/dl_fft }
+  espressif/esp-zboss-lib: { override_path: ../components/_idf_stubs/esp-zboss-lib }
+  espressif/esp-zigbee-lib: { override_path: ../components/_idf_stubs/esp-zigbee-lib }
+  espressif/esp-modbus: { override_path: ../components/_idf_stubs/esp-modbus }
+  espressif/libsodium: { override_path: ../components/_idf_stubs/libsodium }
+  espressif/qrcode: { override_path: ../components/_idf_stubs/qrcode }
+  chmorgan/esp-libhelix-mp3: { override_path: ../components/_idf_stubs/esp-libhelix-mp3 }

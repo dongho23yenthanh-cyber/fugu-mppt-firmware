@@ -109,6 +109,13 @@ static void loopRT(void *arg); // this is the critical one
 
 static void loopRTNewData(unsigned long nowMs);
 
+// arduino-esp32's WiFiGeneric.cpp:298 calls esp_netif_create_default_wifi_ap() unconditionally,
+// but esp_wifi defines it only when CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y. We turn SOFTAP off in
+// sdkconfig.defaults (saves a few KB) and never act as an AP, so stub it inline here so the
+// link succeeds. Inline because a separate TU was getting --gc-sections'd out of libmain.a
+// before the linker had a chance to satisfy arduino's undefined ref.
+extern "C" void *esp_netif_create_default_wifi_ap(void) { return nullptr; }
+
 
 // Single reused log literal for the repeated "failed to read <conf>.conf" catch blocks in setup().
 static void logConfErr(const char *name, const std::exception &e) {

@@ -19,7 +19,7 @@ extern KeyValueStorage nvs;
 class BleConsoleService : public Service {
 public:
     BleConsoleService() : Service("ble", "/littlefs/conf/ble.conf", /*requiresNetwork*/ false,
-                                  /*enabledDefault*/ true) {
+                                  /*enabledDefault*/ false) { // it exposes the console, default off
     }
 
     std::string statusDetail() const override { return bleConsoleConnected() ? "connected" : ""; }

@@ -211,7 +211,7 @@ Devices with hostnames like `fugu-esp32s3-*` are bench devices, not real power c
 Confirm the hostname in the welcome message (`Welcome to <hostname> (192.168.4.2)`), as IPs are not static.
 Confirm the device ip address with the `ip` command.
 You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200`
-You can find battery data with `batmon()` in
+You can find battery data in InfluxDB with `batmon()` in
 `/Users/fab/dev/ha/home-assistant-addons/batmon-ha/tools/impedance/datasets.py`, use default device="bat_caravan"
 
 # Important

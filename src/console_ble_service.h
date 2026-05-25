@@ -34,7 +34,7 @@ protected:
         std::string hn = nvs.readString("hostname", "fugu");
         nvs.close();
 #endif
-        bleConsoleBegin("fugu-" + hn,
+        bleConsoleBegin(        hn.starts_with("fugu-") ? hn : ("fugu-" + hn),
                         c.getString("ble_security", "justworks"),
                         (uint32_t) c.getLong("ble_passkey", 0));
         return true;

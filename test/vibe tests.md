@@ -22,7 +22,7 @@ using config/lab/dry_mock configuration files as a base.
 ## influxdb
 this tests if the device generate proper telemetry data to influxdb.
 * setup an udp socket listening on port 8086 on the test host (this computer)
-*  './provision.sh config/lab/dry_mock' (for real devices)
+*  './provision.py config/lab/dry_mock' (for real devices)
 * connect to the device on the serial port
 * configure 'tele.conf'
   * set `influxdb_host` to the LAN ip of the test host

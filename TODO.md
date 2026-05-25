@@ -4,6 +4,13 @@ and can your review the sdkconfig situation? it is not drifting anymore. take a 
 to work on esp32 and esp32s3 target and with all the WITH_* build flags. any file updates needed? should we remove the sdkconfig from git?
 
 
+charger.h:  4. Post-termination, only Ah-release or the 3.27 V floor unlatches — fine for solar, could stick "full" in high-load AC-coupled setups.
+
+- N_cells log: formula floor(Vbat_max/cv_eoc) and units check out; the four-field log (N_cells, Vbat_max, cv_eoc, Vbat_fallback) makes the 13.6 V ×
+  cv_eoc=3.50 → 3S misconfig immediately obvious.
+
+- review voltage detection
+
 - test conf-editor.html
 
 - write a python script that interacts with the device over the serial console

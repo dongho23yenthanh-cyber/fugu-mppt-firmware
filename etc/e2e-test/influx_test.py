@@ -6,7 +6,7 @@ Verifies that the device emits well-formed InfluxDB line-protocol points over UD
 
   1. open a UDP socket on this host listening on port 8086 (the InfluxDB UDP port the firmware
      flushes to, hard-coded in `src/tele/telemetry.cpp::influxWritePointsUDP`)
-  2. (optional) `./provision.sh config/lab/dry_mock` to flash the mock board config
+  2. (optional) `./provision.py config/lab/dry_mock` to flash the mock board config
   3. over the serial console, point the device at this host:
        set-config tele.conf influxdb_host <this-host-LAN-ip>
        set-config tele.conf enabled 1
@@ -219,7 +219,7 @@ def main() -> int:
     ap.add_argument("--host", default=None, help="advertised host IP (default: this host's LAN IP)")
     ap.add_argument("--mock", action="store_true", help="device runs a mock setup (informational)")
     ap.add_argument("--provision", metavar="BOARD", default=None,
-                    help="run ./provision.sh BOARD first (e.g. config/lab/dry_mock)")
+                    help="run ./provision.py BOARD first (e.g. config/lab/dry_mock)")
     ap.add_argument("--settle", type=float, default=60.0, help="seconds to wait for first packet")
     ap.add_argument("--duration", type=float, default=15.0, help="seconds to collect after first packet")
     ap.add_argument("--no-reboot", action="store_true",
@@ -247,7 +247,7 @@ def main() -> int:
     if args.provision:
         print(f"provisioning {args.provision} …")
         try:
-            subprocess.run(["./provision.sh", args.provision], check=True)
+            subprocess.run(["./provision.py", args.provision], check=True)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             print(f"provision failed: {e}")
             return 1

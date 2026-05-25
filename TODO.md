@@ -1,5 +1,9 @@
 # todo
 
+and can your review the sdkconfig situation? it is not drifting anymore. take a look at the other sdkconfig.* files. i want everything
+to work on esp32 and esp32s3 target and with all the WITH_* build flags. any file updates needed? should we remove the sdkconfig from git?
+
+
 - test conf-editor.html
 
 - write a python script that interacts with the device over the serial console
@@ -630,3 +634,82 @@ I (31) qio_mode: Enabling default flash chip QIO
 
 
 TODO rename re-bulk charger conf?
+
+
+
+
+
+
+
+
+
+Write frequency per (device, field) — over the last 7 days
+
+flat (last write 2026-05-24 12:17, ~6h ago)
+
+
+from(bucket: "ha_van")
+|> range(start: -7d)
+|> filter(fn: (r) => r._measurement == "mppt")
+|> group(columns: ["device", "_field"])
+|> count()
+|> map(fn: (r) => ({ r with pts_per_sec: float(v: r._value) / 604800.0 }))
+|> group()
+|> sort(columns: ["pts_per_sec"], desc: true)
+
+Wrapped in the influx CLI call I ran:
+
+ssh fab@tm.fabi.me 'timeout 180 influx query --org openpe --raw '"'"'
+from(bucket:"ha_van")
+|> range(start:-7d)
+|> filter(fn:(r)=>r._measurement=="mppt")
+|> group(columns:["device","_field"])
+|> count()
+|> map(fn:(r)=>({r with pts_per_sec: float(v:r._value) / 604800.0}))
+|> group()
+|> sort(columns:["pts_per_sec"], desc: true)
+'"'"' '
+
+ssh fab@tm.fabi.me 'timeout 180 influx query --org openpe --raw '"'"'
+from(bucket:"ha_van")
+|> range(start:-1min)
+|> filter(fn:(r)=>r._measurement=="mppt")
+|> group(columns:["device","_field"])
+|> count()
+|> map(fn:(r)=>({r with pts_per_sec: float(v:r._value) / 60}))
+|> group()
+|> sort(columns:["pts_per_sec"], desc: true)
+'"'"' '
+
+
+┌───────────────────────────────────────────────────────┬──────┐
+│                         Field                         │  Hz  │
+├───────────────────────────────────────────────────────┼──────┤
+│ E, E_today, mcu_temp, mppt_state, pwm_dir_f, pwm_duty │ 36.5 │
+├───────────────────────────────────────────────────────┼──────┤
+│ I, P, P_smooth, Ui, Uo                                │ 36.5 │
+├───────────────────────────────────────────────────────┼──────┤
+│ ntc_temp                                              │ 36.5 │
+├───────────────────────────────────────────────────────┼──────┤
+│ pwm_dcm, pwm_ls_duty, pwm_ls_max                      │ 23.2 │
+├───────────────────────────────────────────────────────┼──────┤
+│ P_filt, P_prev, dP, dP_thres                          │ 21.7 │
+├───────────────────────────────────────────────────────┼──────┤
+│ cv_lim_idx                                            │ 5.7  │
+└───────────────────────────────────────────────────────┴──────┘
+
+fry (last write 2026-05-24 04:03, ~14h ago)
+
+┌───────────────────────────────────────────────────────┬──────┐
+│                         Field                         │  Hz  │
+├───────────────────────────────────────────────────────┼──────┤
+│ E, E_today, mcu_temp, mppt_state, pwm_dir_f, pwm_duty │ 35.4 │
+├───────────────────────────────────────────────────────┼──────┤
+│ I, P, P_smooth, Ui, Uo, ntc_temp                      │ 35.4 │
+├───────────────────────────────────────────────────────┼──────┤
+│ pwm_dcm, pwm_ls_duty, pwm_ls_max                      │ 21.4 │
+├───────────────────────────────────────────────────────┼──────┤
+│ P_filt, P_prev, dP, dP_thres                          │ 20.4 │
+├───────────────────────────────────────────────────────┼──────┤
+│ cv_lim_idx                                            │ 6.4  │
+└───────────────────────────────────────────────────────┴──────┘

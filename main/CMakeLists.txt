@@ -130,14 +130,6 @@ if (WITH_VCONV)
     component_compile_definitions("WITH_VCONV=1")
 endif ()
 
-# WITH_BINARY_TELE=1 sends telemetry as the binary symbol-table wire (sym_line_protocol.h) +
-# compression (tele.conf compressor=none|tamp, default tamp) instead of text influx line protocol.
-# The receiver on UDP :8086 must then strip the 1-byte compressor id, decompress, and decode the
-# length-prefixed frames (lpDecode is the reference) — plain InfluxDB ingestion no longer works.
-if ($ENV{WITH_BINARY_TELE})
-    component_compile_definitions("WITH_BINARY_TELE=1")
-endif ()
-
 # WITH_SPROFILER=1 compiles in the semihosting sampling profiler (sprofiler_initialize, only useful
 # with OpenOCD attached). Off by default; the top-level CMakeLists then EXCLUDE_COMPONENTS the
 # esp32-semihosting-profiler component so its flash + ~8 KB .bss is dropped entirely.

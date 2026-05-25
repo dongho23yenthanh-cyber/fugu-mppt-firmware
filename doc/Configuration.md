@@ -166,12 +166,13 @@ SSIDs are pattern-based; add as many `ssid_<name>` / `ssid_<name>_psk` pairs as 
 
 ## tele.conf — InfluxDB telemetry
 
-| key             | unit | type   | default | description                                        |
-|-----------------|------|--------|---------|----------------------------------------------------|
-| `influxdb_host` |      | string | —       | InfluxDB host IP for UDP telemetry (port 8086)     |
-| `compressor`    |      | string | tamp    | Binary wire compressor (`WITH_BINARY_TELE` builds) |
-| `enabled`       |      | bool   | 1       | Start this service at boot                         |
-| `log_level`     |      | enum   | info    | Verbosity: `error`, `warn` or `info`               |
+| key             | unit | type   | default | description                                                          |
+|-----------------|------|--------|---------|----------------------------------------------------------------------|
+| `influxdb_host` |      | string | —       | InfluxDB host IP for UDP telemetry (port 8086)                       |
+| `binary`        |      | bool   | 0       | 1 = binary symbol-table wire (sym_line_protocol.h); 0 = text influx  |
+| `compressor`    |      | string | tamp    | Compressor when `binary=1`: `none` or `tamp`                         |
+| `enabled`       |      | bool   | 1       | Start this service at boot                                           |
+| `log_level`     |      | enum   | info    | Verbosity: `error`, `warn` or `info`                                 |
 
 ## ftp.conf — config access over LAN
 

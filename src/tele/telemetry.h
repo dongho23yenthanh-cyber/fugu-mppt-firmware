@@ -3,6 +3,7 @@
 //#include "../adc/sampling.h"
 //#include "../store.h"
 #include <string>
+#include <variant>
 #include <Arduino.h>
 
 
@@ -31,21 +32,37 @@ void wifiLoop(bool connect = false);
 
 
 #include "line_protocol.h"
-
-// Telemetry point type is chosen at build time. WITH_BINARY_TELE swaps the text
-// influx line for the binary symbol-table protocol (see sym_line_protocol.h);
-// producers stay identical because both expose the same addTag/addField surface
-// and build via makeTelePoint(). Default (unset) keeps the text path so plain
-// InfluxDB UDP ingestion is unchanged.
-#if WITH_BINARY_TELE
 #include "sym_line_protocol.h"
-extern SymbolTable g_symtab;                 // one per device (device id is fixed) -> shared table
-using TelePoint = BinaryLineProtocol;
-inline TelePoint makeTelePoint(const char *measurement) { return BinaryLineProtocol(g_symtab, measurement); }
-#else
-using TelePoint = LineProtocol;
-inline TelePoint makeTelePoint(const char *measurement) { return LineProtocol(measurement); }
-#endif
+
+// Telemetry wire is chosen at boot from tele.conf::binary (0=text, 1=binary).
+// TelePoint wraps both builders in a variant and forwards the shared API so
+// producers write the same code regardless of the wire format; the binary
+// branch needs g_symtab (shared interning table per device).
+extern SymbolTable g_symtab;
+extern bool g_teleBinary;     // set by TelemetryService::onStart from tele.conf
+
+class TelePoint {
+    using V = std::variant<LineProtocol, BinaryLineProtocol>;
+    V v_;
+public:
+    explicit TelePoint(const char *measurement)
+        : v_(g_teleBinary
+                 ? V(std::in_place_type<BinaryLineProtocol>, g_symtab, measurement)
+                 : V(std::in_place_type<LineProtocol>, measurement)) {}
+
+    void addTag(const char *k, const char *v) { std::visit([&](auto &p) { p.addTag(k, v); }, v_); }
+    void addField(const char *k, float v, int dp = 2) { std::visit([&](auto &p) { p.addField(k, v, dp); }, v_); }
+    void addField(const char *k, int v) { std::visit([&](auto &p) { p.addField(k, v); }, v_); }
+    void addField(const char *k, bool v) { std::visit([&](auto &p) { p.addField(k, v); }, v_); }
+    void setTimeMs() { std::visit([](auto &p) { p.setTimeMs(); }, v_); }
+    bool hasTime() const { return std::visit([](const auto &p) { return p.hasTime(); }, v_); }
+    std::string takeWire() { return std::visit([](auto &p) { return p.takeWire(); }, v_); }
+    bool isBinary() const { return v_.index() == 1; }
+};
+
+inline TelePoint makeTelePoint(const char *measurement) { return TelePoint(measurement); }
+
+void teleLoadWireConf();  // re-read tele.conf::binary + compressor (cache for the hot path)
 
 void telemetryAddPoint(TelePoint &p, uint16_t maxQueue = 40);
 

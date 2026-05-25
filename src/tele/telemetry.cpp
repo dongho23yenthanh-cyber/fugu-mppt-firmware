@@ -20,11 +20,11 @@
 
 #include "../storage/key-value.h"
 
-#if WITH_BINARY_TELE
 #include "compress.h"
 #include "../conf.h"
 SymbolTable g_symtab;                    // shared interning table for the binary wire (telemetry.h)
-#endif
+bool g_teleBinary = false;               // set by TelemetryService::onStart; default = text
+static Compressor *s_teleCompressor = nullptr;   // cached compressor for the binary wire
 
 
 WiFiMulti wifiMulti;
@@ -222,7 +222,6 @@ bool wait_for_wifi() {
     return true;
 }
 
-#if !WITH_BINARY_TELE
 static void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
     if (msg.length() > CONFIG_TCP_MSS) {
         ESP_LOGW("tele", "Payload len %d > TCP_MSS: %s", msg.length(), msg.substring(0, 200).c_str());
@@ -238,15 +237,14 @@ static void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
 
     msg.clear();
 }
-#endif
 
-
-#if WITH_BINARY_TELE
-// Compressor for the binary wire, selected once from tele.conf (default tamp).
-// Swap algorithms by changing the conf key — no code change at call sites.
-static Compressor &teleCompressor() {
-    static Compressor &c = compressorByName(ConfFile{"/littlefs/conf/tele.conf"}.c("compressor", "tamp"));
-    return c;
+// Load tele.conf::binary + compressor at service start; cache so the hot path
+// doesn't read littlefs per point. teleCompressor() is only consulted when the
+// binary wire is selected; on text it stays null.
+void teleLoadWireConf() {
+    ConfFile conf{"/littlefs/conf/tele.conf"};
+    g_teleBinary = conf.getLong("binary", 0) != 0;
+    s_teleCompressor = g_teleBinary ? &compressorByName(conf.c("compressor", "tamp")) : nullptr;
 }
 
 // Compress one batch of concatenated (already length-prefixed) wire frames, tag
@@ -264,7 +262,6 @@ static void sendBinaryBatch(const IPAddress &dst, uint16_t port, Compressor &com
     }
     raw.clear();
 }
-#endif
 
 const char *getChipId() {
     static char ssid[25]{0};
@@ -309,33 +306,33 @@ void TelemetryService::flushTask(void *arg) {
 void TelemetryService::flushQueue(const IPAddress &addr) {
     if (noSsid) return;
     constexpr auto port = 8086;
-#if WITH_BINARY_TELE
-    Compressor &comp = teleCompressor();
-    const size_t cap = comp.maxBatchRaw(CONFIG_TCP_MSS);
-    static std::string batch;
-    std::string frame;
-    while (pointsQ.try_dequeue(frame)) {
-        if (!batch.empty() && batch.size() + frame.size() > cap) {  // batch full -> send, carry frame over
-            sendBinaryBatch(addr, port, comp, batch);                // one full datagram per call
-            batch = std::move(frame);
-            return;
+    if (g_teleBinary && s_teleCompressor) {
+        Compressor &comp = *s_teleCompressor;
+        const size_t cap = comp.maxBatchRaw(CONFIG_TCP_MSS);
+        static std::string batch;
+        std::string frame;
+        while (pointsQ.try_dequeue(frame)) {
+            if (!batch.empty() && batch.size() + frame.size() > cap) {  // batch full -> send, carry frame over
+                sendBinaryBatch(addr, port, comp, batch);                // one full datagram per call
+                batch = std::move(frame);
+                return;
+            }
+            batch += frame;
         }
-        batch += frame;
-    }
-    // batch not full -> hold for more points
-#else
-    constexpr size_t MTU = CONFIG_TCP_MSS;
-    static String msg;
-    std::string lp;
-    while (pointsQ.try_dequeue(lp)) {
-        if (msg.length() && msg.length() + lp.length() + 1 > MTU) {  // full -> send, carry line over
-            udpFlushString(addr, port, msg);
-            msg = String(lp.c_str()); msg += '\n';
-            return;
+        // batch not full -> hold for more points
+    } else {
+        constexpr size_t MTU = CONFIG_TCP_MSS;
+        static String msg;
+        std::string lp;
+        while (pointsQ.try_dequeue(lp)) {
+            if (msg.length() && msg.length() + lp.length() + 1 > MTU) {  // full -> send, carry line over
+                udpFlushString(addr, port, msg);
+                msg = String(lp.c_str()); msg += '\n';
+                return;
+            }
+            msg += lp.c_str(); msg += '\n';
         }
-        msg += lp.c_str(); msg += '\n';
     }
-#endif
 }
 
 

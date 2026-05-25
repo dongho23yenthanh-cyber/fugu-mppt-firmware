@@ -46,11 +46,12 @@ project(fugu-firmware)
 
 set (CMAKE_CXX_FLAGS "-fexceptions") # -mfp16-format=ieee
 
-littlefs_create_partition_image(littlefs config/lab/dry_mock
+if (IDF_TARGET STREQUAL "esp32")
+    set(FUGU_LITTLEFS_SRC config/lab/wokwi_mock_esp32)
+else ()
+    set(FUGU_LITTLEFS_SRC config/lab/dry_mock)
+endif ()
+littlefs_create_partition_image(littlefs ${FUGU_LITTLEFS_SRC}
         FLASH_IN_PROJECT
 )
-
-#littlefs_create_partition_image(littlefs config/lab/wokwi_mock
-#        FLASH_IN_PROJECT
-#)
 

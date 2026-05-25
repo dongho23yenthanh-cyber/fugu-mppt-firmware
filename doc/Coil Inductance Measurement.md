@@ -60,8 +60,8 @@ CCM (heavy load) - inductor current never reaches zero
 DCM (light load, Vout clamped by battery) - current returns to 0, then idles
   i_L |   /|       /|       /|        rise slope  (Vin-Vout)/L  during D*T
       |  / |      / |      / |        fall slope  -Vout/L       during t2
- Iout |-/--+----/--+----/--+----      average = Iout
-    0 +/---+____/--+____/--+____> t        = (Vin-Vout)*Vin*D^2 / (2*Vout*fsw*L)
+ Iout |-/--+-----/--+-----/--+----      average = Iout
+    0 +/---+____/---+____/---+____> t        = (Vin-Vout)*Vin*D^2 / (2*Vout*fsw*L)
        D*T  t2  gap
 ```
 

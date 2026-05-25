@@ -38,6 +38,7 @@ import glob
 import os
 import re
 import sys
+import threading
 import time
 
 try:  # works both as `python etc/fugu_console.py` and `python -m etc.fugu_console`
@@ -457,6 +458,29 @@ def dispatch_command(con: Console, cmd: str, elf_path: str | None) -> None:
         print(ln)
 
 
+def _install_readline_history(path: str = "~/.fugu_console_history", maxlen: int = 1000) -> None:
+    """Persist input history across runs (up-arrow recall). No-op if readline is missing."""
+    try:
+        import atexit
+        import readline
+    except ImportError:
+        return
+    path = os.path.expanduser(path)
+    try:
+        readline.read_history_file(path)
+    except (FileNotFoundError, OSError):
+        pass
+    readline.set_history_length(maxlen)
+    atexit.register(lambda: _safe_write_history(readline, path))
+
+
+def _safe_write_history(readline_mod, path: str) -> None:
+    try:
+        readline_mod.write_history_file(path)
+    except OSError:
+        pass
+
+
 def _install_readline_completion(elf_path: str | None) -> None:
     """Tab-complete symbol names after `peek ` or `sym `. Silently no-ops if readline missing."""
     try:
@@ -484,21 +508,54 @@ def _install_readline_completion(elf_path: str | None) -> None:
     readline.parse_and_bind("tab: complete")
 
 
+class _PromptSafePrinter:
+    """Print log lines from the reader thread without trampling the readline prompt.
+
+    on_line fires both while `input()` is in flight (user typing — must not clobber) and between
+    calls (during `con.command()` — no prompt on screen). The `active` flag gates the redraw so
+    we only do the carriage-return / erase / reprint dance when there's actually a prompt to
+    preserve.
+    """
+
+    def __init__(self):
+        self.prompt = ""
+        self.active = False
+        self._lock = threading.Lock()
+
+    def __call__(self, line: str) -> None:
+        with self._lock:
+            if self.active:
+                try:
+                    import readline
+                    sys.stdout.write("\r\x1b[K" + line + "\n" + self.prompt + readline.get_line_buffer())
+                    sys.stdout.flush()
+                    return
+                except ImportError:
+                    pass
+            print(line)
+
+
 def interactive(con: Console, elf_path: str | None = None):
     print("interactive console — type commands, Ctrl-C / EOF to quit (live output streams below)")
     hostname = query_hostname(con)
     prompt = f"{hostname}> " if hostname else "> "
+    _install_readline_history()
     _install_readline_completion(elf_path)
     # Tap the reader's line stream so periodic status lines (and command replies) print as they
     # arrive, instead of being thrown away by command()'s drain() while we wait at the prompt.
-    con.on_line = lambda ln: print(ln)
+    redisp = _PromptSafePrinter()
+    redisp.prompt = prompt
+    con.on_line = redisp
     try:
         while True:
+            redisp.active = True
             try:
                 cmd = input(prompt).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return
+            finally:
+                redisp.active = False
             if not cmd:
                 continue
             head = cmd.split(None, 1)

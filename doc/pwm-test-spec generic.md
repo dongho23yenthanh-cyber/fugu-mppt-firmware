@@ -2,11 +2,11 @@
 
 # PWM driver test spec — driver-agnostic, zero-hardware
 
-Scope: validate any class implementing the PWM-driver surface in
-`src/pwm/vconv.h` (`init_pwm(ch, pin, freq)`, `update_pwm(ch, duty)`,
-`update_pwm(ch, hpoint, duty)`, `stop(ch, idleLevel)`, `pwmMax` member),
-using only ESP32-S3 self-observation — no scope, no PicoScope, no signal
-generator, **no physical jumpers**.
+Scope: validate any class implementing the duck-typed PWM-driver surface
+shared by `src/pwm/{ledc,mcpwm,mock,vconv}.h` — `init_pwm(ch, pin, freq)`,
+`update_pwm(ch, duty)`, `update_pwm(ch, hpoint, duty)`, `stop(ch, idleLevel)`,
+`pwmMax` member — using only ESP32-S3 self-observation: no scope, no
+PicoScope, no signal generator, **no physical jumpers**.
 
 Targets `src/pwm/ledc.h` (LEDC, currently in production), `src/pwm/mcpwm.h`
 (MCPWM HiLi + InEn, in development), and `src/pwm/mock.h`. References:
@@ -53,11 +53,15 @@ Test-to-driver applicability is derived from the cap matrix; the per-test
 | 6   | LS forced on (sync-rect saturated)  |  Y   |     Y      |     N      |  N   |
 | 7   | D = 0 → HS fully low                |  Y   |     Y      |     Y      |  N   |
 | 8   | D = 1 → HS fully high               |  Y   |     Y      |     Y      |  N   |
-| 9   | Glitch-free duty step (atomic)      |  N   |     Y      |     Y      |  Y   |
+| 9   | Glitch-free duty step (atomic)      |  N   |     Y      |     Y      |  N   |
 | 10  | Dead-time setting actually applied  |  N   |     Y      |     N      |  N   |
 | 11  | OST fault brake latches gates LOW   |  N   |     Y      |     Y      |  N   |
-| 12  | `stop()` honours `idleLevel`        |  Y   |     Y      |     Y      |  Y   |
+| 12  | `stop()` honours `idleLevel`        |  Y   |     Y      |     Y      |  N   |
 | 13  | Glitch-free HS step on LEDC         |  Y   |     N      |     N      |  N   |
+
+`PWM_Mock` has no pin output — `update_pwm` just stores `duty` in a member.
+Only Test 3 (pwmMax arithmetic) is observable; every other test requires a
+real signal on a real pin and is skipped for mock.
 
 \*** LEDC has no concept of an HS↔LS pair the *driver* enforces — the dead-band
 test for an LEDC-backed buck belongs in a controller test (`test_buck.cpp`),
@@ -230,7 +234,8 @@ over N cycles knocks the random component down by √N; 1024 cycles at 39 kHz
 
 ### 9. Glitch-free duty step (atomic update at period boundary)
 
-- **Applies to:** MCPWM HiLi, MCPWM InEn, mock. Skip LEDC.
+- **Applies to:** MCPWM HiLi, MCPWM InEn. Skip LEDC (no atomic paired update)
+  and mock (no observable signal).
 - **Method.** Sequence three writes faster than one period:
   `update_pwm(0, D1·pwmMax)` → `update_pwm(0, D2·pwmMax)` →
   `update_pwm(0, D3·pwmMax)`, where each D is well-separated (e.g. 0.2 / 0.5 /
@@ -270,7 +275,7 @@ over N cycles knocks the random component down by √N; 1024 cycles at 39 kHz
 ### 12. `stop(channel, idleLevel)` honours the idle level
 
 - **Applies to:** LEDC (native), MCPWM (mapped to `forceShutdown` + force-level
-  for the requested idle), mock.
+  for the requested idle). Skip mock (no pin to read).
 - **Method.** Run the channel, call `stop(0, 0)` then `digitalRead(pin) == 0`;
   re-init, run, call `stop(0, 1)` then `digitalRead(pin) == 1`. 100 polls each,
   no edges via MCPWM_CAP / PCNT for 100 ms after the call.

@@ -11,9 +11,11 @@
 #include <unity.h>
 #include <Arduino.h>
 #include <esp_timer.h>
+#include <stdexcept>            // util.h's ESP_ERROR_CHECK_THROW uses std::runtime_error
 #include <driver/mcpwm_cap.h>
 #include <driver/gpio.h>
 
+#include "util.h"        // ESP_ERROR_CHECK_THROW used inside pwm/ledc.h
 #include "pwm/ledc.h"
 
 #ifndef PWM_TEST_PIN
@@ -62,21 +64,24 @@ struct CapRig {
         // 2. MCPWM capture timer + channel on the same pin. Driver writes
         //    mode = INPUT (clobbers OE), routes pin → PWM0_CAPn_IN.
         mcpwm_capture_timer_config_t tconf = {
-            .group_id = 0,
-            .clk_src  = MCPWM_CAPTURE_CLK_SRC_DEFAULT,  // APB on S3 / classic
+            .group_id      = 0,
+            .clk_src       = MCPWM_CAPTURE_CLK_SRC_DEFAULT,  // APB on S3 / classic
+            .resolution_hz = 0,                              // 0 = driver default (APB)
+            .flags         = {},
         };
         ESP_ERROR_CHECK(mcpwm_new_capture_timer(&tconf, &timer));
 
         mcpwm_capture_channel_config_t cconf = {
-            .gpio_num = kTestPin,
-            .prescale = 1,
+            .gpio_num      = kTestPin,
+            .intr_priority = 0,
+            .prescale      = 1,
             .flags = {
-                .pos_edge          = 1,
-                .neg_edge          = 1,
-                .pull_up           = 0,
-                .pull_down         = 0,
-                .invert_cap_signal = 0,
-                .io_loop_back      = 0,  // 0: we restore OE manually below
+                .pos_edge             = 1,
+                .neg_edge             = 1,
+                .pull_up              = 0,
+                .pull_down            = 0,
+                .invert_cap_signal    = 0,
+                .io_loop_back         = 0,  // 0: we restore OE manually below
                 .keep_io_conf_at_exit = 0,
             },
         };

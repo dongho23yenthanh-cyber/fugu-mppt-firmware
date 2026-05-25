@@ -20,21 +20,79 @@ fallback_hosts = [
 idf.py build
 
 """""
+import argparse
 import asyncio
 import atexit
+import datetime
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import time
 
+from rich.console import Console as RichConsole
+from rich.table import Table
+
+from etc.fugu.console import Console
 from etc.fugu.discover import discover_scope_servers
 from etc.fugu.fugu import FuguDevice
 from etc.fugu.transport import SocketTransport
 from etc.fugu_console import scan_nat_async
 
+# CLion / PyCharm Run consoles report as a TTY but don't render ANSI escapes —
+# disable color/style so the boxes don't come out wrapped in raw \x1b[...m codes.
+# Also fix width to a wide value: with force_terminal=False rich would default to
+# 80 cols and squash the table, but JB's run console happily prints long lines.
+_in_jb_run = bool(os.environ.get('PYCHARM_HOSTED'))
+_rich_console = RichConsole(color_system=None if _in_jb_run else 'auto',
+                            force_terminal=False if _in_jb_run else None,
+                            highlight=not _in_jb_run,
+                            width=200 if _in_jb_run else None)
+
 HTTP_PORT = 9000
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FIRMWARE_BIN = os.path.join(REPO_ROOT, 'build', 'fugu-firmware.bin')
+APP_DESC_MAGIC = 0xABCD5432
+
+argp = argparse.ArgumentParser(description='Push an OTA build to all discovered devices.')
+argp.add_argument('-f', '--force', action='store_true',
+                  help='update even when the device already runs the local build')
+argp.add_argument('-n', '--dry-run', action='store_true',
+                  help='only print what would be updated, do not send `ota`')
+argp.add_argument('-m', '--match', metavar='REGEX',
+                  help='only act on devices whose name matches REGEX (re.search)')
+args = argp.parse_args()
+
+
+def read_local_app_desc(bin_path):
+    """Parse esp_app_desc_t from the start of a firmware .bin: {project, version, date, time, idf}."""
+    try:
+        with open(bin_path, 'rb') as f:
+            data = f.read(0x200)
+    except FileNotFoundError:
+        return None
+    off = data.find(struct.pack('<I', APP_DESC_MAGIC))
+    if off < 0:
+        return None
+    def s(rel, n):
+        return data[off+rel:off+rel+n].split(b'\x00', 1)[0].decode('utf-8', 'replace')
+    return dict(version=s(0x10, 32), project=s(0x30, 32),
+                time=s(0x50, 16), date=s(0x60, 16), idf=s(0x70, 32))
+
+
+RE_APP_LINE = re.compile(r'App:\s+(\S+)\s+v\S+\s+(\S+)\s+\(built (.+),\s+IDF\s+(\S+)\)')
+
+
+def parse_device_app(lines):
+    """Pull {project, version, built, idf} from the App: line of an `uptime` reply, or None."""
+    for l in lines:
+        m = RE_APP_LINE.search(l)
+        if m:
+            return dict(project=m.group(1), version=m.group(2),
+                        built=m.group(3), idf=m.group(4))
+    return None
 
 
 def ensure_http_server():
@@ -58,8 +116,97 @@ if not hosts:
     print('no hosts discovered!')
     sys.exit(1)
 
+if args.match:
+    pat = re.compile(args.match)
+    hosts = [h for h in hosts if pat.search(h[2])]
+    if not hosts:
+        print(f'no devices match {args.match!r}')
+        sys.exit(1)
+
 print(hosts)
 
+
+
+async def fetch_version(addr, port, name, retry=False):
+    """Run `uptime` over a fresh telnet console; return {uptime, app, error}.
+    With `retry`, one extra attempt is made after a short backoff if the first fails."""
+    def do_once():
+        try:
+            st = SocketTransport(addr, port=port or SocketTransport.DEFAULT_PORT, timeout=5)
+            con = Console(st, eol='\n', wait_banner=True)
+        except Exception as e:
+            return dict(uptime=None, app=None, error=f'{type(e).__name__}: {e}')
+        try:
+            reply = con.command('uptime', timeout=5)
+            if reply.timed_out:
+                return dict(uptime=None, app=None, error='timeout')
+            up = None
+            for l in reply:
+                if m := re.search(r'Uptime:\s*(\d+)', l):
+                    up = int(m.group(1)); break
+            app = parse_device_app(reply)
+            if up is None and app is None:
+                return dict(uptime=None, app=None, error='no uptime info in reply')
+            return dict(uptime=up, app=app, error=None)
+        except Exception as e:
+            return dict(uptime=None, app=None, error=f'{type(e).__name__}: {e}')
+        finally:
+            con.close()
+    def do():
+        out = do_once()
+        if retry and out['error']:
+            time.sleep(2)
+            return do_once()
+        return out
+    return await asyncio.to_thread(do)
+
+
+def fmt_uptime(seconds):
+    """Seconds → human-readable hours (e.g. 6789 → '1.89h'); None → '-'.
+    Uses datetime.timedelta as the canonical parse."""
+    if seconds is None:
+        return '-'
+    td = datetime.timedelta(seconds=int(seconds))
+    return f'{td.total_seconds() / 3600:.2f}h'
+
+
+def print_table(rows, cols, title=None):
+    """rows: list of dicts. cols: list of (key, header, kw) tuples;
+    kw is per-column kwargs for Table.add_column (no_wrap, min_width, etc.)."""
+    t = Table(title=title, show_header=True, header_style='bold')
+    for col in cols:
+        k, h, kw = (*col, {})[:3] if len(col) == 2 else col
+        t.add_column(h, **kw)
+    for r in rows:
+        t.add_row(*(str(r.get(k, '')) for k, *_ in cols))
+    _rich_console.print(t)
+
+
+async def print_versions(hosts, title='installed firmware versions:', settle=0.0, retry=False):
+    """Print a table of each host's uptime/version/build; return {name: parsed_app_or_None}.
+    `settle` waits before querying (lets a just-rebooted device's telnet come up)."""
+    if settle:
+        await asyncio.sleep(settle)
+    results = await asyncio.gather(*[fetch_version(ip, port, name, retry=retry) for ip, port, name in hosts])
+    rows, parsed = [], {}
+    for (ip, port, name), info in zip(hosts, results):
+        app, up, err = info['app'], info['uptime'], info['error']
+        rows.append(dict(
+            name=name,
+            addr=f'{ip}:{port or SocketTransport.DEFAULT_PORT}',
+            uptime=fmt_uptime(up),
+            version=(app['version'] if app else None) or err or '?',
+            built=(app['built'] if app else '') or '',
+        ))
+        parsed[name] = app
+    print_table(rows, [
+        ('name',    'NAME',    {'no_wrap': True, 'min_width': 14}),
+        ('addr',    'ADDRESS', {'no_wrap': True, 'min_width': 18}),
+        ('uptime',  'UPTIME',  {'no_wrap': True, 'justify': 'right', 'min_width': 7}),
+        ('version', 'VERSION', {'no_wrap': True, 'min_width': 32}),
+        ('built',   'BUILT',   {'no_wrap': True, 'min_width': 20}),
+    ], title=title)
+    return parsed
 
 
 async def send_ota_command(addr, port, name):
@@ -131,6 +278,7 @@ async def send_ota_command(addr, port, name):
         except (ConnectionRefusedError, TimeoutError):
             continue
         print(fd.prefix, 'device back online! OTA successful (probably TODO check ver)')
+        fd.close()
         break
     else:
         print(fd.prefix, 'device didnt come online in time')
@@ -148,12 +296,56 @@ async def send_ota_command_try(addr, port, name):
 
 
 async def main():
+    local = read_local_app_desc(FIRMWARE_BIN)
+    if local:
+        print(f"local build: {local['project']} {local['version']} "
+              f"(built {local['date']} {local['time']}, IDF {local['idf']})")
+    else:
+        print(f'WARN: could not parse app_desc from {FIRMWARE_BIN}; --force assumed')
+
+    before = await print_versions(hosts)
+
+    if args.force or not local:
+        to_update = list(hosts)
+    else:
+        to_update = []
+        for h in hosts:
+            dev = before.get(h[2])
+            if dev and dev.get('version') == local['version']:
+                print(f" ☑️ skip {h[2]}: already at {local['version']}")
+            else:
+                to_update.append(h)
+    if not to_update:
+        print('all devices up to date')
+        return True
+
+    if args.dry_run:
+        print('dry-run, would update:')
+        for _, _, name in to_update:
+            print(f'  - {name}')
+        return True
+
     ensure_http_server()
     time.sleep(1)
-    res = await asyncio.gather(*[send_ota_command_try(ip, port, name) for ip, port, name in hosts])
-    res = dict(zip((name for _, _, name in hosts), res))
+    res = await asyncio.gather(*[send_ota_command_try(ip, port, name) for ip, port, name in to_update])
+    res = dict(zip((name for _, _, name in to_update), res))
     for name, ok in res.items():
         print('%20s: %s' % (name, '✅' if ok else '❌'))
+
+    after = await print_versions(hosts, title='installed firmware versions (after):',
+                                 settle=3.0, retry=True)
+
+    if local:
+        print('verify:')
+        for _, _, name in to_update:
+            dev = after.get(name)
+            got = dev.get('version') if dev else None
+            if got == local['version']:
+                print(f'  {name}: ✅ {got}')
+            else:
+                print(f'  {name}: ❌ got {got!r}, expected {local["version"]!r}')
+                res[name] = False
+
     return all(res.values())
 
 

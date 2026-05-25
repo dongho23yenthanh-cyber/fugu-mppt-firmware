@@ -238,3 +238,9 @@ BMS is considered offline. In that state:
   30 seconds rather than extrapolating across them.
 
 When the BMS reconnects, normal operation resumes from the existing state.
+
+
+
+# TODO mention here:
+* charger robust to ADC gain error (using own Vout measurement to pin voltage, eliminates error)
+* robust with multiple chargers without talking to each other

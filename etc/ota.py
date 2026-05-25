@@ -105,8 +105,15 @@ async def send_ota_command(addr, port, name):
         return False
 
     print(fd.prefix, 'waiting for device to close the connection..')
+    t_wait_start = time.time()
     while st.check_connection():
-        time.sleep(.02)
+        if time.time() - t_wait_start > 30:
+            # device may have rebooted without sending FIN; TCP keepalive should have
+            # tripped check_connection by now — bail out instead of spinning forever
+            print(fd.prefix, 'still "connected" after 30s, forcing close')
+            st.close()
+            break
+        time.sleep(.2)
     print(fd.prefix, 'closed the connection')
     fd.close()
 

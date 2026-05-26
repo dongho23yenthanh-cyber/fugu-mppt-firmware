@@ -5,7 +5,7 @@
 #include "tele/telemetry.h"
 #include "util.h"
 
-#include "temperature.h"
+#include "adc/temperature.h"
 #include "cooling.h"
 
 #include "buck.h"

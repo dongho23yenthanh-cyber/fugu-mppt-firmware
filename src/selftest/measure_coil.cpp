@@ -1,15 +1,15 @@
-#include "measure_coil.h"
+#include "../measure_coil.h"
 
 #include <Arduino.h>
 #include <atomic>
 #include <cmath>
 
-#include "logging.h"            // UART_LOG
-#include "conf.h"               // ConfFile
-#include "util.h"               // wallClockMs
-#include "buck.h"               // SynchronousConverter
-#include "mppt.h"               // MpptController
-#include "adc/sampling.h"       // Sensor, VIinVout
+#include "../logging.h"
+#include "../conf.h"
+#include "../util.h"
+#include "../buck.h"
+#include "../mppt.h"
+#include "../adc/sampling.h"
 
 // Globals owned by main.cpp (same extern coupling as cli.cpp; this TU is built only with the real
 // main, never the test mains).

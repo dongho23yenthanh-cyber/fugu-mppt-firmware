@@ -1,4 +1,4 @@
-#include "sensor_setup.h"
+#include "../sensor_setup.h"
 
 #include <Arduino.h>
 #include <esp_heap_caps.h>
@@ -6,19 +6,19 @@
 #include <string>
 #include <unordered_map>
 
-#include "adc/adc.h"
-#include "adc/ads.h"
-#include "adc/adc_esp32_cont.h"
-#include "adc/mock.h"
-#include "adc/ina226.h"
-#include "adc/sampling.h"
+#include "adc.h"
+#include "ads.h"
+#include "adc_esp32_cont.h"
+#include "mock.h"
+#include "ina226.h"
+#include "sampling.h"
 #if WITH_VCONV
 #include "adc/vconv.h"
 #include "sim/vconv.h"
 #endif
-#include "mppt.h"
-#include "conf.h"
-#include "util.h"
+#include "../mppt.h"
+#include "../conf.h"
+#include "../util.h"
 
 // Globals owned by main.cpp.
 extern ADC_Sampler adcSampler;

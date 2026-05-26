@@ -15,7 +15,7 @@
 #include "buck.h"
 #include "mppt.h"
 #include "service.h"
-#include "sensor_setup.h"
+#include "adc/sensor_setup.h"
 #include "util.h"
 #ifdef WITH_NETW
 #include "tele/telemetry.h"

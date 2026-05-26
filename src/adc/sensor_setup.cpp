@@ -1,4 +1,4 @@
-#include "../sensor_setup.h"
+#include "sensor_setup.h"
 
 #include <Arduino.h>
 #include <esp_heap_caps.h>

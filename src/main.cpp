@@ -10,29 +10,29 @@
 #include "adc/sampling.h"
 
 #include "console.h"
-#include "console_ble.h"
+#include "tele/console_ble.h"
 #include "cli.h"
 #include "buck.h"
 #include "mppt.h"
 #include "service.h"
 #include "adc/sensor_setup.h"
 #include "util.h"
+#include "viz/lcd.h"
+#include "viz/lcd_service.h"
+#include "viz/led.h"
+#include "tele/console_ble_service.h"
+#include "etc/network_shim.h"
 #ifdef WITH_NETW
 #include "tele/telemetry.h"
 #include "tele/ftp_service.h"
 #include "tele/telnet_service.h"
 #include "tele/telemetry_service.h"
 #include "tele/scope_service.h"
+#include "tele/home_assistant.h"
+#include "etc/ota.h"
 #endif
-#include "viz/lcd.h"
-#include "viz/lcd_service.h"
-#include "viz/led.h"
-#include "console_ble_service.h"
 #ifdef WITH_MEASURE_COIL
 #include "measure_coil.h"
-#endif
-#ifdef WITH_NETW
-#include "etc/ota.h"
 #endif
 
 #include "etc/version.h"
@@ -54,9 +54,7 @@
 #include <esp_pm.h>
 #include <filesystem>
 
-#ifdef WITH_NETW
-#include "tele/home_assistant.h"
-#endif
+#include "etc/rt_core_check.h"
 
 
 ADC_Sampler adcSampler{}; // schedules async ADC reading
@@ -111,12 +109,14 @@ static void loopRT(void *arg); // this is the critical one
 
 static void loopRTNewData(unsigned long nowMs);
 
+#ifdef WITH_NETW
 // arduino-esp32's WiFiGeneric.cpp:298 calls esp_netif_create_default_wifi_ap() unconditionally,
 // but esp_wifi defines it only when CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y. We turn SOFTAP off in
 // sdkconfig.defaults (saves a few KB) and never act as an AP, so stub it inline here so the
 // link succeeds. Inline because a separate TU was getting --gc-sections'd out of libmain.a
 // before the linker had a chance to satisfy arduino's undefined ref.
 extern "C" void *esp_netif_create_default_wifi_ap(void) { return nullptr; }
+#endif
 
 
 // Single reused log literal for the repeated "failed to read <conf>.conf" catch blocks in setup().
@@ -124,122 +124,80 @@ static void logConfErr(const char *name, const std::exception &e) {
     ESP_LOGE("main", "conf %s: %s", name, e.what());
 }
 
-void setup() {
-    consoleInit();
-    setupCli();
-    ESP_LOGI("main", "*** %s", format_version());
-
-    rtcount_test_cycle_counter();
-
-    nvs.init();
-
-    if (!mountLFS()) {
-        ESP_LOGE("main", "Error mounting LittleFS partition!");
-        setupErr = true;
-    }
-
-
-#ifdef WITH_SPROFILER
+// Try-load a conf file. On parse error, log and (if fatal) set setupErr; return an empty ConfFile
+// so the caller can keep going with defaults instead of throwing out of setup() → reboot loop.
+// noWarnIfMissing forwards to ConfFile's flag (some confs are optional even when present).
+static ConfFile loadConfSafe(const char *path, bool fatal = true, bool noWarnIfMissing = false) {
     try {
-        ConfFile pprofConf{"/littlefs/conf/pprof.conf", true};
-
-        auto sprofHz = (uint32_t) pprofConf.getLong("sprofiler_hz", 0); // 100~300
-        if (sprofHz && esp_cpu_dbgr_is_attached()) {
-            // only start the profiler with OpenOCD attached?
-            ESP_LOGI("main", "starting sprofiler with freq %lu (samples/bank=%i)", sprofHz, PROFILING_ITEMS_PER_BANK);
-            sprofiler_initialize(sprofHz);
-        } else if (sprofHz) {
-            ESP_LOGW("main", "sprofiler configured but not debugger attached");
-        }
+        return ConfFile{path, noWarnIfMissing};
     } catch (const std::exception &e) {
-        // a malformed pprof.conf must not brick the device — the profiler is purely diagnostic
-        ESP_LOGE("main", "error reading pprof.conf, skipping profiler: %s", e.what());
+        logConfErr(path, e);
+        if (fatal) setupErr = true;
+        return ConfFile{};
     }
-#endif // WITH_SPROFILER
+}
 
-
-    // A malformed board.conf must not abort setup() (which would reboot and re-read the same bad
-    // file → boot loop). Fall back to an empty config and run the safe-idle path via setupErr.
-    ConfFile boardConf;
+// I2C + LED + LCD bring-up from board.conf. SDA=255 means "no I2C wired" (LED only). The
+// skip_assert escape exists for bench boards where the pre-init bus assertion is too strict.
+static void setupI2C(const ConfFile &boardConf, bool &noI2C) {
+    if (!boardConf) return;
     try {
-        boardConf = ConfFile{"/littlefs/conf/board.conf"};
-    } catch (const std::exception &e) {
-        logConfErr("board.conf", e);
-        setupErr = true;
-    }
-
-    if (!boardConf && std::filesystem::exists("/littlefs/conf")) {
-        for (const auto &entry: std::filesystem::directory_iterator("/littlefs/conf")) {
-            ESP_LOGI("main", "file: %s", entry.path().c_str());
-        }
-    }
-
-    auto mcuStr = boardConf.getString("mcu", "");
-    if (mcuStr != CONFIG_IDF_TARGET) {
-        ESP_LOGE("main", "board.conf expects MCU '%s', but target is '%s'", mcuStr.c_str(), CONFIG_IDF_TARGET);
-        setupErr = true;
-    }
-
-    bool noI2C = true;
-
-    if (boardConf)
-        try {
-            auto i2c_freq = boardConf.getLong("i2c_freq", 100000);
-            auto i2c_sda = boardConf.getByte("i2c_sda", 255);
-            noI2C = (i2c_sda == 255);
-            if (!noI2C) {
-                if (!boardConf.getByte("skip_assert", 0))
-                    try {
-                        auto i2c_scl = boardConf.getLong("i2c_scl");
-                        assertPinState(i2c_sda, true, "i2c_sda");
-                        assertPinState(i2c_scl, true, "i2c_scl");
-                        pinMode(i2c_scl, OUTPUT);
-                        digitalWrite(i2c_scl, LOW);
-                        usleep(1);
-                        assertPinState(i2c_sda, true, "i2c_sda(scl_short)");
-                    } catch (const std::exception &e) {
-                        ESP_LOGE("main", "error %s", e.what());
-                        setupErr = true;
-                    }
-                ESP_LOGI("main", "i2c pins SDA=%hi SCL=%hi freq=%lu", i2c_sda, boardConf.getByte("i2c_scl"), i2c_freq);
-                if (!Wire.begin(i2c_sda, (uint8_t) boardConf.getLong("i2c_scl"), i2c_freq)) {
-                    ESP_LOGE("main", "Failed to initialize Wire");
+        auto i2c_freq = boardConf.getLong("i2c_freq", 100000);
+        auto i2c_sda = boardConf.getByte("i2c_sda", 255);
+        noI2C = (i2c_sda == 255);
+        if (!noI2C) {
+            if (!boardConf.getByte("skip_assert", 0))
+                try {
+                    auto i2c_scl = boardConf.getLong("i2c_scl");
+                    assertPinState(i2c_sda, true, "i2c_sda");
+                    assertPinState(i2c_scl, true, "i2c_scl");
+                    pinMode(i2c_scl, OUTPUT);
+                    digitalWrite(i2c_scl, LOW);
+                    usleep(1);
+                    assertPinState(i2c_sda, true, "i2c_sda(scl_short)");
+                } catch (const std::exception &e) {
+                    ESP_LOGE("main", "error %s", e.what());
                     setupErr = true;
                 }
-            } else {
-                ESP_LOGI("main", "no i2c_sda pin set");
+            ESP_LOGI("main", "i2c pins SDA=%hi SCL=%hi freq=%lu", i2c_sda, boardConf.getByte("i2c_scl"), i2c_freq);
+            if (!Wire.begin(i2c_sda, (uint8_t) boardConf.getLong("i2c_scl"), i2c_freq)) {
+                ESP_LOGE("main", "Failed to initialize Wire");
+                setupErr = true;
             }
-
-
-            led.begin(boardConf);
-            led.setHexShort(0x111);
-
-            if (!noI2C) {
-                if (!lcdService.initLcd()) {
-                    ESP_LOGE("main", "Failed to init LCD");
-                } else {
-                    lcdService.displayMessage("Fugu FW v" FIRMWARE_VERSION "\n" __DATE__ " " __TIME__, 2000);
-                }
-            }
-        } catch (const std::exception &ex) {
-            ESP_LOGE("main", "error %s", ex.what());
-            setupErr = true;
+        } else {
+            ESP_LOGI("main", "no i2c_sda pin set");
         }
 
+        led.begin(boardConf);
+        led.setHexShort(0x111);
 
-#if defined(WITH_NETW) && defined(NO_WIFI)
+        if (!noI2C) {
+            if (!lcdService.initLcd()) {
+                ESP_LOGE("main", "Failed to init LCD");
+            } else {
+                lcdService.displayMessage("Fugu FW v" FIRMWARE_VERSION "\n" __DATE__ " " __TIME__, 2000);
+            }
+        }
+    } catch (const std::exception &ex) {
+        ESP_LOGE("main", "error %s", ex.what());
+        setupErr = true;
+    }
+}
+
+// Bring up WiFi at boot (when enabled) and load tele.conf. Returns a default-constructed TeleConf
+// when WITH_NETW=0 or NO_WIFI is set; mppt.begin tolerates that.
+static TeleConf setupNetworkAtBoot() {
+    TeleConf teleConf{};
+#ifdef WITH_NETW
+#ifdef NO_WIFI
     disableWifi = true;
 #endif
-
-    TeleConf teleConf{};  // default-constructed (influxdbHost=nullptr) when WITH_NETW=0; mppt.begin handles it
-
-#ifdef WITH_NETW
     if (!disableWifi) {
         connect_wifi_async();
         bool res = wait_for_wifi();
         led.setHexShort(res ? 0x565 : 0x200);
         lcdService.displayMessage(
-            res ? ("WiFi connected.\n" + std::string(WiFi.localIP().toString().c_str())) : "WiFi timeout.", 2000);
+            res ? ("WiFi connected.\n" + wifiLocalIp()) : "WiFi timeout.", 2000);
 
         try {
             teleConf = ConfFile{"/littlefs/conf/tele.conf"};
@@ -249,15 +207,13 @@ void setup() {
         }
     }
 #endif
+    return teleConf;
+}
 
-    Limits lim{};
-    try {
-        lim = Limits{ConfFile{"/littlefs/conf/limits.conf"}};
-    } catch (const std::runtime_error &er) {
-        logConfErr("limits.conf", er);
-        setupErr = true;
-    }
-
+// Sensors → converter → MPPT/tracker bring-up. Sets setupErr on any failure. Kept as one unit
+// because these initializations fail-together: without sensors the converter can't run safely,
+// without coil/converter conf the PWM driver can't init.
+static void setupConverterAndMppt(const ConfFile &boardConf, const Limits &lim, const TeleConf &teleConf, bool noI2C) {
     try {
         setupSensors(boardConf, lim);
         mppt.initSensors(boardConf);
@@ -271,9 +227,6 @@ void setup() {
             ConfFile chargerConf{"/littlefs/conf/charger.conf"};
 
             mppt.charger.begin(chargerConf);
-
-            //auto mode = converterConf.getString("mode", "mppt");
-
             converter.init(converterConf, boardConf, coilConf);
         }
 
@@ -283,24 +236,17 @@ void setup() {
         }
     } catch (const std::runtime_error &er) {
         ESP_LOGE("main", "error during sensor/converter/tracker setup: %s", er.what());
-        //if(adcSampler.adc) delete adcSampler.adc;
         adcSampler.adcStates.clear();
         setupErr = true;
         if (!noI2C) scan_i2c();
     }
+}
 
-
-    if (!setupErr) {
-        xTaskCreatePinnedToCore(loopRT, "loopRt", 4096 * 4, NULL, RT_PRIO, NULL, 1);
-        //xTaskCreatePinnedToCore(loopNetwork_task, "netloop", 4096 * 4, NULL, 1, NULL, 0);
-        //xTaskCreatePinnedToCore(loopCore0_LF, "core0LF", 4096, NULL, 1, NULL, 0);
-    } else {
-        led.setHexShort(0x200);
-    }
-
+// Register the optional non-RT subsystems as services and start the enabled ones. MQTT keeps its
+// mppt/home-assistant wiring here (out of mqtt.cpp) via preStart, re-run on every start. Network
+// services that aren't Running at boot self-heal on the WiFi-up edge in loopNetwork_task.
+static void registerServices() {
 #ifdef WITH_NETW
-    // Register the optional non-RT subsystems as services and start the enabled ones. MQTT keeps
-    // its mppt/home-assistant wiring here (out of mqtt.cpp) via preStart, re-run on every start.
     MQTT.preStart = [](const ConfFile &mqttConf) {
         mppt.charger.beginMqtt(mqttConf);
         MQTT.onConnected = haMqttSendDiscovery;
@@ -323,17 +269,85 @@ void setup() {
 #ifdef WITH_BLE
     g_services.registerService(&bleConsoleService);
 #endif
-    // network services skipped when WiFi isn't up; self-heal on WiFi-up edge in loopNetwork_task
-    g_services.startEnabledAtBoot(WiFi.isConnected());
+    g_services.startEnabledAtBoot(wifiIsConnected());
+}
+
+void setup() {
+    consoleInit();
+    setupCli();
+    ESP_LOGI("main", "*** %s", format_version());
+
+    rtcount_test_cycle_counter();
+
+    nvs.init();
+
+    if (!mountLFS()) {
+        ESP_LOGE("main", "Error mounting LittleFS partition!");
+        setupErr = true;
+    }
+
+#ifdef WITH_SPROFILER
+    try {
+        ConfFile pprofConf{"/littlefs/conf/pprof.conf", true};
+
+        auto sprofHz = (uint32_t) pprofConf.getLong("sprofiler_hz", 0); // 100~300
+        if (sprofHz && esp_cpu_dbgr_is_attached()) {
+            // only start the profiler with OpenOCD attached?
+            ESP_LOGI("main", "starting sprofiler with freq %lu (samples/bank=%i)", sprofHz, PROFILING_ITEMS_PER_BANK);
+            sprofiler_initialize(sprofHz);
+        } else if (sprofHz) {
+            ESP_LOGW("main", "sprofiler configured but not debugger attached");
+        }
+    } catch (const std::exception &e) {
+        // a malformed pprof.conf must not brick the device — the profiler is purely diagnostic
+        ESP_LOGE("main", "error reading pprof.conf, skipping profiler: %s", e.what());
+    }
+#endif // WITH_SPROFILER
+
+    // A malformed board.conf must not abort setup() (which would reboot and re-read the same bad
+    // file → boot loop). Fall back to an empty config and run the safe-idle path via setupErr.
+    ConfFile boardConf = loadConfSafe("/littlefs/conf/board.conf");
+
+    if (!boardConf && std::filesystem::exists("/littlefs/conf")) {
+        for (const auto &entry: std::filesystem::directory_iterator("/littlefs/conf")) {
+            ESP_LOGI("main", "file: %s", entry.path().c_str());
+        }
+    }
+
+    auto mcuStr = boardConf.getString("mcu", "");
+    if (mcuStr != CONFIG_IDF_TARGET) {
+        ESP_LOGE("main", "board.conf expects MCU '%s', but target is '%s'", mcuStr.c_str(), CONFIG_IDF_TARGET);
+        setupErr = true;
+    }
+
+    bool noI2C = true;
+    setupI2C(boardConf, noI2C);
+
+    TeleConf teleConf = setupNetworkAtBoot();
+
+    Limits lim{};
+    try {
+        lim = Limits{ConfFile{"/littlefs/conf/limits.conf"}};
+    } catch (const std::runtime_error &er) {
+        logConfErr("limits.conf", er);
+        setupErr = true;
+    }
+
+    setupConverterAndMppt(boardConf, lim, teleConf, noI2C);
+
+    if (!setupErr) {
+        xTaskCreatePinnedToCore(loopRT, "loopRt", 4096 * 4, NULL, RT_PRIO, NULL, 1);
+    } else {
+        led.setHexShort(0x200);
+    }
+
+    registerServices();
 
     // this will defer all logs, if abort() is called during setup we might never see relevant messages
     // so calls this after everything else has been set up
 #ifdef WITH_NETW
     enable_esp_log_to_telnet();
 #endif
-
-
-    // the compress+send task is now spawned by TelemetryService::onStart (and deleted on stop)
 
 #if CONFIG_HEAP_POISONING_COMPREHENSIVE
     ESP_LOGW("main", "HEAP_POISONING=COMPREHENSIVE: every alloc has head/tail canaries + fill, expect 5-10%% perf hit and ~16B/alloc RAM cost. Debug-only.");
@@ -384,28 +398,6 @@ void stopAndBackoff(uint32_t secondsDelay) {
 
 static void loopRT(void *arg) {
     // low-latency control loop task
-
-
-
-#if CONFIG_ARDUINO_RUNNING_CORE == RT_CORE or CONFIG_ARDUINO_EVENT_RUNNING_CORE == RT_CORE or \
-CONFIG_ARDUINO_UDP_RUNNING_CORE == RT_CORE or CONFIG_ARDUINO_SERIAL_EVENT_TASK_RUNNING_CORE == RT_CORE
-#error "arduino runtime is configured to run on RT_CORE"
-#endif
-
-
-# if CONFIG_ESP_TIMER_ISR_AFFINITY != RT_CORE // and (RT_CORE ? CONFIG_ESP_TIMER_ISR_AFFINITY_CPU1==1 )
-#warning "CONFIG_ESP_TIMER_ISR_AFFINITY"
-#endif
-
-# if CONFIG_ESP_TIMER_TASK_AFFINITY == RT_CORE
-#error "CONFIG_ESP_TIMER_TASK_AFFINITY"
-#endif
-
-
-# if CONFIG_ESP_TIMER_ISR_AFFINITY != RT_CORE or CONFIG_ESP_TIMER_TASK_AFFINITY == RT_CORE or CONFIG_LWIP_TCPIP_TASK_AFFINITY == RT_CORE \
- or CONFIG_PTHREAD_TASK_CORE_DEFAULT == RT_CORE or CONFIG_FMB_PORT_TASK_AFFINITY == RT_CORE or CONFIG_MDNS_TASK_AFFINITY == RT_CORE
-#warning  "esp runtime is configured to run on RT_CORE"
-#endif
 
     try {
         adcSampler.begin();
@@ -530,6 +522,19 @@ static std::string mpptStateStr() {
     return arrow + MpptState2String[(uint8_t) st];
 }
 
+// Shut down WiFi when chip temperature gets dangerous. BLE on ESP32-S3 ran the chip hot enough
+// to need this even before the modem-sleep fix; the temperature ceiling here is a last resort.
+static void wifiShutdownIfHot(float chipTempC) {
+#ifdef WITH_NETW
+    if (chipTempC > 95 && wifiIsConnected()) {
+        ESP_LOGW("main", "High chip temperature, shut-down WiFi");
+        flush_async_uart_log();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        wifiHardOff();
+    }
+#endif
+}
+
 void loopLF(const unsigned long &nowUs) {
     auto &nSamples(sensors.Vout ? sensors.Vout->numSamples : lastNSamples);
     auto dt = nowUs - lastTimeOutUs;
@@ -554,14 +559,7 @@ void loopLF(const unsigned long &nowUs) {
     if (sensors.Vout)
         mppt.charger.update(sensors.Vout->ewm.avg.get(), sensors.Iout->ewm.avg.get());
 
-#ifdef WITH_NETW
-    if (mppt.ucTemp.last() > 95 && WiFi.isConnected()) {
-        ESP_LOGW("main", "High chip temperature, shut-down WiFi");
-        flush_async_uart_log();
-        vTaskDelay(pdMS_TO_TICKS(200));
-        WiFi.disconnect(true);
-    }
-#endif
+    wifiShutdownIfHot(mppt.ucTemp.last());
 
 #ifdef WITH_MEASURE_COIL
     if (sensors.Vin && !isMeasuring())
@@ -573,16 +571,14 @@ void loopLF(const unsigned long &nowUs) {
             " st=%5s,%i lag=%lu㎲ N=%lu rssi=%hi",
             sensors.Vin->last >= 9.55f ? 1 : 2, sensors.Vin->last,
             sensors.Vout->last >= 9.55f ? 2 : 2, sensors.Vout->last,
-            sensors.Iin->ewm.avg.get() >= 9.55f ? 1 : 2, sensors.Iin->ewm.avg.get(), // sensors.Iin->last,
+            sensors.Iin->ewm.avg.get() >= 9.55f ? 1 : 2, sensors.Iin->ewm.avg.get(),
             sensors.Iout->ewm.avg.get() >= 9.55f ? 2 : 2, sensors.Iout->ewm.avg.get(),
             sensors.Vin->ewm.avg.get() * sensors.Iin->ewm.avg.get(),
-            //ewm.chIin.std.get() * 1000.f, σIin=%.2fm
             mppt.ntc.last(), mppt.ucTemp.last(),
             sps,
             dt ? (uint32_t) (bytesSent * 1000llu / dt) : 0,
             converter.inDCM() ? "DCM" : "CCM",
             converter.getCtrlOnPwmCnt(), converter.getRectOnPwmCnt(), converter.getRectOnPwmMax(),
-            //mppt.getPower()
             manualPwm
                 ? "MANU"
                 : (mppt.converter.disabled() && !mppt.startCondition()
@@ -590,13 +586,8 @@ void loopLF(const unsigned long &nowUs) {
                        : mpptStateStr().c_str()),
             (int) mppt.active(),
             maxLoopLag,
-            //maxLoopDT,
             nSamples,
-#ifdef WITH_NETW
-            WiFi.RSSI()
-#else
-            (int16_t) 0
-#endif
+            (int16_t) wifiRssi()
         );
     lastNSamples = nSamples;
     bytesSent = 0;
@@ -705,23 +696,13 @@ static void loopRTNewData(unsigned long nowMs) {
     if (manualPwm) {
         if (!converter.disabled())
             converter.pwmPerturb(0); // this will increase LS duty cycle if possible
-        //mppt.bflow.enable(true);
-        // notice that mppt::protect() calls updateLowSideMaxDuty()
-        // delay(1); // why?
     }
 }
 
 
-static void loopNetwork_task(void *arg) {
-    //ESP_LOGI("main", "Net loop running on core %i", xPortGetCoreID());
-    assert(xPortGetCoreID() == 0);
-
-    auto nowMs(wallClockMs());
-
-    loopUart(nowMs);
-    flush_async_uart_log();
-    process_queued_tasks();
-
+// Per-tick WiFi + network-service work for loopNetwork_task. Handles auto-reenable timer, the
+// power/temp-gated wifiLoop, and self-healing network services on the WiFi-up edge.
+static void networkLoopTick() {
 #ifdef WITH_NETW
     if (disableWifi && wifiReenableMs && (int32_t) (wallClockMs() - wifiReenableMs) >= 0) {
         wifiReenableMs = 0;
@@ -739,11 +720,34 @@ static void loopNetwork_task(void *arg) {
         // self-heal: bring up enabled network services on the WiFi-up edge (they fail to start
         // at boot when WiFi isn't connected yet). _wifiConnected() has set up MDNS by now.
         static bool wifiWasUp = false;
-        bool wifiUp = WiFi.isConnected();
+        bool wifiUp = wifiIsConnected();
         if (wifiUp && !wifiWasUp) g_services.startEnabledNetworkServices();
         wifiWasUp = wifiUp;
     }
 #endif
+}
+
+// True while a TCP scope client is attached and its blocking netLoop() will provide the cooperative
+// yield this iteration; otherwise loopNetwork_task must yield explicitly.
+static bool scopeKeepsAwake() {
+#ifdef WITH_NETW
+    return scopeService.state() == ServiceState::Running && scopeService.hasClient();
+#else
+    return false;
+#endif
+}
+
+static void loopNetwork_task(void *arg) {
+    //ESP_LOGI("main", "Net loop running on core %i", xPortGetCoreID());
+    assert(xPortGetCoreID() == 0);
+
+    auto nowMs(wallClockMs());
+
+    loopUart(nowMs);
+    flush_async_uart_log();
+    process_queued_tasks();
+
+    networkLoopTick();
 
     // ftp / telnet / telemetry / lcd / scope ticks (only the Running ones do work)
     g_services.tickAll();
@@ -757,24 +761,23 @@ static void loopNetwork_task(void *arg) {
 
     // Preserve the cooperative yield: scope's netLoop() blocks ~1 tick when a client is attached
     // and serves as the yield; otherwise we must yield explicitly.
-#ifdef WITH_NETW
-    if (!(scopeService.state() == ServiceState::Running && scopeService.hasClient()))
+    if (!scopeKeepsAwake())
         vTaskDelay(pdMS_TO_TICKS(1));
-#else
-    vTaskDelay(pdMS_TO_TICKS(1));
+}
+
+// Give the telnet client a chance to drain a FIN before we wipe the stack. stopAll() would slam
+// the socket shut, so do this ahead of it.
+static void restartCloseTelnet() {
+#ifdef WITH_NETW
+    telnetService.beginClose();
+    for (int i = 0; i < 200 && telnetService.closePending(); ++i) delay(10);
 #endif
 }
 
 void systemRestart() {
     converter.disable();
     UART_LOG("Rebooting");
-#ifdef WITH_NETW
-    // Send the telnet FIN first and wait (≤2s) for the client to close, so a FIN lost on a weak link
-    // gets retransmitted before the reset wipes the stack (else the client hangs half-open). stopAll()
-    // would slam the socket shut, so do this ahead of it.
-    telnetService.beginClose();
-    for (int i = 0; i < 200 && telnetService.closePending(); ++i) delay(10);
-#endif
+    restartCloseTelnet();
     g_services.stopAll(); // tear down enabled services while WiFi is still up (see mqtt_task overflow)
     delay(300);
     ESP.restart();

@@ -97,6 +97,40 @@ CONFIG_ARDUINO_UDP_RUN_CORE0=y
 * arduino's loop() is not RT capable because it does UART stuff between calls (do not use)
 * so run arduino and the network on core0, and the loopRT on core1
 
+## Why RT_CORE=1 (core1), not core0
+
+ESP32-S3's two LX7 cores are functionally symmetric for a control loop, so the choice
+isn't about raw throughput. The concrete reason to keep RT on core1:
+
+- NVS / littlefs / OTA writes happen from core0 (services, console). Each flash write
+  briefly disables the CPU cache; code on the *same* core stalls during that window
+  unless it lives in IRAM.
+- With RT on core1, those writes don't dip the RT loop — core1 keeps executing the
+  `IRAM_ATTR`-marked ADC continuous-DMA ISR + RT code while core0 stalls.
+- If RT moved to core0, every `set-config` / OTA chunk / coulomb-counter persist would
+  briefly steal cycles from the ADC/MPPT/PWM path.
+
+Flipping RT_CORE to 0 would also require flipping every `CONFIG_*_PINNED_TO_CORE_0` and
+`CONFIG_*_AFFINITY_CPU0` to its `_1`/`CPU1` counterpart — significant sdkconfig churn for
+no gain. The `xPortGetCoreID() == 0` asserts in `loopNetwork_task` would also need to
+become `RT_CORE ^ 1`.
+
+## esp_timer ISR placement
+
+Default in IDF is `CONFIG_ESP_TIMER_ISR_AFFINITY_CPU0` (ISR on PRO_CPU). An earlier sdkconfig
+flipped that to CPU1 so any `dispatch_method = ESP_TIMER_ISR` callbacks would run with
+RT-core latency. This firmware doesn't use ESP_TIMER_ISR dispatch anywhere — IDF's internal
+esp_timer consumers (Wi-Fi keepalives, MQTT, NimBLE GAP, FreeRTOS-timers-via-service-task)
+all dispatch to the task on CPU0. Net effect of the old placement: the RT path ate periodic
+timer-ISR preemption for callbacks that ran on the other core anyway.
+
+Current setting: `CONFIG_ESP_TIMER_ISR_AFFINITY_CPU0=y` (ISR away from RT_CORE). Re-enable
+CPU1 affinity if a future safety callback (e.g. high-rate OV/OC watchdog) needs to dispatch
+in ISR context on the RT core.
+
+The check macros in `src/etc/rt_core_check.h` enforce this and the other task placements
+at compile time — adding a Kconfig that drifts will fail the build.
+
 ## Note about configTICK_RATE_HZ
 
 defaults to 1000 (1tick = 1ms).

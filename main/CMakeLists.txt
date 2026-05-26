@@ -21,7 +21,7 @@ else ()
     # WITH_MEASURE_COIL=1 compiles in the on-device coil inductance sweep + `measure-coil` console
     # command (src/measure_coil.cpp). Bench-only tool — saves ~11 KB in production builds.
     if ($ENV{WITH_MEASURE_COIL})
-        list(APPEND MAIN_SRC "../src/measure_coil.cpp")
+        list(APPEND MAIN_SRC "../src/selftest/measure_coil.cpp")
     endif ()
 endif ()
 
@@ -52,7 +52,7 @@ if (NOT WITH_NETW)
 endif ()
 
 set(BLE_SRC
-        "../src/console_ble.cpp"
+        "../src/tele/console_ble.cpp"
         "../src/etc/ota_ble.cpp"
 )
 
@@ -84,7 +84,7 @@ endif ()
 idf_component_register(SRCS
         ${MAIN_SRC}
         ${VCONV_SRC}
-        "../src/sensor_setup.cpp"
+        "../src/adc/sensor_setup.cpp"
         "../src/mppt.cpp"
         "../src/logging.cpp"
         "../src/util.cpp"
@@ -149,7 +149,7 @@ endif ()
 # try/catch is included by everything; selectively dropping it would mean rewiring error paths.
 set(_size_opt_srcs
         ../src/cli.cpp
-        ../src/sensor_setup.cpp
+        ../src/adc/sensor_setup.cpp
         ../src/logging.cpp
         ../src/util.cpp
         ../src/viz/lcd.cpp
@@ -164,7 +164,7 @@ if (WITH_BLE)
     list(APPEND _size_opt_srcs ${BLE_SRC})
 endif ()
 if ($ENV{WITH_MEASURE_COIL})
-    list(APPEND _size_opt_srcs ../src/measure_coil.cpp)
+    list(APPEND _size_opt_srcs ../src/selftest/measure_coil.cpp)
 endif ()
 set_source_files_properties(${_size_opt_srcs} PROPERTIES COMPILE_OPTIONS "-Os")
 

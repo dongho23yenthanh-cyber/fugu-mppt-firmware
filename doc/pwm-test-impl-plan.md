@@ -107,64 +107,70 @@ Gotchas / lessons (carry forward to M4+):
   Cosmetic warning; the spec sets it to 0 explicitly to satisfy
   `-Werror=missing-field-initializers`.
 
-## M4 — Tests 4a, 4b (HS↔LS dead-band)  ⚠ BLOCKED (2026-05-26)
+## M4 — Tests 4a, 4b (HS↔LS dead-band)  ✓ DONE (2026-05-26)
 
-Tests live in code as `TEST_IGNORE` with a comment. Test infra (second
-`CapChan` on LS pin, `analyse_deadbands` 4-event state machine, dt rebind
-helpers in `McpwmLegRig`) is all in place and ready to re-enable.
+Both pass on bench:
 
-**Blocker — IDF MCPWM dt-module bit semantics don't match the TRM struct
-field names we tried.** Our HiLi design wants: HS pin follows HS gen actions
-(HIGH at TEZ, LOW at cmpHS), LS pin follows LS gen actions (HIGH at cmpHS,
-LOW at cmpLS) with a posedge delay on LS rising. `MCPWM_SyncLeg::init` calls
-`mcpwm_generator_set_dead_time(genLS_, genLS_, {posedge=dt})` to set this up.
+- Test 4a HS→LS: n=292, mean=193.8 ns, min=187.5 / max=200.0 ns (expected 200.0 ns) ✓
+- Test 4b LS→HS: n=287, mean=206.3 ns, min=200.0 / max=212.5 ns (expected 206.2 ns) ✓
 
-Empirically (verified on bench via Test 4a's diagnostic dump): both HS and
-LS pins show the **same** waveform — the LS-with-rising-delay pulse. HS
-comparator updates have no visible effect on either pin once dt is configured.
+Mean undershoots by ~6 ns because the workaround adds 1-tick (6.25 ns) FED
+on the HS gen — see below.
 
-### Raw-LL register experiments (all failed)
+### How we got there
 
-Starting state after `mcpwm_generator_set_dead_time(genLS_, genLS_,
-{posedge=dt})`: `dt_cfg = 0x00030c00` (bits 10, 11, 16, 17 set). Toggled
-individual bits via direct `PWM0.operators[op_id].dt_cfg.val` writes
-between init and capture:
+Original `MCPWM_SyncLeg::init` only called `set_dead_time(genLS, genLS,
+{posedge=dt})`, expecting that to route LS through RED and leave HS direct.
+Both pins ended up mirroring the LS-with-rising-delay waveform. Earlier
+write-up of the M4 blocker chased the wrong hypothesis (TRM bit semantics).
 
-| Bit | TRM name (guess)      | Result on HS pin       | Result on LS pin       |
-|-----|-----------------------|------------------------|------------------------|
-| 9   | `dt_a_outswap`        | LS-gen-direct (no dt)  | LS-with-delay (correct)|
-| 12  | `dt_fed_insel` (+9)   | unchanged from bit-9   | unchanged              |
-| 15  | `dt_a_outbypass`      | HS-gen-direct          | HS-gen-direct          |
-| 16  | `dt_red_outbypass`    | (already set, no Δ)    | (already set, no Δ)    |
-| 10  | `dt_b_outbypass`      | (already set, no Δ)    | (already set, no Δ)    |
+Cracked it by reading IDF source `esp_driver_mcpwm/src/mcpwm_gen.c::
+mcpwm_generator_set_dead_time` against the test-app patterns in
+`esp_driver_mcpwm/test_apps/mcpwm/main/test_mcpwm_gen.c` (notably
+`reda_only_set_dead_time`).
 
-None produced `{HS gen direct on pin A, LS gen with rising delay on pin B}`.
-The IDF struct field labels in `soc/mcpwm_struct.h` and `hal/mcpwm_ll.h`
-seem not to match the actual hardware function — likely an S0-S7 switch
-network where each bit selects a node in a routing tree, not an independent
-per-path enable.
+**What the API actually does:** the operator has TWO dead-time paths —
+path 0 = RED (rising-edge delay), path 1 = FED (falling-edge delay). Both
+output pins draw from one of these paths. Each call to `set_dead_time`
+configures *one* of the paths AND, in its non-bypass branch, calls
+`mcpwm_ll_deadtime_swap_out_path` to route an output to its non-natural
+path. Bypass-mode calls *don't* touch `swap_out_path`. So:
 
-### Paths forward
+- Single call `set_dead_time(genLS, genLS, {posedge=dt})` → un-bypasses
+  path 0, sets RED source = gen B (LS), swaps output B onto path 0. Output
+  A is never re-routed, so it still reads path 0 too → both pins follow
+  RED-of-LS. **This was the bug.**
+- A follow-up `set_dead_time(genHS, genHS, {0,0})` (bypass) doesn't fix it
+  because bypass-branch skips `swap_out_path` and additionally undoes the
+  bypass-flag on path 0.
 
-1. **Get the ESP32-S3 MCPWM TRM dead-time submodule diagram** (the S0–S7
-   switch topology). Without it, bit-bashing is a coin flip. Espressif's
-   public TRM (UM v1.x) doesn't include the full DT-module schematic — may
-   need an internal Espressif doc or a support ticket.
-2. **Switch to pure HiLi mode** — `set_dead_time(HS, LS, {posedge=dt,
-   invert_output=1})`. LS becomes the inverted HS with delayed rising;
-   `cmpLS` becomes unusable. Breaks `src/buck.h`'s diode-emulation pattern
-   (it shortens `cmpLS` to disable sync rect).
-3. **Drop IDF mcpwm_dt entirely**, do dt in software by shifting cmp values.
-   Each operator only has 2 cmps, so this needs either a third comparator
-   (unavailable) or a buck-driver redesign.
-4. **Fix IDF upstream** — likely the cleanest, but requires either the TRM
-   diagram or reverse-engineering bench experiments more systematically.
+### Fix
 
-**Not blocking real silicon.** Production firmware uses LEDC (no
-`WITH_MCPWM` env var by default); the MCPWM driver is still in development.
-This bug is exactly the kind of thing the test suite is supposed to catch
-*before* the driver swap goes live. See the explanatory comment block in
-`src/pwm/mcpwm.h::MCPWM_SyncLeg::init` next to the `set_dead_time` call.
+To get output A = gen A direct, output B = gen B + RED-posedge-delay, we
+need both `swap_out_path` flags set. The only way through the public API:
+issue two non-bypass calls, picking the smallest possible delay on the HS
+side (the test pattern in `ahc_set_dead_time` follows the same shape):
+
+```c
+set_dead_time(genHS, genHS, {.posedge=0, .negedge=1});  // claim path 1 (FED) for HS
+set_dead_time(genLS, genLS, {.posedge=dt, .negedge=0}); // claim path 0 (RED) for LS
+```
+
+Effect: output A = gen A + 1-tick (6.25 ns) FED → essentially direct;
+output B = gen B + RED with posedge_delay = dtTicks. The 6.25 ns extension
+of HS-on shows up as the ~6 ns mean shortfall in Test 4a.
+
+### Test-side bugs uncovered along the way
+
+- **CAP ISR reorders close-spaced edges.** When HS-fall and LS-rise are
+  ~200 ns apart, the two CAP-channel ISRs can complete in either order,
+  pushing samples to the ring with timestamps not monotonically increasing.
+  `analyse_deadbands` is now a ts-stable insertion sort before the state
+  machine.
+- **`have_ls_fall` leaked across dropped periods.** If the state machine
+  reset mid-period (e.g. ISR latency lost an edge), the stale LS-fall ts
+  paired with a much-later HS-rise, producing 19-period outliers in
+  Test 4b's `max`. All `else` branches now reset `have_ls_fall = false`.
 
 ## M5 — Tests 5, 6 (LS forced off / on)  ✓ DONE (2026-05-26)
 
@@ -206,16 +212,15 @@ expected=12822.2 ns (period/2), min = max = mean** — both legs perfectly
 synced with zero drift over 256 cycles, well inside ±50 ns. Spec1's caveat
 about N ≥ 4 needing cross-group routing stands; N = 2 fits in one group.
 
-## Final state (2026-05-26): 14 / 0 / 2
+## Final state (2026-05-26): 14 / 0 / 0
 
-- 12 PASS: Rig-1, Rig-2, Tests 1, 2, 3, 5, 6, 7, 8, 9, 11, 12
-- 2 IGNORE: Tests 4a, 4b (blocked on IDF MCPWM dt-API limitation; see M4)
-- 0 FAIL
+- 14 PASS: Rig-1, Rig-2, Tests 1, 2, 3, 4a, 4b, 5, 6, 7, 8, 9, 11, 12
+- 0 FAIL, 0 IGNORE
 
-Test 10 (dead-time linearity sweep) was not implemented — it depends on the
-same dt-config working that 4a/4b need. When the IDF dt fix lands, Test 10
-falls out for free: sweep `pwm_deadtime_ns ∈ {50, 100, 200, 500}` ns,
-re-init the leg per value, re-run the Test-4a measurement, regress.
+Test 10 (dead-time linearity sweep) is the only spec1 item still unimplemented —
+should fall out easily now: sweep `pwm_deadtime_ns ∈ {50, 100, 200, 500}` ns,
+re-init the leg per value, re-run the Test-4a measurement, regress slope=1
+and intercept ≤ 30 ns.
 
 Test runtime: ~3.5 s with `FULL_TEST_SUITE` undefined (PWM tests only). To
 restore the rest of the suite, define `FULL_TEST_SUITE` at build time.
@@ -225,24 +230,10 @@ not the device's native USB-CDC port (`/dev/cu.usbmodem11101`) — the bridge
 sits on UART0 which is where ESP-IDF's default console writes. The native
 USB-CDC apparently isn't initialised in this firmware variant.
 
-## M4 — Original plan (kept for reference)
+<!-- M4 original plan removed: the M4 section above now documents what
+     actually landed, including the IDF-source fix, the FED+RED workaround,
+     and the ring-pairing bugs uncovered along the way. -->
 
-- Extend `McpwmLegRig` with a second `CapChan` on LS pin (`io_loop_back=1`
-  on both since these are MCPWM-driven, no LEDC mixing).
-- Test 4a (`test_mcpwm_deadband_hs_to_ls`): pair (HS-fall, LS-rise) within
-  the same period. Over 1024 periods: `mean ≥ dt − 30 ns`, **`min > 0`**.
-- Test 4b (`test_mcpwm_deadband_ls_to_hs`): set `cmpLS = pwmMax − 1`
-  explicitly (worst case). Pair (LS-fall[k], HS-rise[k+1]).
-  `min ≥ (dtTicks + 1) ticks − 30 ns`.
-- Safety: SD pin asserted (per spec1 §Safety gate). Add a small `assert_sd()`
-  helper that reads `pwm_sd` + `pwm_sd_active_low` from `board.conf` and
-  drives the SD pin to its inactive level; warns + continues on bench
-  configs without `pwm_sd`.
-
-Risk: pairing logic must walk the ring in time order and group by period
-(use HS-rise as the period anchor). Off-by-one on which LS-rise belongs to
-which HS-fall will silently inflate or hide the dead-band — write a tiny
-host-side unit test for the pairing helper if it gets non-trivial.
 
 ## M5 — Tests 5, 6 (LS force off / on)
 

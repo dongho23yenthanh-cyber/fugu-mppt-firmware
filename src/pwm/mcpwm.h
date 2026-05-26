@@ -132,22 +132,24 @@ public:
         // clamps keep lsOff <= period - dtTicks. HiLi only; 0 = no-op (InEn).
         dtTicks_ = (uint16_t) dtTicks;
         if (dtTicks) {
-            mcpwm_dead_time_config_t dt = {
+            // The IDF mcpwm dt submodule binds RED to path 0 (= output A's natural
+            // routing). To put RED on gen B (LS-rising), we must swap gen B onto
+            // path 0 *and* swap gen A off path 0 onto path 1. swap_out_path is
+            // only touched by non-bypass calls, so we configure FED with 1 tick
+            // (~6.25 ns) on gen A to claim path 1 and trigger the swap. The 1-tick
+            // falling-edge delay on HS is negligible (< 0.03 % duty at 39 kHz).
+            mcpwm_dead_time_config_t a_fed = {
+                .posedge_delay_ticks = 0,
+                .negedge_delay_ticks = 1,
+                .flags = {.invert_output = 0},
+            };
+            ESP_ERROR_CHECK(mcpwm_generator_set_dead_time(genHS_, genHS_, &a_fed));
+            mcpwm_dead_time_config_t b_red = {
                 .posedge_delay_ticks = dtTicks,
                 .negedge_delay_ticks = 0,
                 .flags = {.invert_output = 0},
             };
-            ESP_ERROR_CHECK(mcpwm_generator_set_dead_time(genLS_, genLS_, &dt));
-            // KNOWN BUG: this dt config does not produce the expected HiLi pair on S3.
-            // Empirically (test_mcpwm_deadband_hs_to_ls / 4b in test/test_pwm.cpp),
-            // both HS and LS pins end up showing the same LS-with-rising-delay
-            // waveform. Raw-LL register experiments (toggle bits 9, 10, 15, 16, 12
-            // of dt_cfg individually) did not produce a stable {HS direct, LS-with-
-            // delay} pair. The IDF MCPWM DT module API assumes a HiLi-pair pattern
-            // where one output is derived from the other; our diode-emulation use
-            // case wants independent cmpLS control. Resolution requires either the
-            // ESP32-S3 MCPWM TRM topology diagram (S0–S7 switch network) or a
-            // patched IDF driver. See doc/pwm-test-impl-plan.md §M4.
+            ESP_ERROR_CHECK(mcpwm_generator_set_dead_time(genLS_, genLS_, &b_red));
             pwmMax = (uint16_t) (t.period_ticks - dtTicks);   // reserves the LS->HS dead-band
         }
     }

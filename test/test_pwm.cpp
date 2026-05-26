@@ -238,6 +238,18 @@ struct DtStats {
 };
 
 static void analyse_deadbands(DtStats &hs_to_ls, DtStats &ls_to_hs) {
+    // CAP ISR ordering doesn't always match HW edge timing when two edges fire
+    // <1 µs apart (dt range). Re-sort by timestamp first so the state machine
+    // sees the true edge order. Insertion sort: O(N) on the near-sorted ring.
+    for (uint32_t i = 1; i < g_head; ++i) {
+        CapEvent cur = g_ring[i];
+        uint32_t j = i;
+        while (j > 0 && (int32_t)(g_ring[j - 1].ts - cur.ts) > 0) {
+            g_ring[j] = g_ring[j - 1];
+            --j;
+        }
+        g_ring[j] = cur;
+    }
     enum { NEXT_HS_RISE, NEXT_HS_FALL, NEXT_LS_RISE, NEXT_LS_FALL };
     int state = NEXT_HS_RISE;
     uint32_t hs_fall_ts = 0, ls_fall_ts = 0;
@@ -250,24 +262,25 @@ static void analyse_deadbands(DtStats &hs_to_ls, DtStats &ls_to_hs) {
             case NEXT_HS_RISE:
                 if (is_hs && is_pos) {
                     if (have_ls_fall) ls_to_hs.add(g_ring[i].ts - ls_fall_ts);
+                    have_ls_fall = false;  // each LS-fall pairs with the next HS-rise only
                     state = NEXT_HS_FALL;
                 }
                 break;
             case NEXT_HS_FALL:
                 if (is_hs && !is_pos) { hs_fall_ts = g_ring[i].ts; state = NEXT_LS_RISE; }
-                else state = NEXT_HS_RISE;
+                else { have_ls_fall = false; state = NEXT_HS_RISE; }
                 break;
             case NEXT_LS_RISE:
                 if (is_ls && is_pos) {
                     hs_to_ls.add(g_ring[i].ts - hs_fall_ts);
                     state = NEXT_LS_FALL;
-                } else state = NEXT_HS_RISE;
+                } else { have_ls_fall = false; state = NEXT_HS_RISE; }
                 break;
             case NEXT_LS_FALL:
                 if (is_ls && !is_pos) {
                     ls_fall_ts = g_ring[i].ts; have_ls_fall = true;
                     state = NEXT_HS_RISE;
-                } else state = NEXT_HS_RISE;
+                } else { have_ls_fall = false; state = NEXT_HS_RISE; }
                 break;
         }
     }
@@ -559,24 +572,57 @@ static constexpr float    kExpectedDtLsHsNs = (float)(kDtTestTicks + 1) * 1e9f /
 // Test 4a. HS → LS dead-band (mid-period). t(LS-rise) − t(HS-fall) over many periods.
 // Mean must match the configured dt within ±50 ns; minimum must be > 0 (no shoot-through).
 void test_mcpwm_deadband_hs_to_ls() {
-    // BLOCKED on the IDF MCPWM dt-module bit-semantics puzzle. Empirically the
-    // dt config in MCPWM_SyncLeg::init makes both HS and LS pins show identical
-    // LS-with-rising-delay waveforms (cmpHS updates also get masked). Raw-LL
-    // experiments (bits 9, 10, 12, 15, 16 of dt_cfg) didn't yield a stable
-    // {HS direct, LS-with-delay} pair. Needs TRM access or IDF patch.
-    TEST_IGNORE_MESSAGE("MCPWM dt produces wrong HiLi pair — see src/pwm/mcpwm.h");
+    McpwmLegRig rig;
+    rig.init(kDtTestFsw, kDtTestTicks, /*enLogic*/false, /*capture_ls*/true);
+    rig.leg.setHsOff(rig.leg.pwmMax / 2);
+    rig.leg.setLsOff(rig.leg.pwmMax * 3 / 4);
+    vTaskDelay(2);
+    rig.rearm();
+
+    constexpr uint32_t N = 256;
+    TEST_ASSERT_TRUE_MESSAGE(wait_events(N * 4 + 8, 250, /*diag*/-1),
+                             "Test 4a: CAP ring did not fill");
+
+    DtStats hs_to_ls, ls_to_hs;
+    analyse_deadbands(hs_to_ls, ls_to_hs);
+    ESP_LOGI(TAG_PWM, "Test 4a HS→LS: n=%u mean=%.1f ns min=%.1f ns max=%.1f ns (expected %.1f ns)",
+             (unsigned)hs_to_ls.n, hs_to_ls.mean_ns(), hs_to_ls.min_ns(),
+             hs_to_ls.max_ns(), kExpectedDtHsLsNs);
+
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(N / 2, hs_to_ls.n);
+    // SAFETY: any sample with min ≤ 0 is shoot-through at the logic level.
+    TEST_ASSERT_GREATER_THAN_UINT32(0, hs_to_ls.min_ticks);
+    TEST_ASSERT_FLOAT_WITHIN(50.0f, kExpectedDtHsLsNs, hs_to_ls.mean_ns());
 }
 
 // Test 4b. LS → HS dead-band at period wrap. Drive cmpLS = pwmMax − 1 (worst case);
 // the gap = (dtTicks + 1) MCPWM ticks. Pair (LS-fall[k], HS-rise[k+1]).
 void test_mcpwm_deadband_ls_to_hs() {
-    TEST_IGNORE_MESSAGE("MCPWM dt produces wrong HiLi pair — see test 4a comment");
+    McpwmLegRig rig;
+    rig.init(kDtTestFsw, kDtTestTicks, /*enLogic*/false, /*capture_ls*/true);
+    rig.leg.setHsOff(rig.leg.pwmMax / 4);              // narrow HS so LS has room
+    rig.leg.setLsOff((uint16_t)(rig.leg.pwmMax - 1));  // worst case: LS off just before TEZ
+    vTaskDelay(2);
+    rig.rearm();
+
+    constexpr uint32_t N = 256;
+    TEST_ASSERT_TRUE_MESSAGE(wait_events(N * 4 + 8, 250, /*diag*/-1),
+                             "Test 4b: CAP ring did not fill");
+
+    DtStats hs_to_ls, ls_to_hs;
+    analyse_deadbands(hs_to_ls, ls_to_hs);
+    ESP_LOGI(TAG_PWM, "Test 4b LS→HS: n=%u mean=%.1f ns min=%.1f ns max=%.1f ns (expected %.1f ns)",
+             (unsigned)ls_to_hs.n, ls_to_hs.mean_ns(), ls_to_hs.min_ns(),
+             ls_to_hs.max_ns(), kExpectedDtLsHsNs);
+
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(N / 2, ls_to_hs.n);
+    TEST_ASSERT_GREATER_THAN_UINT32(0, ls_to_hs.min_ticks);
+    TEST_ASSERT_FLOAT_WITHIN(50.0f, kExpectedDtLsHsNs, ls_to_hs.mean_ns());
 }
 
 // Test 5. LS forced off (diode emulation entry point).
 // Set cmpLS = cmpHS so LS gen's HIGH and LOW events coincide → LS stays low all
-// period. Verify zero LS rising edges over 100 ms (~3900 cycles). dt=0 to avoid
-// the IDF dt-config bug parked in Test 4.
+// period. Verify zero LS rising edges over 100 ms (~3900 cycles).
 void test_mcpwm_ls_force_off() {
     McpwmLegRig rig;
     rig.init(kFsw, /*dtTicks*/0, /*enLogic*/false, /*capture_ls*/true);

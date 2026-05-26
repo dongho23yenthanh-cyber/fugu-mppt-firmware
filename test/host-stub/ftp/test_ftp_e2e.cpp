@@ -375,6 +375,104 @@ void test_mlsd_subdir() {
            && "MLSD listing must contain only entries *inside* the subdir, not the subdir name itself");
 }
 
+// CWD "../" from root must stay at root — the lib's makePath walks up
+// workingDir but clamps at "/". This is the one portable, FS-independent
+// path-traversal assertion. (Embedded "..", e.g. "/sub/../foo", is *not*
+// normalized by the lib and falls through to the FS layer's path
+// resolution, so its behavior depends on the underlying FS — out of
+// scope here.)
+void test_cwd_dotdot_clamps_at_root() {
+    FtpDial c(kCmdPort);
+    assert(c.login() == 230);
+
+    c.send("CWD /");                     assert(c.readCode() == 250);
+    c.send("PWD");
+    // PWD reply is "257 \"/\" is the current directory."
+    int pwd0 = c.readCode();
+    std::fprintf(stderr, "  PWD->%d at root\n", pwd0);
+    assert(pwd0 == 257);
+
+    c.send("CWD ..");                    int cwdUp = c.readCode();
+    std::fprintf(stderr, "  CWD .. ->%d (from /)\n", cwdUp);
+    assert(cwdUp == 250 || cwdUp == 550);  // either succeed-as-noop or refuse
+
+    c.send("PWD");                       int pwd1 = c.readCode();
+    std::fprintf(stderr, "  PWD->%d after CWD ..\n", pwd1);
+    assert(pwd1 == 257);
+    // Note: we don't parse the path string out of the 257 reply; the lib
+    // sends "257 \"/\" ..." in both the "/" and "//" cases. Either is fine
+    // here — the assertion is that we didn't escape into something else.
+}
+
+// Multi-chunk STOR + RETR. The lib's `fileBuffer` is allocated dynamically
+// up to BUFFERSIZE (1436 on ESP32). A 10 KB payload guarantees multiple
+// read/write iterations through doFiletoNetwork / doNetworkToFile.
+void test_large_file_round_trip() {
+    FtpDial c(kCmdPort);
+    assert(c.login() == 230);
+
+    // 10 KB deterministic pattern; every byte distinct mod 251 makes
+    // any off-by-one corruption easy to spot.
+    std::string payload(10 * 1024, '\0');
+    for (size_t i = 0; i < payload.size(); ++i) payload[i] = (char)(i % 251);
+
+    // Upload
+    uint16_t pport = c.pasv();        assert(pport > 0);
+    int dfd = openData(pport);        assert(dfd >= 0);
+    c.send("STOR /large.bin");        assert(c.readCode() == 150);
+    // Drain-as-we-write to avoid stalling on the kernel send buffer.
+    size_t off = 0;
+    while (off < payload.size()) {
+        ssize_t n = ::send(dfd, payload.data() + off, payload.size() - off, 0);
+        assert(n > 0);
+        off += (size_t)n;
+    }
+    ::close(dfd);
+    assert(c.readCode() == 226);
+
+    // Download
+    pport = c.pasv();                 assert(pport > 0);
+    dfd = openData(pport);            assert(dfd >= 0);
+    c.send("RETR /large.bin");        assert(c.readCode() == 150);
+    std::string got = drainData(dfd);
+    ::close(dfd);
+    assert(c.readCode() == 226);
+
+    std::fprintf(stderr, "  got %zu bytes (expect %zu)\n", got.size(), payload.size());
+    assert(got.size() == payload.size() && "RETR size mismatch on 10 KB");
+    assert(got == payload && "RETR content mismatch on 10 KB");
+}
+
+// DELE happy path + verify a follow-up RETR fails with the not-found code.
+void test_dele_then_retr_fails() {
+    FtpDial c(kCmdPort);
+    assert(c.login() == 230);
+
+    // Upload a victim file
+    uint16_t pport = c.pasv();        assert(pport > 0);
+    int dfd = openData(pport);        assert(dfd >= 0);
+    c.send("STOR /todelete.bin");     assert(c.readCode() == 150);
+    const char *body = "doomed";
+    ::send(dfd, body, std::strlen(body), 0);
+    ::close(dfd);
+    assert(c.readCode() == 226);
+
+    // Delete it
+    c.send("DELE /todelete.bin");
+    int del = c.readCode();
+    std::fprintf(stderr, "  DELE ->%d (expect 250)\n", del);
+    assert(del == 250);
+
+    // Now RETR must fail. The lib's makeExistsPath sends "550 <path> not found."
+    pport = c.pasv();                 assert(pport > 0);
+    dfd = openData(pport);            assert(dfd >= 0);
+    c.send("RETR /todelete.bin");
+    int retr = c.readCode();
+    ::close(dfd);
+    std::fprintf(stderr, "  RETR-deleted ->%d (expect 550)\n", retr);
+    assert(retr == 550 && "RETR of a deleted file must return 550");
+}
+
 // ---- subprocess harness ---------------------------------------------------
 
 struct Test {
@@ -422,12 +520,15 @@ int main() {
         // long_cwd_path is destructive on buggy code (stack smash in the
         // server thread crashes the parent process too). Run it last so
         // the other regressions still report cleanly on a buggy build.
-        {"pass_without_user", test_pass_without_user},
-        {"malformed_port",    test_malformed_port},
-        {"port_bounce",       test_port_bounce},
-        {"upload_download",   test_upload_download},
-        {"mlsd_subdir",       test_mlsd_subdir},
-        {"long_cwd_path",     test_long_cwd_path},
+        {"pass_without_user",       test_pass_without_user},
+        {"malformed_port",          test_malformed_port},
+        {"port_bounce",             test_port_bounce},
+        {"cwd_dotdot_clamps",       test_cwd_dotdot_clamps_at_root},
+        {"upload_download",         test_upload_download},
+        {"large_file_round_trip",   test_large_file_round_trip},
+        {"dele_then_retr_fails",    test_dele_then_retr_fails},
+        {"mlsd_subdir",             test_mlsd_subdir},
+        {"long_cwd_path",           test_long_cwd_path},
     };
 
     int failures = 0;

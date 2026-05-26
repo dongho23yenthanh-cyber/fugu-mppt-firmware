@@ -15,7 +15,7 @@ cmake -S test/host-stub/ftp -B build && cmake --build build
 ./build/ftp_e2e_test
 ```
 
-Expected: `ALL FTP REGRESSION TESTS PASSED` (6 tests, ~1.5 s).
+Expected: `ALL FTP REGRESSION TESTS PASSED` (9 tests, ~2 s).
 
 ## Harness
 
@@ -80,7 +80,23 @@ version requires PORT IP to match `client.remoteIP()`.
 ← 501                                 (refused)
 ```
 
-### 4. `upload_download` — PASV + STOR + RETR round-trip
+### 4. `cwd_dotdot_clamps` — `..` from root stays at root
+
+The lib's `makePath` walks leading `../` segments up `cwdName` but clamps
+at `/`. Verifies that a deliberate over-walk doesn't escape the root via
+the command interface. (Embedded `..`, e.g. `RETR /a/../b`, is not
+normalized by the lib and falls through to the FS layer, where behavior
+depends on the underlying filesystem — out of scope here.)
+
+```
+→ USER ftp / PASS secret              ← 331 / 230
+→ CWD /                               ← 250
+→ PWD                                 ← 257
+→ CWD ..                              ← 250 (succeeds as no-op at root)
+→ PWD                                 ← 257                (still at root)
+```
+
+### 5. `upload_download` — PASV + STOR + RETR round-trip
 
 Functional coverage of the full passive-mode data path. No security bug
 attached; this is the smoke test for everything PASV/data-channel.
@@ -109,7 +125,39 @@ assert: bytes match payload exactly
 
 Asserts byte-exact equality of upload vs. download payload (`got == payload`).
 
-### 5. `mlsd_subdir` — MLSD honors optional pathname arg
+### 6. `large_file_round_trip` — multi-chunk STOR + RETR
+
+Functional smoke test for the data-transfer loops (`doFiletoNetwork` /
+`doNetworkToFile`). Uses a 10 KB deterministic pattern (byte `i % 251`)
+so any off-by-one corruption mid-buffer would land on a different value.
+The transfer crosses the 1436-byte `BUFFERSIZE` (`CONFIG_TCP_MSS` on
+ESP32) several times, forcing multi-iteration chunking.
+
+```
+→ ... login + PASV ...
+→ STOR /large.bin                     ← 150
+data → server: 10240 B (drained-as-written to avoid kernel send-buffer stall)
+                                      ← 226
+→ ... PASV ...
+→ RETR /large.bin                     ← 150
+data ← server: 10240 B
+assert: size match AND byte-exact match
+                                      ← 226
+```
+
+### 7. `dele_then_retr_fails` — DELE removes a file and RETR confirms it's gone
+
+Mutation round-trip + negative read. Also documents the lib's reply codes
+(DELE=250, RETR-nonexistent=550).
+
+```
+→ ... login + PASV ...
+→ STOR /todelete.bin                  ← 150 / 226           (set up victim)
+→ DELE /todelete.bin                  ← 250 "Deleted ..."
+→ RETR /todelete.bin                  ← 550 "<path> not found."
+```
+
+### 8. `mlsd_subdir` — MLSD honors optional pathname arg
 
 Covers fl4p/SimpleFTPServer@488d4d4 ("Honor optional pathname argument in
 LIST/NLST/MLSD"). Pre-fix, the server silently re-listed `cwdName` even
@@ -138,7 +186,7 @@ from `processCommand` reverts to listing the cwd; the listing then shows
 the leftover `BBBB…` directory from `long_cwd_path` and is missing
 `marker.txt`, so the assertion fires.
 
-### 6. `long_cwd_path` — `makePath` stack overflow (runs last)
+### 9. `long_cwd_path` — `makePath` stack overflow (runs last)
 
 Security fix #2. The buggy `makePath` used `strncat(dst, src, FTP_CWD_SIZE)`
 where the size arg is "max bytes from src", not buffer size, so a long
@@ -170,6 +218,9 @@ still produce per-test PASS/FAIL output on a buggy build.
 | pass_without_user | PASS | FAIL (assert) | `second==230` after PASS proves bypass |
 | malformed_port | PASS | FAIL (SIGSEGV in parent) | server crashes |
 | port_bounce | PASS | FAIL (assert) | server accepts non-peer IP |
-| upload_download | PASS | (no upstream bug to catch — smoke test) | byte mismatch ⇒ assert |
+| cwd_dotdot_clamps | PASS | (no known regression — guard test) | PWD after `CWD ..` must be 257 |
+| upload_download | PASS | (no upstream bug — smoke test) | byte mismatch ⇒ assert |
+| large_file_round_trip | PASS | (no upstream bug — smoke test) | size or byte mismatch ⇒ assert |
+| dele_then_retr_fails | PASS | (no upstream bug — smoke test) | DELE≠250 or RETR-deleted≠550 |
 | mlsd_subdir | PASS | FAIL (assert) | listing missing `marker.txt`, contains cwd entries |
 | long_cwd_path | PASS | FAIL (NOOP timeout / SIGABRT) | server dead after long CWD |

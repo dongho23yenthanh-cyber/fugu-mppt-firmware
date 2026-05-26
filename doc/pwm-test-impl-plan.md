@@ -153,6 +153,65 @@ Paths forward (pick one when this becomes priority):
 This bug is exactly the kind of thing the test suite is supposed to catch
 *before* the driver swap goes live.
 
+## M5 — Tests 5, 6 (LS forced off / on)  ✓ DONE (2026-05-26)
+
+Both PASS with dt=0 (no DT module in play). Test 5 sets `cmpLS = cmpHS` →
+LS rise/fall events fire at the same tick → LS pin stays low (HS rising = 3946
+events in the window, LS pos = 0). Test 6 sets `cmpLS = pwmMax-1` → measured
+duty 0.7499, expected 0.7499 (exact).
+
+## M6 — Tests 7, 8 (D=0, D=1)  ✓ DONE (2026-05-26)
+
+Test 7: `MCPWM_SyncLeg::forceShutdown()` → 0 HS edges, digitalRead high
+count 0/100. Test 8: `mcpwm_generator_set_force_level(genHS, 1, true)` + LS
+forced 0 → 0 HS edges, digitalRead low count 0/100. Both PASS.
+
+## M7 — Test 9 (TEZ-buffered glitch-free duty step)  ✓ DONE (2026-05-26)
+
+Sequence: setHsOff(cmp1) → 200 µs delay → setHsOff(cmp2) → capture. Result:
+8 pulses at cmp1-width (615 CAP ticks) + 269 pulses at cmp2-width (1436 CAP
+ticks), **0 intermediate values**. This empirically confirms
+`update_cmp_on_tez = 1` (`src/pwm/mcpwm.h:97`) is active and working —
+regression guard against that flag being cleared.
+
+## M9 — Test 11 (OST fault brake)  ✓ DONE (2026-05-26)
+
+Software-driven fault via `gpio_set_level(fault_pin, 1)` while pin is in
+INPUT_OUTPUT mode (matrix input route to PWM_FAULT coexists with software
+write to GPIO_OUT_REG). On trip: HS and LS both read LOW immediately, 0
+HS edges over 20 ms latch window. After `MCPWM_FaultBrake::recover()`,
+switching resumes (≥64 edges captured). PASS.
+
+Trip latency printed but partially garbled by `%lld` not supported in
+newlib-nano printf — fixed to `%d` with `(int)` cast.
+
+## M10 — Test 12 (interleaved phase)  ✓ DONE (2026-05-26)
+
+`MCPWM_Converter<2>` with legs on (pin 5, 6) and (pin 8, 9). HS-rise pairs
+captured via two CapChans on shared CapTimer. **n=256, mean=12837.5 ns,
+expected=12822.2 ns (period/2), min = max = mean** — both legs perfectly
+synced with zero drift over 256 cycles, well inside ±50 ns. Spec1's caveat
+about N ≥ 4 needing cross-group routing stands; N = 2 fits in one group.
+
+## Final state (2026-05-26): 14 / 0 / 2
+
+- 12 PASS: Rig-1, Rig-2, Tests 1, 2, 3, 5, 6, 7, 8, 9, 11, 12
+- 2 IGNORE: Tests 4a, 4b (blocked on IDF MCPWM dt-API limitation; see M4)
+- 0 FAIL
+
+Test 10 (dead-time linearity sweep) was not implemented — it depends on the
+same dt-config working that 4a/4b need. When the IDF dt fix lands, Test 10
+falls out for free: sweep `pwm_deadtime_ns ∈ {50, 100, 200, 500}` ns,
+re-init the leg per value, re-run the Test-4a measurement, regress.
+
+Test runtime: ~3.5 s with `FULL_TEST_SUITE` undefined (PWM tests only). To
+restore the rest of the suite, define `FULL_TEST_SUITE` at build time.
+
+Read output via the USB-to-UART bridge port (`/dev/cu.usbmodem59720648061`),
+not the device's native USB-CDC port (`/dev/cu.usbmodem11101`) — the bridge
+sits on UART0 which is where ESP-IDF's default console writes. The native
+USB-CDC apparently isn't initialised in this firmware variant.
+
 ## M4 — Original plan (kept for reference)
 
 - Extend `McpwmLegRig` with a second `CapChan` on LS pin (`io_loop_back=1`

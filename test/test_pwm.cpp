@@ -970,3 +970,49 @@ void test_mcpwm_interleaved_phase() {
     TEST_ASSERT_FLOAT_WITHIN(50.0f, expected_ns, mean_dt_ns);
 }
 
+// Scope target. Holds each duty for several seconds, prints sync markers on the
+// UART so etc/pico_pwm_duty.py can trigger PicoScope capture per dwell and measure
+// pulse-width / duty externally. Covers the D=0.05/0.10/0.90/0.95 endpoints that
+// the on-board CAP can't resolve (~1-3 µs ISR latency drops edges on sub-3 µs pulses).
+// Bench wiring: PicoScope CH A on IO35 (HS), CH B on IO37 (LS), GND to device GND.
+// Always passes — the real measurement is host-side. Runs LAST (~35 s).
+void test_mcpwm_endpoint_duty_scope() {
+    static constexpr float    kDuties[]  = {0.05f, 0.10f, 0.25f, 0.50f, 0.75f, 0.90f, 0.95f};
+    static constexpr uint32_t kDwellMs   = 8000;
+    // CH B (1x probe) is on IO37 and works; route HS there for the duty measurement.
+    // CH A (50x probe on IO35) is unreliable on bench, so LS sits there as a don't-care.
+    static constexpr int      kHsScope   = 37;
+    static constexpr int      kLsScope   = 35;
+
+    // Sanity warmup: toggle the pins with digitalWrite at 1 Hz so the scope
+    // operator can confirm wiring + threshold + range *before* trusting any
+    // MCPWM measurement. 6 transitions = 3 H/L pairs over 3 s.
+    pinMode(kHsScope, OUTPUT);
+    pinMode(kLsScope, OUTPUT);
+    ESP_LOGI(TAG_PWM, "[SCOPE] warmup: digitalWrite toggle on HS=%d / LS=%d at 1 Hz for 3 s",
+             kHsScope, kLsScope);
+    for (int i = 0; i < 3; ++i) {
+        digitalWrite(kHsScope, HIGH); digitalWrite(kLsScope, LOW);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        digitalWrite(kHsScope, LOW);  digitalWrite(kLsScope, HIGH);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    ESP_LOGI(TAG_PWM, "[SCOPE] warmup done; switching to MCPWM");
+
+    MCPWM_SyncLeg leg;
+    leg.init(/*group*/0, kFsw, kHsScope, kLsScope, /*dt*/0, /*enLogic*/false);
+    leg.start();
+    ESP_LOGI(TAG_PWM, "[SCOPE] target ready: pin HS=%d LS=%d fsw=%u pwmMax=%u",
+             kHsScope, kLsScope, (unsigned)kFsw, (unsigned)leg.pwmMax);
+
+    for (size_t k = 0; k < sizeof(kDuties)/sizeof(kDuties[0]); ++k) {
+        float    D   = kDuties[k];
+        uint16_t cmp = (uint16_t)(D * (float)leg.pwmMax + 0.5f);
+        leg.setHsOff(cmp);
+        ESP_LOGI(TAG_PWM, "[SCOPE] D=%.2f cmp=%u start", D, (unsigned)cmp);
+        vTaskDelay(pdMS_TO_TICKS(kDwellMs));
+        ESP_LOGI(TAG_PWM, "[SCOPE] D=%.2f end", D);
+    }
+    ESP_LOGI(TAG_PWM, "[SCOPE] sweep complete");
+}
+

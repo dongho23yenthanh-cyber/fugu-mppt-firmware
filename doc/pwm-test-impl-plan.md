@@ -228,10 +228,62 @@ leg per value, run the Test-4a HS→LS measurement, regress measured vs. configu
 The −6 ns intercept is the FED-on-HS systematic from M4's workaround. Asserts:
 `slope ∈ [0.95, 1.05]`, `|intercept| ≤ 30 ns`. Test passes deterministically.
 
-## Final state (2026-05-26): 15 / 0 / 0
+## M11 — Round 2: PicoScope endpoint-duty verification  ✓ DONE (2026-05-26)
 
-- 15 PASS: Rig-1, Rig-2, Tests 1, 2, 3, 4a, 4b, 5, 6, 7, 8, 9, 10, 11, 12
+Spec1 deferred D ∈ {0.05, 0.10, 0.90, 0.95} to Round 2 because the on-board CAP's
+~1-3 µs ISR latency drops one edge per pulse on sub-3 µs HS pulses (D ≈ 0.1 at
+39 kHz = 2.56 µs HS-on). Closed that gap with PicoScope.
+
+**Setup.** New scope-target test `test_mcpwm_endpoint_duty_scope` (test/test_pwm.cpp)
+drives HS on IO37 / LS on IO35, holds each duty for 8 s, prints `[SCOPE] D=X.XX
+cmp=N start` / `... end` sync markers on UART0. Host script `etc/pico_pwm_duty.py`
+tails the bridge port, captures one PicoScope block per dwell on CH B (1× probe on
+IO37), counts threshold crossings, reports measured vs. configured duty per dwell.
+
+```
+arch -x86_64 /usr/bin/python3 etc/pico_pwm_duty.py \
+    --port /dev/cu.usbmodem59720648061 --channel B --range 5v --atten 1 \
+    --fsw 39000 --shots 1 --periods 30 --total-timeout 90
+```
+
+**Results (fsw = 39 kHz, dt = 0, CH B @ 1×, 30 periods per shot):**
+
+| D_cmd | D_meas | pw_ns | err_ns |
+|------:|-------:|------:|-------:|
+| 0.05  | 0.0496 |  1271 | −11    |
+| 0.10  | 0.0998 |  2560 |  −4    |
+| 0.25  | 0.2499 |  6409 |  −2    |
+| 0.50  | 0.5005 | 12835 | +12    |
+| 0.75  | 0.7501 | 19236 |  +2    |
+| 0.90  | 0.9002 | 23084 |  +4    |
+| 0.95  | 0.9501 | 24364 |  +2    |
+
+Worst-case error 12 ns — under two 6.25 ns MCPWM ticks, well inside scope timebase
+(320 ns/sample) jitter. The narrow-pulse endpoints (1.27 µs at D=0.05, 1.28 µs at
+D=0.95-fall) come through clean: no missed edges, no duty crush.
+
+**Bench notes captured for the next person:**
+
+- CH A was a current-clamp probe, not a voltage probe — it floats at ~150 mV
+  near GPIO traces and produces nonsense duty readings. Always sanity-check a
+  fresh probe with the digitalWrite warmup in the scope-target test before
+  trusting a sweep.
+- The host script's `wait_for` was throwing away post-match buffered lines
+  between calls (every-other-dwell pattern). Fixed by holding the read buffer
+  on a `SerialLineSink` instance.
+- Per-dwell capture takes ~0.5 s with `--shots 1 --periods 30`; with 4 shots
+  the script lags behind 5 s dwells. Bumped dwell to 8 s for headroom.
+- The bench device's UART0 / bridge cable mapping moves between sessions —
+  always confirm the [SCOPE] marker arrives on the expected serial port before
+  starting the sweep.
+
+## Final state (2026-05-26): 16 / 0 / 0 + scope-verified endpoints
+
+- 15 on-board PASS: Rig-1, Rig-2, Tests 1, 2, 3, 4a, 4b, 5, 6, 7, 8, 9, 10, 11, 12
+- 1 scope-target PASS: endpoint-duty sweep (always passes; real measurement is
+  host-side via etc/pico_pwm_duty.py)
 - 0 FAIL, 0 IGNORE
+- All 7 endpoint duties (0.05..0.95) verified to ±12 ns at the pin via PicoScope
 - Verified across 4 consecutive cold-boot runs. Back-to-back boot cycles (chip
   resets within a few seconds without full power cycle) can produce a one-period
   outlier in Test 4b; cold-boot is stable. Suspect leaked CAP-timer or operator

@@ -154,6 +154,7 @@ void test_mcpwm_d1_hs_high();
 void test_mcpwm_glitch_free_duty_step();
 void test_mcpwm_ost_brake_latches();
 void test_mcpwm_interleaved_phase();
+void test_mcpwm_endpoint_duty_scope();
 
 // conf.h
 void test_conf_getlong_bases();
@@ -300,6 +301,7 @@ void setup() {
     RUN_TEST(test_mcpwm_glitch_free_duty_step);
     RUN_TEST(test_mcpwm_ost_brake_latches);
     RUN_TEST(test_mcpwm_interleaved_phase);
+    RUN_TEST(test_mcpwm_endpoint_duty_scope);
 
     UNITY_END();
 }

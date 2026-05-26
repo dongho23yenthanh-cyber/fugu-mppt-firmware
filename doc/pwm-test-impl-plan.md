@@ -212,15 +212,30 @@ expected=12822.2 ns (period/2), min = max = mean** — both legs perfectly
 synced with zero drift over 256 cycles, well inside ±50 ns. Spec1's caveat
 about N ≥ 4 needing cross-group routing stands; N = 2 fits in one group.
 
-## Final state (2026-05-26): 14 / 0 / 0
+## M8 — Test 10 (dead-time linearity sweep)  ✓ DONE (2026-05-26)
 
-- 14 PASS: Rig-1, Rig-2, Tests 1, 2, 3, 4a, 4b, 5, 6, 7, 8, 9, 11, 12
+Sweep dtTicks ∈ {8, 16, 32, 80} (= 50/100/200/500 ns @ 160 MHz), re-init the
+leg per value, run the Test-4a HS→LS measurement, regress measured vs. configured:
+
+| dt configured | dt measured |
+|---------------|-------------|
+| 50.0 ns       | 43.8 ns     |
+| 100.0 ns      | 93.7 ns     |
+| 200.0 ns      | 193.8 ns    |
+| 500.0 ns      | 494.9 ns    |
+
+`slope=1.0001..1.0026`, `intercept=-6.3..-6.5 ns` (steady across 4 cold-boot runs).
+The −6 ns intercept is the FED-on-HS systematic from M4's workaround. Asserts:
+`slope ∈ [0.95, 1.05]`, `|intercept| ≤ 30 ns`. Test passes deterministically.
+
+## Final state (2026-05-26): 15 / 0 / 0
+
+- 15 PASS: Rig-1, Rig-2, Tests 1, 2, 3, 4a, 4b, 5, 6, 7, 8, 9, 10, 11, 12
 - 0 FAIL, 0 IGNORE
-
-Test 10 (dead-time linearity sweep) is the only spec1 item still unimplemented —
-should fall out easily now: sweep `pwm_deadtime_ns ∈ {50, 100, 200, 500}` ns,
-re-init the leg per value, re-run the Test-4a measurement, regress slope=1
-and intercept ≤ 30 ns.
+- Verified across 4 consecutive cold-boot runs. Back-to-back boot cycles (chip
+  resets within a few seconds without full power cycle) can produce a one-period
+  outlier in Test 4b; cold-boot is stable. Suspect leaked CAP-timer or operator
+  state across the soft reset; not pursued.
 
 Test runtime: ~3.5 s with `FULL_TEST_SUITE` undefined (PWM tests only). To
 restore the rest of the suite, define `FULL_TEST_SUITE` at build time.

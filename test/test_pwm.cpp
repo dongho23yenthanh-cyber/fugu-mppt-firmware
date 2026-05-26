@@ -620,6 +620,52 @@ void test_mcpwm_deadband_ls_to_hs() {
     TEST_ASSERT_FLOAT_WITHIN(50.0f, kExpectedDtLsHsNs, ls_to_hs.mean_ns());
 }
 
+// Test 10. Dead-time linearity: sweep dtTicks ∈ {8, 16, 32, 80} (= 50/100/200/500 ns
+// @ 160 MHz), re-init the leg per value, run the Test-4a HS→LS measurement, and
+// regress measured vs configured. Slope must be 1.0 ±5 % and |intercept| ≤ 30 ns.
+// The FED-on-HS workaround adds a fixed ~6 ns shortfall; that shows up as a small
+// negative intercept and is well inside the budget.
+void test_mcpwm_deadtime_linearity() {
+    static constexpr uint32_t kSweepTicks[] = {8, 16, 32, 80};
+    constexpr uint32_t        K = sizeof(kSweepTicks) / sizeof(kSweepTicks[0]);
+    constexpr uint32_t        N = 256;
+    float x[K], y[K];
+
+    for (uint32_t k = 0; k < K; ++k) {
+        uint32_t dt = kSweepTicks[k];
+        McpwmLegRig rig;
+        rig.init(kDtTestFsw, dt, /*enLogic*/false, /*capture_ls*/true);
+        rig.leg.setHsOff(rig.leg.pwmMax / 2);
+        rig.leg.setLsOff(rig.leg.pwmMax * 3 / 4);
+        vTaskDelay(2);
+        rig.rearm();
+
+        char fail_msg[64];
+        snprintf(fail_msg, sizeof fail_msg, "Test 10: CAP ring did not fill (dt=%u)", (unsigned)dt);
+        TEST_ASSERT_TRUE_MESSAGE(wait_events(N * 4 + 8, 250, /*diag*/-1), fail_msg);
+
+        DtStats hs_to_ls, ls_to_hs;
+        analyse_deadbands(hs_to_ls, ls_to_hs);
+        TEST_ASSERT_GREATER_OR_EQUAL_UINT32(N / 2, hs_to_ls.n);
+        TEST_ASSERT_GREATER_THAN_UINT32(0, hs_to_ls.min_ticks);  // SAFETY: no shoot-through
+
+        x[k] = (float)dt * 1e9f / 160e6f;   // configured ns
+        y[k] = hs_to_ls.mean_ns();          // measured ns
+        ESP_LOGI(TAG_PWM, "Test 10 dt=%u ticks: configured=%.1f ns measured=%.1f ns (n=%u)",
+                 (unsigned)dt, x[k], y[k], (unsigned)hs_to_ls.n);
+    }
+
+    // Linear regression y = slope*x + intercept across K points
+    float sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (uint32_t k = 0; k < K; ++k) { sx += x[k]; sy += y[k]; sxx += x[k]*x[k]; sxy += x[k]*y[k]; }
+    float slope     = ((float)K * sxy - sx * sy) / ((float)K * sxx - sx * sx);
+    float intercept = (sy - slope * sx) / (float)K;
+    ESP_LOGI(TAG_PWM, "Test 10 linearity: slope=%.4f intercept=%.1f ns", slope, intercept);
+
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, 1.0f, slope);
+    TEST_ASSERT_FLOAT_WITHIN(30.0f, 0.0f, intercept);
+}
+
 // Test 5. LS forced off (diode emulation entry point).
 // Set cmpLS = cmpHS so LS gen's HIGH and LOW events coincide → LS stays low all
 // period. Verify zero LS rising edges over 100 ms (~3900 cycles).

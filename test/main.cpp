@@ -146,6 +146,7 @@ void test_mcpwm_hs_duty();
 void test_mcpwm_pwmmax_arithmetic();
 void test_mcpwm_deadband_hs_to_ls();
 void test_mcpwm_deadband_ls_to_hs();
+void test_mcpwm_deadtime_linearity();
 void test_mcpwm_ls_force_off();
 void test_mcpwm_ls_force_on();
 void test_mcpwm_d0_hs_low();
@@ -291,6 +292,7 @@ void setup() {
     RUN_TEST(test_mcpwm_hs_duty);
     RUN_TEST(test_mcpwm_deadband_hs_to_ls);
     RUN_TEST(test_mcpwm_deadband_ls_to_hs);
+    RUN_TEST(test_mcpwm_deadtime_linearity);
     RUN_TEST(test_mcpwm_ls_force_off);
     RUN_TEST(test_mcpwm_ls_force_on);
     RUN_TEST(test_mcpwm_d0_hs_low);

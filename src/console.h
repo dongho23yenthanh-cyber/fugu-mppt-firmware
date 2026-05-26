@@ -15,7 +15,6 @@ void loopUart(unsigned long nowMs);
 void loopConsole(int read(char *buf, size_t len), int write(const char *buf, size_t len), unsigned long nowMs);
 
 extern unsigned long lastTimeOutUs;
-extern bool usbConnected;
 
 
 

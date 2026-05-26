@@ -6,6 +6,10 @@
 
 #include "telemetry.h"   // getHostname
 
+// The global `scope` pointer (declared in scope.h) lives with the service that owns the scope
+// object. Was previously aliased from main.cpp, which was a layering inversion.
+Scope *scope = &scopeService.scopeObj;
+
 bool ScopeService::onStart() {
     if (!WiFi.isConnected()) return false;
     scopeObj.hostname = getHostname();

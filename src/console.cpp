@@ -6,6 +6,7 @@
 #include <hal/usb_serial_jtag_ll.h>
 #endif
 #include "util.h"
+#include "app_state.h"
 
 #include <esp_private/usb_console.h>
 
@@ -114,7 +115,7 @@ void loopUart(unsigned long nowMs) {
     // so access the uart port directly
     loopConsole(uartRead, uartWrite, nowMs);
 
-    if (usbConnected) {
+    if (g_app.usbConnected) {
         //loopConsole(esp_usb_console_read_buf, esp_usb_console_write_buf, nowMs);
         loopConsole(console_read_usb, console_write_usb, nowMs);
     }

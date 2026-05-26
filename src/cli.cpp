@@ -34,24 +34,17 @@
 
 void print_real_time_stats_1s_task(void *);
 
-// Globals owned by main.cpp that the command handlers act on. Declared extern here (rather than in
-// a shared header) because they're implementation coupling between main.cpp and this file, not a
-// public interface. Types come from the includes above, so these match main.cpp's definitions.
-extern bool manualPwm;
-#ifdef WITH_NETW
-extern bool disableWifi;
-extern uint32_t wifiReenableMs;
-#endif
+#include "app_state.h"
+
+// Components owned by main.cpp. The mode flags (g_app.manualPwm/g_app.disableWifi/g_app.wifiReenableMs/g_app.maxLoopLag
+// etc.) live in `g_app` (app_state.h); these here are the singleton components — the right
+// granularity to keep as named externs rather than bundling further.
 extern SynchronousConverter converter;
 extern MpptController mppt;
 extern ADC_Sampler adcSampler;
 extern VIinVout<const Sensor *> sensors;
 extern LedIndicator led;
 extern KeyValueStorage nvs;
-extern unsigned long maxLoopLag;
-#if CAPTURE_LOOP_DT
-extern unsigned long maxLoopDT;
-#endif
 
 #define WITH_PWM_DIAGNOSTICS 1
 
@@ -72,7 +65,7 @@ static bool s_cmdFailed = false;
 #define CMD_FAIL_RETURN(...) do { ESP_LOGW("main", __VA_ARGS__); s_cmdFailed = true; return; } while (0)
 
 static void cmdSync(cmd *c) {
-    if (!manualPwm)
+    if (!g_app.manualPwm)
         CMD_FAIL_RETURN("sync: only in manual PWM (use 'dc N' first)");
     auto arg = Command(c).getArg(0).getValue();
     auto on = arg == "on" or arg == "1";
@@ -88,7 +81,7 @@ static void cmdSync(cmd *c) {
 }
 
 static void cmdBflow(cmd *c) {
-    if (!manualPwm)
+    if (!g_app.manualPwm)
         CMD_FAIL_RETURN("bf: only in manual PWM (use 'dc N' first)");
     if (!mppt.bflow)
         CMD_FAIL_RETURN("panel switch not configured");
@@ -103,11 +96,11 @@ static void cmdBflow(cmd *c) {
 static void cmdRestart(cmd *) { systemRestart(); }
 
 static void cmdMppt(cmd *) {
-    if (!manualPwm)
+    if (!g_app.manualPwm)
         CMD_FAIL_RETURN("MPPT already enabled");
     ESP_LOGI("main", "MPPT re-enabled");
     converter.setManualRect(-1); // drop any bench LS hold
-    manualPwm = false;
+    g_app.manualPwm = false;
 }
 
 // dc <hs> [ls]  — manual PWM. With no [ls] the low side is automatic (diode emulation); with
@@ -128,14 +121,14 @@ static void cmdDc(cmd *c) {
     if (dc < 0 || dc > converter.pwmCtrlMax || v.indexOf(',') != -1)
         CMD_FAIL_RETURN("dc: out of range [0,%i]", (int) converter.pwmCtrlMax);
 
-    if (!manualPwm || converter.disabled()) {
+    if (!g_app.manualPwm || converter.disabled()) {
         ESP_LOGI("main", "Switched to manual PWM");
         if (dc != 0 && !mppt.limits.reverse_current_paranoia) {
             converter.enableSyncRect(true);
             mppt.bflow.enable(true);
         }
     }
-    manualPwm = true;
+    g_app.manualPwm = true;
     mppt.setTargetDutyCycle(dc);
 
     if (cc.countArgs() >= 2 && dc > 0) {
@@ -150,7 +143,7 @@ static void cmdDc(cmd *c) {
 
 static void cmdShortLs(cmd *) {
     if (converter.boost() && abs(sensors.Vin->ewm.avg.get()) < 0.05) {
-        manualPwm = true;
+        g_app.manualPwm = true;
         converter.shortLs();
     } else {
         CMD_FAIL_RETURN("short-ls: requires boost mode and Vin~0");
@@ -226,19 +219,19 @@ static void cmdMcpwmTest(cmd *c) {
 
 static void cmdSweep(cmd *) {
     // Sweep state advances inside mppt.update(), which loopRTNewData only calls
-    // when !manualPwm. Drop manual mode here so the sweep can actually ramp PWM.
-    if (manualPwm) {
+    // when !g_app.manualPwm. Drop manual mode here so the sweep can actually ramp PWM.
+    if (g_app.manualPwm) {
         converter.setManualRect(-1);
-        manualPwm = false;
+        g_app.manualPwm = false;
     }
     mppt.clearBackoff(); // user override: don't absorb the manual sweep into a stale trip timer
     mppt.startSweep();
 }
 
 static void cmdResetLag(cmd *) {
-    maxLoopLag = 0;
+    g_app.maxLoopLag = 0;
 #if CAPTURE_LOOP_DT
-    maxLoopDT = 0;
+    g_app.maxLoopDT = 0;
 #endif
     rtcount_print(true);
 }
@@ -248,20 +241,20 @@ static void cmdWifi(cmd *c) {
     Command cc(c);
     auto arg = cc.getArg(0).getValue();
     if (arg == "on") {
-        wifiReenableMs = 0;
-        disableWifi = false;
+        g_app.wifiReenableMs = 0;
+        g_app.disableWifi = false;
         connect_wifi_async();
     } else if (arg == "off") {
         // "off <minutes>" disables temporarily and keeps the saved ssid for reconnect;
         // bare "off" disables for good and forgets the sticky ssid.
         long mins = cc.countArgs() >= 2 ? cc.getArg(1).getValue().toInt() : 0;
         disconnect_wifi(true);
-        disableWifi = true;
+        g_app.disableWifi = true;
         if (mins > 0) {
-            wifiReenableMs = wallClockMs() + (uint32_t) mins * 60000;
+            g_app.wifiReenableMs = wallClockMs() + (uint32_t) mins * 60000;
             UART_LOG("WiFi off for %ld min", mins);
         } else {
-            wifiReenableMs = 0;
+            g_app.wifiReenableMs = 0;
             nvs.open();
             if (!nvs.readString("wifi_ssid", "").empty())
                 nvs.writeString("wifi_ssid", "");

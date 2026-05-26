@@ -25,7 +25,8 @@ extern ADC_Sampler adcSampler;
 extern VIinVout<const Sensor *> sensors;
 extern MpptController mppt;
 extern float conversionEfficiency;
-extern uint16_t loopRateMin;
+
+#include "../app_state.h"
 
 static AsyncADC<float> *createAdcInstance(const std::string &adcName, const ConfFile &boardConf,
                                           const ConfFile &sensConf, const std::string &chnDebug) {
@@ -104,7 +105,7 @@ void setupSensors(const ConfFile &boardConf, const Limits &lim) {
         throw std::runtime_error("no sensor conf");
     }
 
-    loopRateMin = sensConf.getByte("expected_hz", 0);
+    g_app.loopRateMin = sensConf.getByte("expected_hz", 0);
     conversionEfficiency = sensConf.f("power_conversion_eff", 0.95f);
     assert_throw(conversionEfficiency > 0.5f and conversionEfficiency < 1.0f, "");
 

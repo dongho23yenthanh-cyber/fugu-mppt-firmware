@@ -49,6 +49,7 @@
 #endif
 
 #include "storage/key-value.h"
+#include "app_state.h"
 
 #include <esp_task_wdt.h>
 #include <esp_pm.h>
@@ -65,7 +66,7 @@ MpptController mppt{adcSampler, sensors, converter, lcdService.lcd}; // lcd owne
 
 unsigned long loopWallClockUs_ = 0;
 
-unsigned long lastLoopTime = 0, maxLoopLag = 0;
+unsigned long lastLoopTime = 0;
 
 unsigned long timeLastSampler = 0;
 
@@ -73,31 +74,13 @@ unsigned long delayStartUntil = 0;
 
 const auto lfPeriod = 3000000; //(mppt.tracker.avgPower.get() < 1) ? 3000000 : 3000000;
 
-#if CAPTURE_LOOP_DT
-unsigned long maxLoopDT = 0;
-#endif
-
 unsigned long lastTimeOutUs = 0;
 uint32_t lastNSamples = 0;
 unsigned long lastMpptUpdateNumSamples = 0;
 
-// todo bit fields
-bool manualPwm = false;
-#ifdef WITH_NETW
-bool disableWifi = false;
-uint32_t wifiReenableMs = 0; // wallClockMs() deadline to auto re-enable WiFi (0 = never)
-#endif
-bool usbConnected = false;
-bool setupErr = false;
-
 float conversionEfficiency;
-uint16_t loopRateMin = 0;
 
-#ifdef WITH_NETW
-Scope *scope = &scopeService.scopeObj; // RT/ADC path uses this pointer; object owned by scopeService
-#else
-Scope *scope = nullptr; // RT/ADC scope publish becomes a no-op without the TCP scope service
-#endif
+AppState g_app{}; // mode flags / per-iteration max-lag bookkeeping (see app_state.h)
 
 KeyValueStorage nvs{};
 
@@ -124,7 +107,7 @@ static void logConfErr(const char *name, const std::exception &e) {
     ESP_LOGE("main", "conf %s: %s", name, e.what());
 }
 
-// Try-load a conf file. On parse error, log and (if fatal) set setupErr; return an empty ConfFile
+// Try-load a conf file. On parse error, log and (if fatal) set g_app.setupErr; return an empty ConfFile
 // so the caller can keep going with defaults instead of throwing out of setup() → reboot loop.
 // noWarnIfMissing forwards to ConfFile's flag (some confs are optional even when present).
 static ConfFile loadConfSafe(const char *path, bool fatal = true, bool noWarnIfMissing = false) {
@@ -132,7 +115,7 @@ static ConfFile loadConfSafe(const char *path, bool fatal = true, bool noWarnIfM
         return ConfFile{path, noWarnIfMissing};
     } catch (const std::exception &e) {
         logConfErr(path, e);
-        if (fatal) setupErr = true;
+        if (fatal) g_app.setupErr = true;
         return ConfFile{};
     }
 }
@@ -157,12 +140,12 @@ static void setupI2C(const ConfFile &boardConf, bool &noI2C) {
                     assertPinState(i2c_sda, true, "i2c_sda(scl_short)");
                 } catch (const std::exception &e) {
                     ESP_LOGE("main", "error %s", e.what());
-                    setupErr = true;
+                    g_app.setupErr = true;
                 }
             ESP_LOGI("main", "i2c pins SDA=%hi SCL=%hi freq=%lu", i2c_sda, boardConf.getByte("i2c_scl"), i2c_freq);
             if (!Wire.begin(i2c_sda, (uint8_t) boardConf.getLong("i2c_scl"), i2c_freq)) {
                 ESP_LOGE("main", "Failed to initialize Wire");
-                setupErr = true;
+                g_app.setupErr = true;
             }
         } else {
             ESP_LOGI("main", "no i2c_sda pin set");
@@ -180,7 +163,7 @@ static void setupI2C(const ConfFile &boardConf, bool &noI2C) {
         }
     } catch (const std::exception &ex) {
         ESP_LOGE("main", "error %s", ex.what());
-        setupErr = true;
+        g_app.setupErr = true;
     }
 }
 
@@ -190,9 +173,9 @@ static TeleConf setupNetworkAtBoot() {
     TeleConf teleConf{};
 #ifdef WITH_NETW
 #ifdef NO_WIFI
-    disableWifi = true;
+    g_app.disableWifi = true;
 #endif
-    if (!disableWifi) {
+    if (!g_app.disableWifi) {
         connect_wifi_async();
         bool res = wait_for_wifi();
         led.setHexShort(res ? 0x565 : 0x200);
@@ -210,7 +193,7 @@ static TeleConf setupNetworkAtBoot() {
     return teleConf;
 }
 
-// Sensors → converter → MPPT/tracker bring-up. Sets setupErr on any failure. Kept as one unit
+// Sensors → converter → MPPT/tracker bring-up. Sets g_app.setupErr on any failure. Kept as one unit
 // because these initializations fail-together: without sensors the converter can't run safely,
 // without coil/converter conf the PWM driver can't init.
 static void setupConverterAndMppt(const ConfFile &boardConf, const Limits &lim, const TeleConf &teleConf, bool noI2C) {
@@ -221,7 +204,7 @@ static void setupConverterAndMppt(const ConfFile &boardConf, const Limits &lim, 
         scope->addChannel(&mppt, 0, 'u', 12, "vout_filt"); // scope owned by scopeService (scope -> &scopeObj)
 #endif
 
-        if (!setupErr) {
+        if (!g_app.setupErr) {
             ConfFile coilConf{"/littlefs/conf/coil.conf"};
             ConfFile converterConf{"/littlefs/conf/converter.conf"};
             ConfFile chargerConf{"/littlefs/conf/charger.conf"};
@@ -230,14 +213,14 @@ static void setupConverterAndMppt(const ConfFile &boardConf, const Limits &lim, 
             converter.init(converterConf, boardConf, coilConf);
         }
 
-        if (!setupErr && !adcSampler.adcStates.empty()) {
+        if (!g_app.setupErr && !adcSampler.adcStates.empty()) {
             ConfFile trackerConf{"/littlefs/conf/tracker.conf", true};
             mppt.begin(trackerConf, boardConf, lim, teleConf);
         }
     } catch (const std::runtime_error &er) {
         ESP_LOGE("main", "error during sensor/converter/tracker setup: %s", er.what());
         adcSampler.adcStates.clear();
-        setupErr = true;
+        g_app.setupErr = true;
         if (!noI2C) scan_i2c();
     }
 }
@@ -283,7 +266,7 @@ void setup() {
 
     if (!mountLFS()) {
         ESP_LOGE("main", "Error mounting LittleFS partition!");
-        setupErr = true;
+        g_app.setupErr = true;
     }
 
 #ifdef WITH_SPROFILER
@@ -305,7 +288,7 @@ void setup() {
 #endif // WITH_SPROFILER
 
     // A malformed board.conf must not abort setup() (which would reboot and re-read the same bad
-    // file → boot loop). Fall back to an empty config and run the safe-idle path via setupErr.
+    // file → boot loop). Fall back to an empty config and run the safe-idle path via g_app.setupErr.
     ConfFile boardConf = loadConfSafe("/littlefs/conf/board.conf");
 
     if (!boardConf && std::filesystem::exists("/littlefs/conf")) {
@@ -317,7 +300,7 @@ void setup() {
     auto mcuStr = boardConf.getString("mcu", "");
     if (mcuStr != CONFIG_IDF_TARGET) {
         ESP_LOGE("main", "board.conf expects MCU '%s', but target is '%s'", mcuStr.c_str(), CONFIG_IDF_TARGET);
-        setupErr = true;
+        g_app.setupErr = true;
     }
 
     bool noI2C = true;
@@ -330,12 +313,12 @@ void setup() {
         lim = Limits{ConfFile{"/littlefs/conf/limits.conf"}};
     } catch (const std::runtime_error &er) {
         logConfErr("limits.conf", er);
-        setupErr = true;
+        g_app.setupErr = true;
     }
 
     setupConverterAndMppt(boardConf, lim, teleConf, noI2C);
 
-    if (!setupErr) {
+    if (!g_app.setupErr) {
         xTaskCreatePinnedToCore(loopRT, "loopRt", 4096 * 4, NULL, RT_PRIO, NULL, 1);
     } else {
         led.setHexShort(0x200);
@@ -357,7 +340,7 @@ void setup() {
 
     ESP_LOGI("main", "setup() done.");
 
-    /*manualPwm = true;
+    /*g_app.manualPwm = true;
     adcSampler.cancelCalibration();
     pwm.pwmPerturb(1327); // this can destroy the BF switch
     pwm.enableLowSide(true);
@@ -487,14 +470,14 @@ static void loopRT(void *arg) {
 
 
         auto lag = nowUs - lastLoopTime;
-        if (lastLoopTime && lag > maxLoopLag && !converter.disabled()) maxLoopLag = lag;
+        if (lastLoopTime && lag > g_app.maxLoopLag && !converter.disabled()) g_app.maxLoopLag = lag;
         lastLoopTime = nowUs;
 
 #if CAPTURE_LOOP_DT
         auto now2 = micros();
         auto loopDT = now2 - nowUs;
-        if (loopDT > maxLoopDT && !pwm.disabled())
-            maxLoopDT = loopDT;
+        if (loopDT > g_app.maxLoopDT && !pwm.disabled())
+            g_app.maxLoopDT = loopDT;
 #endif
 
         // Not need to yield or call vTaskDelay here
@@ -535,99 +518,106 @@ static void wifiShutdownIfHot(float chipTempC) {
 #endif
 }
 
+// Latency watchdog. Fires when the RT loop is producing fewer samples per second than required
+// (slow ADC, blocked path, etc.) for ~0.9 lfPeriod and trips a backoff to recover.
+static void lfWatchdog(unsigned long nowUs, uint32_t dt, uint32_t sps, uint32_t nSamples) {
+    if (!((dt > (lfPeriod * 0.9f)) && sps < g_app.loopRateMin && !converter.disabled() &&
+          nSamples > max(g_app.loopRateMin * 5, 200) &&
+          !g_app.manualPwm && lastTimeOutUs && (nowUs - adcSampler.getTimeLastCalibrationUs()) > 2000000))
+        return;
+    auto loopRunTime = (nowUs - adcSampler.getTimeLastCalibrationUs());
+    ESP_LOGE("main", "Loop latency high (%lu<%hu Hz), shutdown! (nSamples=%lu D=%u rt=%.1fs)",
+             sps, g_app.loopRateMin, nSamples, converter.getCtrlOnPwmCnt(), loopRunTime * 1e-6f);
+    stopAndBackoff(4);
+}
+
+// Low-frequency control reads (RT-adjacent, not in the ADC fast path): NTC + chip temp,
+// charger termination state, and the thermal-cap WiFi cutoff.
+static void lfControl() {
+#if CONFIG_SOC_USB_SERIAL_JTAG_SUPPORTED
+    g_app.usbConnected = usb_serial_jtag_is_connected();
+#endif
+    mppt.ntc.read();
+    mppt.ucTemp.read();
+    if (sensors.Vout)
+        mppt.charger.update(sensors.Vout->ewm.avg.get(), sensors.Iout->ewm.avg.get());
+    wifiShutdownIfHot(mppt.ucTemp.last());
+}
+
+// One-line UART/MQTT/telnet status line. WITH_MEASURE_COIL skips it during the coil sweep so the
+// measurement output isn't intermixed with the status print.
+static void lfStatusLine(uint32_t nSamples, uint32_t sps, uint32_t dt) {
+#ifdef WITH_MEASURE_COIL
+    if (!sensors.Vin || isMeasuring()) return;
+#else
+    if (!sensors.Vin) return;
+#endif
+    UART_LOG(
+        "V=%4.*f/%5.*f I=%4.*f/%5.*fA %5.1fW %.0f℃%.0f℃ %2lusps %2lu㎅/s %s(H|L|Lm)=%4hu|%4hu|%4hu"
+        " st=%5s,%i lag=%lu㎲ N=%lu rssi=%hi",
+        sensors.Vin->last >= 9.55f ? 1 : 2, sensors.Vin->last,
+        sensors.Vout->last >= 9.55f ? 2 : 2, sensors.Vout->last,
+        sensors.Iin->ewm.avg.get() >= 9.55f ? 1 : 2, sensors.Iin->ewm.avg.get(),
+        sensors.Iout->ewm.avg.get() >= 9.55f ? 2 : 2, sensors.Iout->ewm.avg.get(),
+        sensors.Vin->ewm.avg.get() * sensors.Iin->ewm.avg.get(),
+        mppt.ntc.last(), mppt.ucTemp.last(),
+        sps,
+        dt ? (uint32_t) (bytesSent * 1000llu / dt) : 0,
+        converter.inDCM() ? "DCM" : "CCM",
+        converter.getCtrlOnPwmCnt(), converter.getRectOnPwmCnt(), converter.getRectOnPwmMax(),
+        g_app.manualPwm
+            ? "MANU"
+            : (mppt.converter.disabled() && !mppt.startCondition()
+                   ? (mppt.boardPowerSupplyUnderVoltage() ? "UV" : "START")
+                   : mpptStateStr().c_str()),
+        (int) mppt.active(),
+        g_app.maxLoopLag,
+        nSamples,
+        (int16_t) wifiRssi()
+    );
+}
+
+// RGB LED color from current converter state (manual / idle / sweep / MPPT / CV / topping).
+static void lfUpdateLed(unsigned long nowUs) {
+    if (g_app.manualPwm) {
+        uint8_t i = constrain((sensors.Vout->last * sensors.Iout->last) / mppt.limits.P_max * 255, 1, 255);
+        led.setRGB(0, i, i);
+        return;
+    }
+    if (mppt.converter.disabled()) {
+        if (g_app.setupErr) { led.setHexShort(0x600); return; }
+        if (!sensors.Vin) return;
+        if (mppt.boardPowerSupplyUnderVoltage(true)) { led.setHexShort(0x100); return; }
+        if (nowUs > 60000000 * 15) led.setHexShort(0x000); // turn off light at night (protect insects)
+        else led.setHexShort(sensors.Vout->last > sensors.Vin->last ? 0x100 : 0x300);
+        return;
+    }
+    switch (mppt.getState()) {
+        case MpptControlMode::Sweep: led.setHexShort(0x303); break; // purple
+        case MpptControlMode::MPPT:
+            led.setHexShort(sensors.Iout->ewm.avg.get() > 0.2f ? 0x230 : 0x111);
+            break;
+        case MpptControlMode::CV: led.setHexShort(0x033); break;
+        default: led.setHexShort(0x310); break; // CC/CP/topping
+    }
+}
+
 void loopLF(const unsigned long &nowUs) {
     auto &nSamples(sensors.Vout ? sensors.Vout->numSamples : lastNSamples);
     auto dt = nowUs - lastTimeOutUs;
     uint32_t sps = (dt > 20000) ? (uint64_t) (nSamples - lastNSamples) * 1000000llu / dt : 0;
 
+    lfWatchdog(nowUs, dt, sps, nSamples);
+    lfControl();
+    lfStatusLine(nSamples, sps, dt);
 
-    if ((dt > (lfPeriod * 0.9f)) && sps < loopRateMin && !converter.disabled() &&
-        nSamples > max(loopRateMin * 5, 200) &&
-        !manualPwm && lastTimeOutUs && (nowUs - adcSampler.getTimeLastCalibrationUs()) > 2000000) {
-        auto loopRunTime = (nowUs - adcSampler.getTimeLastCalibrationUs());
-        ESP_LOGE("main", "Loop latency high (%lu<%hu Hz), shutdown! (nSamples=%lu D=%u rt=%.1fs)",
-                 sps, loopRateMin, nSamples, converter.getCtrlOnPwmCnt(), loopRunTime * 1e-6f);
-        stopAndBackoff(4);
-    }
-
-#if CONFIG_SOC_USB_SERIAL_JTAG_SUPPORTED
-    usbConnected = usb_serial_jtag_is_connected();
-#endif
-
-    mppt.ntc.read();
-    mppt.ucTemp.read();
-    if (sensors.Vout)
-        mppt.charger.update(sensors.Vout->ewm.avg.get(), sensors.Iout->ewm.avg.get());
-
-    wifiShutdownIfHot(mppt.ucTemp.last());
-
-#ifdef WITH_MEASURE_COIL
-    if (sensors.Vin && !isMeasuring())
-#else
-    if (sensors.Vin)
-#endif
-        UART_LOG(
-            "V=%4.*f/%5.*f I=%4.*f/%5.*fA %5.1fW %.0f℃%.0f℃ %2lusps %2lu㎅/s %s(H|L|Lm)=%4hu|%4hu|%4hu"
-            " st=%5s,%i lag=%lu㎲ N=%lu rssi=%hi",
-            sensors.Vin->last >= 9.55f ? 1 : 2, sensors.Vin->last,
-            sensors.Vout->last >= 9.55f ? 2 : 2, sensors.Vout->last,
-            sensors.Iin->ewm.avg.get() >= 9.55f ? 1 : 2, sensors.Iin->ewm.avg.get(),
-            sensors.Iout->ewm.avg.get() >= 9.55f ? 2 : 2, sensors.Iout->ewm.avg.get(),
-            sensors.Vin->ewm.avg.get() * sensors.Iin->ewm.avg.get(),
-            mppt.ntc.last(), mppt.ucTemp.last(),
-            sps,
-            dt ? (uint32_t) (bytesSent * 1000llu / dt) : 0,
-            converter.inDCM() ? "DCM" : "CCM",
-            converter.getCtrlOnPwmCnt(), converter.getRectOnPwmCnt(), converter.getRectOnPwmMax(),
-            manualPwm
-                ? "MANU"
-                : (mppt.converter.disabled() && !mppt.startCondition()
-                       ? (mppt.boardPowerSupplyUnderVoltage() ? "UV" : "START")
-                       : mpptStateStr().c_str()),
-            (int) mppt.active(),
-            maxLoopLag,
-            nSamples,
-            (int16_t) wifiRssi()
-        );
     lastNSamples = nSamples;
     bytesSent = 0;
 
     if (mppt.converter.disabled())
         mppt.meter.update(); // always update the meter
 
-    if (manualPwm) {
-        uint8_t i = constrain((sensors.Vout->last * sensors.Iout->last) / mppt.limits.P_max * 255, 1, 255);
-        led.setRGB(0, i, i);
-    } else if (mppt.converter.disabled()) {
-        if (setupErr) led.setHexShort(0x600);
-        else if (sensors.Vin) {
-            if (mppt.boardPowerSupplyUnderVoltage(true)) {
-                led.setHexShort(0x100);
-            } else {
-                if (nowUs > 60000000 * 15) led.setHexShort(0x000); // turn off light at night (protect insects)
-                else led.setHexShort(sensors.Vout->last > sensors.Vin->last ? 0x100 : 0x300);
-            }
-        }
-    } else {
-        switch (mppt.getState()) {
-            case MpptControlMode::Sweep:
-                led.setHexShort(0x303); // purple
-                break;
-            case MpptControlMode::MPPT:
-                if (sensors.Iout->ewm.avg.get() > 0.2f)
-                    led.setHexShort(0x230);
-                else
-                    led.setHexShort(0x111);
-                break;
-            case MpptControlMode::CV:
-                led.setHexShort(0x033);
-                break;
-            default:
-                // CV/CC/CP, topping
-                led.setHexShort(0x310);
-                break;
-        }
-    }
+    lfUpdateLed(nowUs);
 }
 
 static void loopRTNewData(unsigned long nowMs) {
@@ -653,18 +643,18 @@ static void loopRTNewData(unsigned long nowMs) {
     if (unlikely(adcSampler.isCalibrating())) {
         mppt.shutdownDcdc("calib", 0); // calibration must resume MPPT immediately on completion
     } else {
-        if (mppt.active() or manualPwm) {
+        if (mppt.active() or g_app.manualPwm) {
             rtcount("protect.pre");
             bool mppt_ok = true;
             if (!mppt.converter.disabled()) {
-                mppt_ok &= mppt.protect(manualPwm);
+                mppt_ok &= mppt.protect(g_app.manualPwm);
                 rtcount("protect");
-                mppt_ok &= mppt.protectLf(manualPwm);
+                mppt_ok &= mppt.protectLf(g_app.manualPwm);
                 rtcount("protectLf");
             }
             if (mppt_ok) {
                 if (haveNewSample) {
-                    if (!manualPwm) {
+                    if (!g_app.manualPwm) {
                         rtcount("mppt.update.pre");
                         mppt.update();
                         rtcount("mppt.update");
@@ -675,10 +665,10 @@ static void loopRTNewData(unsigned long nowMs) {
                 }
             } else {
                 stopAndBackoff(4);
-                if (manualPwm) mppt.setTargetDutyCycle(0); // don't re-fade after a manual-mode trip
+                if (g_app.manualPwm) mppt.setTargetDutyCycle(0); // don't re-fade after a manual-mode trip
             }
         } else if (wallClockUs() > delayStartUntil && mppt.startCondition()) {
-            if (!manualPwm) {
+            if (!g_app.manualPwm) {
                 rtcount("mppt.startSweep.pre");
                 mppt.startSweep();
                 rtcount("mppt.startSweep");
@@ -693,7 +683,7 @@ static void loopRTNewData(unsigned long nowMs) {
     }
 
 
-    if (manualPwm) {
+    if (g_app.manualPwm) {
         if (!converter.disabled())
             converter.pwmPerturb(0); // this will increase LS duty cycle if possible
     }
@@ -704,14 +694,14 @@ static void loopRTNewData(unsigned long nowMs) {
 // power/temp-gated wifiLoop, and self-healing network services on the WiFi-up edge.
 static void networkLoopTick() {
 #ifdef WITH_NETW
-    if (disableWifi && wifiReenableMs && (int32_t) (wallClockMs() - wifiReenableMs) >= 0) {
-        wifiReenableMs = 0;
-        disableWifi = false;
+    if (g_app.disableWifi && g_app.wifiReenableMs && (int32_t) (wallClockMs() - g_app.wifiReenableMs) >= 0) {
+        g_app.wifiReenableMs = 0;
+        g_app.disableWifi = false;
         UART_LOG("WiFi re-enabled after timeout");
         connect_wifi_async();
     }
 
-    if (!disableWifi) {
+    if (!g_app.disableWifi) {
         /* only connect with disabled power conversion
          * ESP32's wifi can cause latency issues otherwise
          */

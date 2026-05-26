@@ -1,4 +1,4 @@
-#include "../measure_coil.h"
+#include "measure_coil.h"
 
 #include <Arduino.h>
 #include <atomic>
@@ -10,10 +10,10 @@
 #include "../buck.h"
 #include "../mppt.h"
 #include "../adc/sampling.h"
+#include "../app_state.h"
 
-// Globals owned by main.cpp (same extern coupling as cli.cpp; this TU is built only with the real
-// main, never the test mains).
-extern bool manualPwm;
+// Components owned by main.cpp (same extern coupling as cli.cpp; this TU is built only with the
+// real main, never the test mains). Mode flags live in g_app (app_state.h).
 extern SynchronousConverter converter;
 extern MpptController mppt;
 extern VIinVout<const Sensor *> sensors;
@@ -243,7 +243,7 @@ static void measureCoilTask(void *arg) {
     if (!sensors.Vin || !sensors.Vout || !sensors.Iout) {
         UART_LOG("measure-coil: missing Vin/Vout/Iout sensor");
     } else {
-        manualPwm = true;
+        g_app.manualPwm = true;
         if (!mppt.limits.reverse_current_paranoia) {
             converter.enableSyncRect(true);
             mppt.bflow.enable(true);
@@ -255,7 +255,7 @@ static void measureCoilTask(void *arg) {
     uint32_t doneDeadline = wallClockMs() + 2000;
     while (!converter.disabled() && wallClockMs() < doneDeadline)
         vTaskDelay(pdMS_TO_TICKS(10));
-    manualPwm = false;
+    g_app.manualPwm = false;
     s_measureBusy.store(false);
     UART_LOG("measure-coil: done, MPPT restored");
     vTaskDelete(nullptr);

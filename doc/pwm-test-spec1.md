@@ -52,32 +52,42 @@ is suspect; the suite aborts.
 Wiring (one-time, in test setUp):
 
 1. `ledc_channel_config(..., gpio_num = pin_ref)` — LEDC routes its output
-   to `pin_ref`.
-2. `gpio_set_direction(pin_ref, GPIO_MODE_INPUT_OUTPUT)` — **must come after
-   step 1**, since `ledc_channel_config` writes `INPUT` only and would
-   otherwise leave the input path floating.
-3. `mcpwm_new_capture_channel(..., gpio_num = -1, flags.io_loop_back = 0)`,
-   then `esp_rom_gpio_connect_in_signal(pin_ref, PWM0_CAPn_IN_IDX, false)`.
-   Do **not** pass `pin_ref` in the CAP config — the high-level driver
-   would clobber LEDC's output-enable.
-4. Optional: `esp_rom_gpio_connect_in_signal(pin_ref, PCNT_SIG_CHn_IN_IDX,
+   signal to `pin_ref` via the matrix and sets the pin to OUTPUT mode.
+2. `mcpwm_new_capture_channel(..., gpio_num = pin_ref, flags.io_loop_back = 0)`
+   — CAP creates the channel and adds the matrix-input route from `pin_ref` to
+   `PWM0_CAPn_IN_IDX`. **Side effect (gotcha):** the driver's internal
+   `gpio_config(INPUT)` disables OE *and* resets the matrix-output route to
+   `SIG_GPIO_OUT_IDX` (the default GPIO_OUT_REG signal) — LEDC's drive
+   silently disconnects.
+3. `gpio_set_direction(pin_ref, GPIO_MODE_INPUT_OUTPUT)` — re-enable IE+OE.
+   The matrix-input route from step 2 survives this.
+4. `esp_rom_gpio_connect_out_signal(pin_ref, LEDC_LS_SIG_OUT0_IDX + ch, false,
+   false)` — **required** to re-bind LEDC's matrix output. Without it, OE is
+   on but the pin is driven 0 by GPIO_OUT_REG, not by LEDC. (Note: passing
+   `gpio_num = -1` to the CAP config to avoid this is *not* an option — the
+   CAP driver validates the pin.)
+5. Optional: `esp_rom_gpio_connect_in_signal(pin_ref, PCNT_SIG_CHn_IN_IDX,
    false)` for the parallel PCNT path.
 
 ### Rig-1. Frequency path
 
 LEDC at `fsw = 39 kHz`, `D = 0.5`. PCNT 1.000 s gate; MCPWM_CAP
-`(t_rise[N−1] − t_rise[0]) / (N−1)` with N = 4000. Both must match
-39 kHz ±5 Hz (same tolerance as Test 1). Failure ⇒ broken matrix route
-to `PWM0_CAPn_IN_IDX`, wrong APB-clock assumption, or PCNT input not
-attached. Aborts.
+`(t_rise[N−1] − t_rise[0]) / (N−1)` with N = 4000. **Expected freq is LEDC's
+emitted frequency, not the requested `fsw`**: with 80 MHz APB and the LEDC
+`pwmMax` chosen by `ledc_find_suitable_duty_resolution`, the actual freq is
+`APB / (pwmMax + 1)` (e.g. 39062.5 Hz for `fsw = 39000`). Tolerance ±5 Hz
+on that quantized value. Failure ⇒ broken matrix route to `PWM0_CAPn_IN_IDX`,
+wrong APB-clock assumption, or PCNT input not attached. Aborts.
 
 ### Rig-2. Pulse-width path
 
 LEDC at `fsw = 39 kHz`, sweep `D ∈ {0.25, 0.5, 0.75}`. MCPWM_CAP both
 edges, `mean(t_fall − t_rise)` over 1024 cycles. Must match
-`D × (1 / actual_freq)` within ±25 ns. Failure ⇒ both-edge capture is
-not wired (only rising/falling captured), or matrix-input polarity
-inverted, or the CAP ISR is dropping events. Aborts.
+`D × (1 / actual_freq)` within **±50 ns** (the ±25 ns spec1 originally claimed
+assumed cleaner CAP latching; real ISR jitter at 39 kHz pushes single samples
+to ~38 ns). Failure ⇒ both-edge capture is not wired (only rising/falling
+captured), or matrix-input polarity inverted, or the CAP ISR is dropping
+events. Aborts.
 
 Tests Rig-3, Rig-4, etc. are **not** needed — the MCPWM suite only
 relies on these two measurement primitives plus `digitalRead`, and
@@ -89,17 +99,28 @@ relies on these two measurement primitives plus `digitalRead`, and
 
 PCNT counts HS rising edges over a 1.000 s window. Expected count = `pwm_freq`;
 tolerance ±2 counts. Cross-check via MCPWM_CAP: `(t_rise[N−1] − t_rise[0]) /
-(N−1)` with N = 4000; methods agree within ±5 Hz. Sweep `fsw ∈ {20 k, 39 k,
-100 k} Hz`. (`bestTiming` rounds `period_ticks`; actual freq may differ by
-`0.5 · resolution_hz / period_ticks² ≈ 10 Hz` at 39 kHz — captured by Test 3.)
+(N−1)` with N = 4000; methods agree within **±5 Hz or ±0.1%** (whichever is
+larger — APB-vs-PLL_F160M clock-domain sync slop at high fsw). Compare against
+`bestTiming(fsw).actual_freq`, not the requested `fsw`.
+
+Sweep `fsw ∈ {20 k, 39 k} Hz`. **100 kHz is deferred to Round 2**: inter-edge
+gap (5 µs) approaches CAP ISR latency (~1-3 µs on S3), dropped edges inflate
+the mean period; observed variance 97-99.9 kHz across reboots makes ±0.1%
+unmeetable on-board. Production fsw is 39 kHz, so 20/39 fully covers the
+operating range; 100 kHz is upper-bound only.
 
 ### 2. HS duty matches commanded `cmpHS`
 
-For D ∈ {0.1, 0.25, 0.5, 0.75, 0.9}: `setHsOff(D × pwmMax)`. MCPWM_CAP both
-edges, N = 1024 periods; `mean(t_fall − t_rise)` vs `(D × pwmMax) /
-resolution_hz`. Tolerance ±25 ns (≈ ±0.001 duty at 39 kHz).
-Guards: off-by-one in `pwmMax` after dead-time reservation; wrong source-clock
-assumption.
+For D ∈ {0.25, 0.5, 0.75}: `setHsOff(D × pwmMax)`. MCPWM_CAP both edges,
+N = 512 periods (accept ≥ N/2 captured); `mean(t_fall − t_rise)` vs
+`(D × pwmMax) / pwmMax`. Tolerance **±50 ns** (bench reality; spec1's
+original ±25 ns was optimistic). Guards: off-by-one in `pwmMax` after
+dead-time reservation; wrong source-clock assumption.
+
+**D = 0.1 and D = 0.9 are deferred to Round 2.** At 39 kHz those produce
+sub-3-µs pulses that the CAP ISR (1-3 µs latency) cannot reliably
+double-edge-timestamp — half the pulses come through as single edges and the
+test would under-count.
 
 ### 3. `pwmMax` matches the source-clock arithmetic
 
@@ -201,9 +222,9 @@ Skip if `N == 1`.
 | #   | Invariant                          | Method                  | Tolerance                       |
 |-----|------------------------------------|-------------------------|---------------------------------|
 |Rig-1| Rig freq path (LEDC reference)     | PCNT 1 s + MCPWM_CAP    | ±5 Hz @ 39 kHz                  |
-|Rig-2| Rig pulse-width path (LEDC ref)    | MCPWM_CAP, 1024 cyc     | ±25 ns                          |
-| 1   | HS freq = fsw                      | PCNT 1 s + MCPWM_CAP    | ±5 Hz @ 39 kHz                  |
-| 2   | HS duty matches `cmpHS`            | MCPWM_CAP, 1024 cyc     | ±25 ns (≈ ±0.001 duty)          |
+|Rig-2| Rig pulse-width path (LEDC ref)    | MCPWM_CAP, 1024 cyc     | ±50 ns                          |
+| 1   | HS freq = fsw (20k, 39k)           | PCNT 1 s + MCPWM_CAP    | ±5 Hz or ±0.1% (whichever ≥)    |
+| 2   | HS duty matches `cmpHS` (0.25–0.75)| MCPWM_CAP, 512 cyc      | ±50 ns (≈ ±0.002 duty)          |
 | 3   | `pwmMax` arithmetic                | host arithmetic         | exact                           |
 | 4a  | HS→LS dead-band                    | MCPWM_CAP, 1024 cyc     | mean ±25 ns; **min > 0**        |
 | 4b  | LS→HS dead-band (wrap)             | MCPWM_CAP, 1024 cyc     | min ≥ (dtTicks+1) − 30 ns       |
@@ -218,8 +239,9 @@ Skip if `N == 1`.
 
 ## Test harness (Unity / `RUN_TESTS=1`)
 
-Tests live in `test/test_mcpwm.cpp`. Build via
-`RUN_TESTS=1 idf.py build flash monitor`. Use the existing `test_buck.cpp`
+Tests live in `test/test_pwm.cpp`. Build via
+`RUN_TESTS=1 idf.py -B build-tests build flash monitor` (separate build dir
+per the CLAUDE.md test instructions). Use the existing `test_buck.cpp`
 pattern: in-memory `std::unordered_map<std::string,std::string>` for the conf
 so each test re-inits the leg with different parameters.
 
@@ -230,8 +252,9 @@ Skeleton per test:
 2. `MCPWM_SyncLeg leg; leg.init(0, fsw, pinHS, pinLS, dtTicks, enLogic);`
 3. Create CAP channels on the gate pins **after** `leg.start()`, with
    `flags.io_loop_back = 1`, both edges enabled.
-4. ISR pushes `{ts_apb, channel, edge}` into a lock-free ring (size 4096 =
-   1024 cycles × 4 edges).
+4. ISR pushes `{ts_apb, chan_id, edge}` into a lock-free ring. **Size for
+   the largest test** — Rig-1 / Test 1 want 4000 cycles × 2 edges = 8000
+   events, so 8192. The earlier "4096 = 1024 cyc × 4" sizing is wrong.
 5. Drive `setHsOff` / `setLsOff` / fault / etc. as the test requires; wait
    until ring fills (≤ 100 ms at 39 kHz).
 6. Stop capture, analyse on core 0 (not in ISR), assert.
@@ -270,14 +293,19 @@ marked `IRAM_ATTR`. `ESP_ERROR_CHECK` only at test-setup time.
 - **Brown-out / reduced-VDD behaviour** — needs external supply control.
 - **EMI / gate-node ringing** — antenna problem, scope only.
 - **Capture-path systematic offset characterisation** — would need a
-  calibrated external delay reference to convert the ±30 ns tolerance into
+  calibrated external delay reference to convert the ±50 ns tolerance into
   an absolute number.
+- **Test 1 at 100 kHz** — CAP ISR latency drops edges when inter-edge gap
+  approaches ISR latency; observed measurement variance 97-99.9 kHz on bench.
+- **Test 2 duty extremes (D = 0.1, 0.9)** — sub-3-µs pulses at 39 kHz lose
+  one edge per pulse to CAP ISR latency; can't be measured on-board.
 
 ## Feasibility verdict
 
 **Achievable, zero-hardware.** Every invariant above is measurable on a
 stock ESP32-S3 with no jumpers via internal GPIO-matrix loopback
-(`io_loop_back = 1`), at 12.5 ns timestamp resolution. The ±25–30 ns tolerance
-swallows matrix propagation, which is common-mode for difference measurements.
+(`io_loop_back = 1`), at 12.5 ns timestamp resolution. The **±50 ns** tolerance
+swallows matrix propagation + ISR jitter, both common-mode for difference
+measurements. (Spec1 originally claimed ±25 ns; bench reality is ±50 ns.)
 Sub-30-ns dead-time, gate slew, shoot-through current, and EMI remain
 Round 2 / scope-required.

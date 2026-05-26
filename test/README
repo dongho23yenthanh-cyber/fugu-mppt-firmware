@@ -1,7 +1,7 @@
 On-target tests (Unity, replaces main.cpp with test/main.cpp):
 
 ```
-RUN_TESTS=1 idf.py -p /dev/tty.usb*      flash &&  idf.py -p /dev/tty.usb*      monitor
+RUN_TESTS=1 idf.py -B build-tests -p /dev/tty.usb*      flash &&  idf.py -p /dev/tty.usb*      monitor
 ```
 
 Host-side tests (clang/g++, no flash needed):

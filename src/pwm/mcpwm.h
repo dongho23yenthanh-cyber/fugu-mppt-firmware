@@ -138,6 +138,16 @@ public:
                 .flags = {.invert_output = 0},
             };
             ESP_ERROR_CHECK(mcpwm_generator_set_dead_time(genLS_, genLS_, &dt));
+            // KNOWN BUG: this dt config does not produce the expected HiLi pair on S3.
+            // Empirically (test_mcpwm_deadband_hs_to_ls / 4b in test/test_pwm.cpp),
+            // both HS and LS pins end up showing the same LS-with-rising-delay
+            // waveform. Raw-LL register experiments (toggle bits 9, 10, 15, 16, 12
+            // of dt_cfg individually) did not produce a stable {HS direct, LS-with-
+            // delay} pair. The IDF MCPWM DT module API assumes a HiLi-pair pattern
+            // where one output is derived from the other; our diode-emulation use
+            // case wants independent cmpLS control. Resolution requires either the
+            // ESP32-S3 MCPWM TRM topology diagram (S0–S7 switch network) or a
+            // patched IDF driver. See doc/pwm-test-impl-plan.md §M4.
             pwmMax = (uint16_t) (t.period_ticks - dtTicks);   // reserves the LS->HS dead-band
         }
     }
@@ -162,6 +172,23 @@ public:
     }
     // Note: clearing a latched OST brake requires the originating fault handle;
     // call MCPWM_FaultBrake::recover(leg.oper()) on the brake that bound this leg.
+
+    // Reverse-order teardown so the MCPWM group resource counts return to zero —
+    // tests need to re-init multiple times. Production builds with a single global
+    // leg never run this.
+    ~MCPWM_SyncLeg() {
+        if (timer_) mcpwm_timer_start_stop(timer_, MCPWM_TIMER_STOP_EMPTY);
+        if (timer_) mcpwm_timer_disable(timer_);
+        if (genHS_) mcpwm_del_generator(genHS_);
+        if (genLS_) mcpwm_del_generator(genLS_);
+        if (cmpHS_) mcpwm_del_comparator(cmpHS_);
+        if (cmpLS_) mcpwm_del_comparator(cmpLS_);
+        if (oper_)  mcpwm_del_operator(oper_);
+        if (timer_) mcpwm_del_timer(timer_);
+    }
+    MCPWM_SyncLeg() = default;
+    MCPWM_SyncLeg(const MCPWM_SyncLeg&) = delete;
+    MCPWM_SyncLeg& operator=(const MCPWM_SyncLeg&) = delete;
 };
 
 // N interleaved synchronous legs, timers phase-shifted by period/N, one shared fault.

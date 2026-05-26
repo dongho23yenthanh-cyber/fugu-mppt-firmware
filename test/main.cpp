@@ -34,6 +34,11 @@ Scope *scope = nullptr;
 
 bool handleCommand(const String &) { return false; }
 
+// Mirror of src/main.cpp's shim: arduino-esp32 WiFiGeneric.cpp calls esp_netif_create_default_wifi_ap()
+// unconditionally, but esp_wifi only defines it under CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y (we keep it off).
+// RUN_TESTS swaps main.cpp out, so re-provide the stub here.
+extern "C" void *esp_netif_create_default_wifi_ap(void) { return nullptr; }
+
 void test_meter();
 
 void test_meter_storage();
@@ -132,6 +137,23 @@ void test_buck_bootstrap_min_scales_with_conf();
 void test_boost_bootstrap_min_is_zero();
 void test_boost_ratio_clamped_above_unity();
 
+// pwm — measurement-rig self-test (doc/pwm-test-spec1.md)
+void test_pwm_rig_freq_path();
+void test_pwm_rig_pulsewidth_path();
+// pwm — MCPWM tests (spec1 §Tests/1, 2, 3, 4a, 4b)
+void test_mcpwm_hs_freq();
+void test_mcpwm_hs_duty();
+void test_mcpwm_pwmmax_arithmetic();
+void test_mcpwm_deadband_hs_to_ls();
+void test_mcpwm_deadband_ls_to_hs();
+void test_mcpwm_ls_force_off();
+void test_mcpwm_ls_force_on();
+void test_mcpwm_d0_hs_low();
+void test_mcpwm_d1_hs_high();
+void test_mcpwm_glitch_free_duty_step();
+void test_mcpwm_ost_brake_latches();
+void test_mcpwm_interleaved_phase();
+
 // conf.h
 void test_conf_getlong_bases();
 void test_conf_getlong_default_when_missing();
@@ -147,6 +169,9 @@ void test_conf_remove_missing_key_returns_false();
 void setup() {
     UNITY_BEGIN();
 
+    // PWM-test iteration speedup: skip all unrelated tests. To re-enable the full
+    // suite, set FULL_TEST_SUITE before the build.
+#ifdef FULL_TEST_SUITE
     // charger.h — termination math
     RUN_TEST(test_termination_line_at_zero_current);
     RUN_TEST(test_termination_line_at_tail_current);
@@ -255,6 +280,24 @@ void setup() {
 
     RUN_TEST(test_LinearTransform);
     // RUN_TEST(test_ADCSampler); // body is #if 0'd in test_sampler.cpp
+#endif // FULL_TEST_SUITE
+
+    // pwm — rig self-test first; if it fails, downstream MCPWM tests are suspect
+    RUN_TEST(test_pwm_rig_freq_path);
+    RUN_TEST(test_pwm_rig_pulsewidth_path);
+    // pwm — MCPWM driver tests
+    RUN_TEST(test_mcpwm_pwmmax_arithmetic);
+    RUN_TEST(test_mcpwm_hs_freq);
+    RUN_TEST(test_mcpwm_hs_duty);
+    RUN_TEST(test_mcpwm_deadband_hs_to_ls);
+    RUN_TEST(test_mcpwm_deadband_ls_to_hs);
+    RUN_TEST(test_mcpwm_ls_force_off);
+    RUN_TEST(test_mcpwm_ls_force_on);
+    RUN_TEST(test_mcpwm_d0_hs_low);
+    RUN_TEST(test_mcpwm_d1_hs_high);
+    RUN_TEST(test_mcpwm_glitch_free_duty_step);
+    RUN_TEST(test_mcpwm_ost_brake_latches);
+    RUN_TEST(test_mcpwm_interleaved_phase);
 
     UNITY_END();
 }

@@ -113,45 +113,58 @@ Tests live in code as `TEST_IGNORE` with a comment. Test infra (second
 `CapChan` on LS pin, `analyse_deadbands` 4-event state machine, dt rebind
 helpers in `McpwmLegRig`) is all in place and ready to re-enable.
 
-**Blocker — IDF MCPWM dt-module API can't express our pattern.** Our HiLi
-design wants: HS pin follows HS gen actions (HIGH at TEZ, LOW at cmpHS),
-LS pin follows LS gen actions (HIGH at cmpHS, LOW at cmpLS) with a posedge
-delay on LS rising. `MCPWM_SyncLeg::init` calls `mcpwm_generator_set_dead_time
-(genLS_, genLS_, {posedge=dt})` to set this up.
+**Blocker — IDF MCPWM dt-module bit semantics don't match the TRM struct
+field names we tried.** Our HiLi design wants: HS pin follows HS gen actions
+(HIGH at TEZ, LOW at cmpHS), LS pin follows LS gen actions (HIGH at cmpHS,
+LOW at cmpLS) with a posedge delay on LS rising. `MCPWM_SyncLeg::init` calls
+`mcpwm_generator_set_dead_time(genLS_, genLS_, {posedge=dt})` to set this up.
 
 Empirically (verified on bench via Test 4a's diagnostic dump): both HS and
-LS pins show the **same** waveform — the LS on-time pulse (`cmpLS−cmpHS−dt`).
-HS comparator updates also stop having any visible effect once dt is configured.
+LS pins show the **same** waveform — the LS-with-rising-delay pulse. HS
+comparator updates have no visible effect on either pin once dt is configured.
 
-Root cause traced into IDF `mcpwm_gen.c::mcpwm_generator_set_dead_time` and
-`mcpwm_ll.h`. The DT module's "output A bypass" / "output B bypass" /
-"swap" / "RED input gen" / "FED input gen" registers can't be set independently
-through the high-level API: calling `set_dead_time(LS, LS, {posedge=dt})`
-un-bypasses path 0 (= output A bypass bit), so HS pin starts seeing the
-RED-path output (= LS signal) instead of HS direct. Any subsequent
-`set_dead_time(HS, HS, {bypass})` overwrites the RED bypass bit again,
-breaking LS. The bits are shared between the two output paths in IDF 5.5.
+### Raw-LL register experiments (all failed)
 
-Paths forward (pick one when this becomes priority):
+Starting state after `mcpwm_generator_set_dead_time(genLS_, genLS_,
+{posedge=dt})`: `dt_cfg = 0x00030c00` (bits 10, 11, 16, 17 set). Toggled
+individual bits via direct `PWM0.operators[op_id].dt_cfg.val` writes
+between init and capture:
 
-1. **Raw LL register write** — call `mcpwm_ll_deadtime_bypass_path(hal->dev,
-   op_id, 0, true)` *after* the LS dt config, but the `mcpwm_dev_t*` isn't
-   exposed by the operator handle; need either an IDF-internal include or
-   direct `DR_REG_PWM0_BASE` register write. Smallest fix, most fragile.
-2. **Switch to pure HiLi mode** — use `set_dead_time(HS, LS, {posedge=dt,
+| Bit | TRM name (guess)      | Result on HS pin       | Result on LS pin       |
+|-----|-----------------------|------------------------|------------------------|
+| 9   | `dt_a_outswap`        | LS-gen-direct (no dt)  | LS-with-delay (correct)|
+| 12  | `dt_fed_insel` (+9)   | unchanged from bit-9   | unchanged              |
+| 15  | `dt_a_outbypass`      | HS-gen-direct          | HS-gen-direct          |
+| 16  | `dt_red_outbypass`    | (already set, no Δ)    | (already set, no Δ)    |
+| 10  | `dt_b_outbypass`      | (already set, no Δ)    | (already set, no Δ)    |
+
+None produced `{HS gen direct on pin A, LS gen with rising delay on pin B}`.
+The IDF struct field labels in `soc/mcpwm_struct.h` and `hal/mcpwm_ll.h`
+seem not to match the actual hardware function — likely an S0-S7 switch
+network where each bit selects a node in a routing tree, not an independent
+per-path enable.
+
+### Paths forward
+
+1. **Get the ESP32-S3 MCPWM TRM dead-time submodule diagram** (the S0–S7
+   switch topology). Without it, bit-bashing is a coin flip. Espressif's
+   public TRM (UM v1.x) doesn't include the full DT-module schematic — may
+   need an internal Espressif doc or a support ticket.
+2. **Switch to pure HiLi mode** — `set_dead_time(HS, LS, {posedge=dt,
    invert_output=1})`. LS becomes the inverted HS with delayed rising;
    `cmpLS` becomes unusable. Breaks `src/buck.h`'s diode-emulation pattern
    (it shortens `cmpLS` to disable sync rect).
-3. **Drop IDF mcpwm_dt entirely**, do dt in software by adding a third
-   comparator or shifting cmp values. Each operator only has 2 cmps so
-   doesn't fit without bigger redesign.
-4. **Fix IDF upstream** — patch `mcpwm_gen.c` so per-output bypass bits are
-   tracked independently. Clean solution, slow.
+3. **Drop IDF mcpwm_dt entirely**, do dt in software by shifting cmp values.
+   Each operator only has 2 cmps, so this needs either a third comparator
+   (unavailable) or a buck-driver redesign.
+4. **Fix IDF upstream** — likely the cleanest, but requires either the TRM
+   diagram or reverse-engineering bench experiments more systematically.
 
 **Not blocking real silicon.** Production firmware uses LEDC (no
 `WITH_MCPWM` env var by default); the MCPWM driver is still in development.
 This bug is exactly the kind of thing the test suite is supposed to catch
-*before* the driver swap goes live.
+*before* the driver swap goes live. See the explanatory comment block in
+`src/pwm/mcpwm.h::MCPWM_SyncLeg::init` next to the `set_dead_time` call.
 
 ## M5 — Tests 5, 6 (LS forced off / on)  ✓ DONE (2026-05-26)
 

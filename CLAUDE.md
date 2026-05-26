@@ -62,7 +62,7 @@ Unit tests live under `test/` and reuse the same firmware build, swapping `main.
 `main/CMakeLists.txt`:
 
 ```bash
-RUN_TESTS=1 idf.py build flash monitor
+RUN_TESTS=1 idf.py -B build-tests build flash monitor
 ```
 
 To swap in a single alternate entry point without touching CMakeLists:

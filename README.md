@@ -106,6 +106,7 @@ Other build env vars (prefix-style shown below is bash/zsh; on Windows use `set 
 or `$env:VAR="value"; idf.py build` in PowerShell):
 
 * `RUN_TESTS=1` swaps `src/main.cpp` for `test/main.cpp` and the Unity test sources (see `main/CMakeLists.txt`).
+  * build the tests in another build directory: `RUN_TESTS=1 idf.py -B build-tests build flash monitor`
 * `MAIN_SRC=path/to/entry.cpp` swaps in a single alternate entry point without touching CMake (e.g. `MAIN_SRC=../test/test_buck.cpp idf.py build`).
 * `FUGU_BAT_V=14.25|28.5|57` hardcodes the battery max voltage at build time. Leave unset to read it from `charger.conf` at runtime.
 

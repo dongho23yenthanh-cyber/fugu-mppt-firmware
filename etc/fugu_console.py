@@ -7,8 +7,9 @@ walks every console command in a meaningful order — read-only diagnostics, con
 service ops, then the converter/PWM commands that move power — and reports PASS/FAIL/SKIP), or —
 given a transport but no mode flag — an interactive REPL (the default). With *no arguments at all*
 it scans every transport for reachable devices (serial port globs, mDNS scope/telnet hosts, the
-NAT-forwarded telnet endpoints in `nat.env`, BLE NUS, and — when `$MQTT_HOST` is set — hostnames
-seen on the broker's `pv/log/`) and prints what to pass to connect, without connecting. The transport and the line-console mechanics live in
+NAT-forwarded telnet endpoints in `nat.env`, local BLE NUS, BLE NUS seen through the ESPHome
+bluetooth_proxy in `$BLE_PROXY`, and — when `$MQTT_HOST` is set — hostnames seen on the broker's
+`pv/log/`) and prints what to pass to connect, without connecting. The transport and the line-console mechanics live in
 the `fugu` package (`fugu.transport`, `fugu.console.Console`); this file is the CLI and the plan.
 Defaults to serial; `--ble`/`--ip` select BLE or TCP/telnet, `--ble-proxy HOST` reaches BLE NUS
 through an ESPHome bluetooth_proxy (plaintext API, no noise encryption).
@@ -260,24 +261,73 @@ def scan_mqtt(timeout=5.0):
     return sorted(hosts)
 
 
+def scan_ble_proxy(timeout=8.0):
+    """BLE NUS devices seen through the ESPHome bluetooth_proxy in `$BLE_PROXY` (host[:port]).
+
+    Filled from `nat.env` beside this script. Connects to the proxy over the plaintext native API,
+    collects raw advertisements, and returns a list of (name, mac, address_type) for every NUS
+    peripheral in range. None when no `$BLE_PROXY` is set or `aioesphomeapi` isn't installed.
+    """
+    if not os.environ.get("BLE_PROXY"):
+        load_env_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), "nat.env"))  # BLE_PROXY
+    proxy = os.environ.get("BLE_PROXY")
+    if not proxy:
+        return None
+    try:
+        from aioesphomeapi import APIClient
+    except ImportError:
+        return None
+    host, _, port = proxy.partition(":")
+    port = int(port) if port else EspHomeBleTransport.API_PORT
+
+    def mac(a):
+        return ":".join(f"{(a >> (8 * i)) & 0xff:02x}" for i in reversed(range(6)))
+
+    async def _scan():
+        cli = APIClient(host, port, None)  # plaintext, no noise PSK
+        try:
+            await cli.connect(login=True)
+        except Exception as e:
+            print(f"  (ble-proxy {proxy}: {e})")
+            return []
+        found = {}
+
+        def on_raw(resp):
+            for a in resp.advertisements:
+                name, uuids = EspHomeBleTransport._parse_adv(bytes(a.data))
+                if EspHomeBleTransport.NUS_SERVICE in uuids:
+                    found[a.address] = (name, a.address_type)
+
+        unsub = cli.subscribe_bluetooth_le_raw_advertisements(on_raw)
+        try:
+            await asyncio.sleep(timeout)
+        finally:
+            unsub()
+            await cli.disconnect()
+        return [(n or "?", mac(a), at) for a, (n, at) in sorted(found.items())]
+
+    return asyncio.run(_scan())
+
+
 def discover_devices():
     """Scan every transport for reachable Fugu devices and print what to pass to connect.
 
-    The scans block for different durations (serial is instant, mDNS ~2 s, BLE/MQTT ~5 s), so
-    run them concurrently and join — total time is the slowest scan, not their sum.
+    The scans block for different durations (serial is instant, mDNS ~2 s, BLE/MQTT/proxy ~5-8 s),
+    so run them concurrently and join — total time is the slowest scan, not their sum.
     """
     from concurrent.futures import ThreadPoolExecutor
     print("scanning for Fugu devices on all transports …\n")
 
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         f_serial = ex.submit(scan_serial)
         f_telnet = ex.submit(scan_telnet)
         f_ble = ex.submit(scan_ble)
         f_mqtt = ex.submit(scan_mqtt)
         f_nat = ex.submit(scan_nat)
-        ports, hosts, devs, mqtt_hosts, nat = (
+        f_bleproxy = ex.submit(scan_ble_proxy)
+        ports, hosts, devs, mqtt_hosts, nat, proxy_devs = (
             f_serial.result(), f_telnet.result(), f_ble.result(), f_mqtt.result(),
-            f_nat.result())
+            f_nat.result(), f_bleproxy.result())
 
     print("serial:")
     for p in ports:
@@ -311,6 +361,16 @@ def discover_devices():
         for name, address in devs:
             print(f"  {name:<24} {address}  →  --ble --address {address}")
         if not devs:
+            print("  (none)")
+
+    print("\nBLE via ESPHome proxy ($BLE_PROXY):")
+    if proxy_devs is None:
+        print("  (skipped — set $BLE_PROXY in nat.env, and `pip install aioesphomeapi`)")
+    else:
+        proxy = os.environ.get("BLE_PROXY")
+        for name, address, _atype in proxy_devs:
+            print(f"  {name:<24} {address}  →  --ble-proxy {proxy} --address {address}")
+        if not proxy_devs:
             print("  (none)")
 
     print("\nMQTT (pv/log):")

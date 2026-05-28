@@ -36,9 +36,25 @@ NAT router), sends `ota <url>` to each, then prints a before/after version table
 - `-f` / `--force` — push even if the device already reports the local build's version.
 
 **Always `-n` first, and `-m <name>` to target, before OTAing `fry`/`flat`** — they're live converters and an OTA
-reboots them into the new image. Rollback (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`) + the `setup()` boot watchdog only
-auto-revert a bad image if the device is running a bootloader built with rollback (an app-only OTA keeps the old
-bootloader); confirm versions in the after-table.
+reboots them into the new image. Confirm versions in the after-table.
+
+**OTA safety net (rollback + boot watchdog).** `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y` makes a freshly-OTA'd image
+boot as `ESP_OTA_IMG_PENDING_VERIFY`. The app must confirm itself or the bootloader reverts to the previous slot on the
+next reset:
+
+- `lfMarkOtaValid()` (`main.cpp`, from `loopLF`) calls `esp_ota_mark_app_valid_cancel_rollback()` **only once the RT loop
+  is proven healthy** (>20 s uptime + sampler producing samples). A directly-flashed image (state `UNDEFINED`, not
+  `PENDING_VERIFY`) is left alone — the confirm is a no-op there.
+- A one-shot `esp_timer` **boot watchdog** armed at the top of `setup()` (30 s) `esp_restart()`s if `setup()` never
+  finishes. With rollback, that reboot then lands on the previous good slot. (The Task-WDT can't cover `setup()`: it
+  watches idle, which a yielding hang keeps feeding, and `loopRT` — the only WDT-coupled task — doesn't exist yet.)
+
+**Caveat that bit us:** rollback is a *bootloader* feature, and an OTA only writes the app — so a device that last got
+the rollback bootloader via **serial** is protected, but one that's only ever been app-OTA'd keeps its old (pre-rollback)
+bootloader and will **brick, not revert**, on a bad image. To put rollback on a converter, do a full **serial** flash
+(bootloader + app, omitting littlefs to keep its config) once; OTAs after that self-revert. A bricked device (hung in
+`setup()` before WiFi/services) can only be recovered by serial — see [doc/dev-notes/Real-Time Latency.md] for the
+boot-time stack/cache traps that cause such hangs.
 
 ## Provisioning (board configs)
 

@@ -1,5 +1,6 @@
 #include "logging.h"
 
+#include <cstring>
 #include <ESPTelnet.h>
 #include <freertos/FreeRTOS.h>
 
@@ -36,6 +37,27 @@ static LogCallback logCallbacks[kMaxLogCallbacks] = {};
 static int logCallbackCount = 0;
 static portMUX_TYPE logCbMux = portMUX_INITIALIZER_UNLOCKED;
 
+// Boot-log backlog: captures early log lines (before any remote sink exists) so the first sink to
+// attach — typically MQTT, which can't connect until WiFi is up, well after setup() logs — gets the
+// boot sequence replayed. Closes on first attach (or when full); guarded by logCbMux. mqtt-tagged
+// lines are skipped so the one-shot replay isn't dropped by mqttLogCallback's ") mqtt:" filter.
+static char s_bootLog[8192];
+static size_t s_bootLogLen = 0;
+static bool s_bootLogOpen = true;
+
+static void bootLogCapture(const char *str, int len) {
+    if (!s_bootLogOpen || len <= 0) return;
+    if (strnstr(str, ") mqtt:", len)) return;
+    portENTER_CRITICAL(&logCbMux);
+    if (s_bootLogOpen) {
+        size_t room = sizeof(s_bootLog) - s_bootLogLen;
+        if ((size_t) len > room) { len = (int) room; s_bootLogOpen = false; } // fill remainder, then close
+        memcpy(s_bootLog + s_bootLogLen, str, len);
+        s_bootLogLen += len;
+    }
+    portEXIT_CRITICAL(&logCbMux);
+}
+
 // Copy the sink table into `out` (must hold kMaxLogCallbacks) under the lock; returns the count.
 static int snapshotLogCallbacks(LogCallback *out) {
     portENTER_CRITICAL(&logCbMux);
@@ -56,6 +78,7 @@ void loggingEnableDefer() {
 void addLogCallback(LogCallback callback) {
     if (!callback) return;
     bool full = false;
+    size_t replayLen = 0;
     portENTER_CRITICAL(&logCbMux);
     bool dup = false;
     for (int i = 0; i < logCallbackCount; ++i)
@@ -64,8 +87,12 @@ void addLogCallback(LogCallback callback) {
         if (logCallbackCount >= kMaxLogCallbacks) full = true;
         else logCallbacks[logCallbackCount++] = callback;
     }
+    if (!dup && !full) { replayLen = s_bootLogLen; s_bootLogOpen = false; } // freeze backlog, replay below
     portEXIT_CRITICAL(&logCbMux);
     if (full) ESP_LOGW("log", "log callback table full, dropping"); // log outside the lock
+    // Replay the captured boot backlog to the freshly-attached sink (outside the lock; capture is
+    // frozen so s_bootLog is stable). One call = one message for MQTT.
+    if (replayLen) callback(s_bootLog, (uint16_t) replayLen);
 }
 
 void removeLogCallback(LogCallback callback) {
@@ -214,6 +241,8 @@ void flush_async_uart_log() {
         int n = snapshotLogCallbacks(cbs);
         for (int i = 0; i < n; ++i) cbs[i](entry.str, entry.len);
 
+        bootLogCapture(entry.str, entry.len);
+
         delete[] entry.str;
     }
 }
@@ -229,7 +258,7 @@ static int vprintf_mux(const char *fmt, va_list argptr) {
 
     int r = old_vprintf(fmt, argptr);
 
-    if (log_telnet or logCallbackCount) {
+    if (log_telnet or logCallbackCount or s_bootLogOpen) {
         va_list ap2;            // argptr is spent by old_vprintf; the mirror needs its own copy
         va_copy(ap2, argptr);
         int l = vsnprintf(loc_buf, sizeof(loc_buf), fmt, ap2);
@@ -252,6 +281,7 @@ static int vprintf_mux(const char *fmt, va_list argptr) {
             LogCallback cbs[kMaxLogCallbacks];
             int n = snapshotLogCallbacks(cbs);
             for (int i = 0; i < n; ++i) cbs[i](buf, l);
+            bootLogCapture(buf, l);
             if (buf != loc_buf) free(buf);
         }
     }
@@ -261,9 +291,11 @@ static int vprintf_mux(const char *fmt, va_list argptr) {
 
 
 static int vprintf_(const char *fmt, va_list argptr) {
-    // xPortCanYield() returns true in critical sections and ISR (where print is not allowed)
-    if ((xPortGetCoreID() == 1 && deferLogs) || !xPortCanYield()) {
-        // RT core1: defer all log to core0
+    // Defer to the core0 flush only FROM core1 (the RT core, or when it can't yield — critical
+    // section/ISR). enqueue_log() asserts core1, so core0 must always take the synchronous
+    // vprintf_mux path; this also makes it safe to route esp_log here from the very start of setup()
+    // (so boot-log capture sees the setup() body). core1 behaviour is unchanged.
+    if (xPortGetCoreID() == 1 && (deferLogs || !xPortCanYield())) {
         return enqueue_log(fmt, 200, argptr);
     } else {
         return vprintf_mux(fmt, argptr);

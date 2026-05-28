@@ -370,6 +370,12 @@ static void lfMarkOtaValid() {
 
 void setup() {
     consoleInit();
+#ifdef WITH_NETW
+    // Route esp_log through vprintf_mux from the very start of setup() so the boot-log backlog
+    // captures the whole setup() body (replayed to MQTT once it connects). vprintf_mux writes UART
+    // synchronously first, so an abort during setup still reaches the console.
+    enable_esp_log_to_telnet();
+#endif
     setupCli();
     ESP_LOGI("main", "*** %s", format_version());
     bootWatchdogArm();
@@ -444,12 +450,6 @@ void setup() {
     }
 
     registerServices();
-
-    // this will defer all logs, if abort() is called during setup we might never see relevant messages
-    // so calls this after everything else has been set up
-#ifdef WITH_NETW
-    enable_esp_log_to_telnet();
-#endif
 
 #if CONFIG_HEAP_POISONING_COMPREHENSIVE
     ESP_LOGW("main", "HEAP_POISONING=COMPREHENSIVE: every alloc has head/tail canaries + fill, expect 5-10%% perf hit and ~16B/alloc RAM cost. Debug-only.");

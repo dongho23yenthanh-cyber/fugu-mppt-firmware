@@ -250,7 +250,6 @@ adc.update.hasData             178154655 1056389751      5    536 83190215
 adc.update                     178154655 255527731      1    530 156025232
 
 
-
 rtcount_print :
 key                                  num       tot   mean    max maxNum
 protect                        720495257 1193071824      1  38146 115103855
@@ -383,3 +382,6 @@ CONFIG_ARDUINO_SERIAL_EVENT_RUN_CORE0=y
 CONFIG_ARDUINO_UDP_RUNNING_CORE=0
 CONFIG_ARDUINO_UDP_RUN_CORE0=y
 ```
+
+
+LLM > Do an ISR audit on RT performance/r

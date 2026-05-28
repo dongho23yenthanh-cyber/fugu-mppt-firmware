@@ -37,5 +37,6 @@
     <mapping directory="$PROJECT_DIR$/components/SimpleFTPServer/SimpleFTPServer" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/components/esp32-semihosting-profiler/esp32-semihosting-profiler" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/etc/fugu" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/test/host-stub/arduino-shim" vcs="Git" />
   </component>
 </project>

@@ -1,5 +1,34 @@
 # todo
 
+❯ is there any advertising ble protocol to publish bms data?
+
+⏺ Yes — a few options, with one obvious winner for your HA context: 
+BTHome v2 (https://bthome.io) — the de-facto open standard for BLE-advertised sensor data, natively supported by Home Assistant without any custom integration. Encodes
+typed measurements in the BLE Service Data field (UUID 0xFCD2). Already has all the fields you'd want for BMS publishing: voltage, current, power, energy, temperature,
+battery %, and even packet/sequence counters. ESPHome has a bthome component, and Shelly/Xiaomi/etc. devices use it. This is what I'd reach for.
+
+Other options, less appealing:
+- Eddystone-TLM — Google beacon format with battery voltage + temperature telemetry. Deprecated and only carries those two scalars.
+- Victron Instant Readout — proprietary (but reverse-engineered) manufacturer-data format used by their SmartShunt / BMV / SmartSolar. HA has victron_ble. Real-world
+  precedent that a BMS-class device can broadcast all live data this way, but it's their namespace.
+- Ruuvi RAWv2 — sensor-tag format, includes battery voltage, but the schema is fixed and not really meant for BMS.
+- Bluetooth SIG Battery Service (0x180F) — GATT only, single byte (%), not advertising.
+
+For batmon-ha specifically, the natural shape would be: optional "publisher" mode that re-emits decoded BMS readings as BTHome advertisements (would need a BLE
+peripheral-capable adapter and bluez peripheral role, which is the catch on HA OS hosts). Want me to sketch what that'd look like?
+
+✻ Baked for 22s
+
+❯ is bthome also suitable for mppt chargers?
+
+⏺ Mostly yes, with caveats. The numeric telemetry maps cleanly — PV voltage/current/power, battery voltage/current, charge power, daily/total energy (Wh, kWh), temperature,
+all native BTHome v2 types. You can repeat the same measurement type within one packet (BTHome distinguishes by order), so two voltages / two currents / two energy counters
+works.
+
+
+
+
+
 and can your review the sdkconfig situation? it is not drifting anymore. take a look at the other sdkconfig.* files. i want everything
 to work on esp32 and esp32s3 target and with all the WITH_* build flags. any file updates needed? should we remove the sdkconfig from git?
 

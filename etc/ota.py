@@ -20,6 +20,8 @@ fallback_hosts = [
 idf.py build
 
 """""
+import sys
+sys.path.insert(0, ".")
 import argparse
 import asyncio
 import atexit

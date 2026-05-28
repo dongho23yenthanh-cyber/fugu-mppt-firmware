@@ -157,9 +157,14 @@ field units after an OTA. The correct way to run it on RT_CORE is a **short-live
 RT_CORE** that calls `gpio_install_isr_service()` and notifies setup() when done — the `ipc` worker
 stays free, the nested IPC completes, and the ISR lands on RT_CORE.
 
-**IRAM:** the service is installed with `ESP_INTR_FLAG_IRAM`, so every per-pin handler added to it
-must be IRAM-safe (`ina226_alert` is `IRAM_ATTR`). Verify any new alert handler is too, or drop the
-flag.
+**IRAM — do NOT install with `ESP_INTR_FLAG_IRAM`.** `attachInterrupt()` registers arduino-esp32's
+`__onPinInterrupt` dispatcher, which lives in flash (not IRAM). An IRAM-installed service keeps firing
+while the flash cache is disabled — i.e. during *any* flash write (coulomb/stats persist, config
+save, OTA) — and then jumps into that cached dispatcher, panicking with `Cache disabled but cached
+memory region accessed` (seen on fry the instant a flash op coincided with an INA226 alert; the
+mock-ADC bench never hits it because it has no `attachInterrupt`). Install with flags `0` instead: the
+alert is simply masked for the brief cache-off window. RT_CORE affinity comes from the installing
+task, independent of the flag, so latency in normal (cache-enabled) operation is unchanged.
 
 This couples to the loop-latency shutdowns seen on fry/flat: when INA226 alert edges are missed/late
 the RT sampler starves and the latency watchdog trips `stopAndBackoff`. Lower, deterministic wake

@@ -251,7 +251,13 @@ struct GpioIsrInstallCtx {
 // IPC completes, and the GPIO ISR lands on RT_CORE.
 static void installGpioIsrTask(void *arg) {
     auto *ctx = (GpioIsrInstallCtx *) arg;
-    ctx->r = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+    // flags=0, NOT ESP_INTR_FLAG_IRAM: attachInterrupt registers arduino-esp32's __onPinInterrupt
+    // dispatcher, which lives in flash. An IRAM-installed service keeps firing while the flash cache
+    // is disabled (any flash write — coulomb/stats persist, config save, OTA) and then jumps into
+    // that cached handler → "Cache disabled but cached memory region accessed" panic. Non-IRAM masks
+    // the alert for the brief cache-off window instead. RT_CORE affinity comes from this task, not
+    // the flag.
+    ctx->r = gpio_install_isr_service(0);
     xTaskNotifyGive(ctx->caller);
     vTaskDelete(nullptr);
 }

@@ -543,6 +543,24 @@ static void cmdIset(cmd *c) {
         CMD_FAIL_RETURN("iset: out of range [0,999]");
 }
 
+// status  — charger/battery snapshot: termination state, effective limits, termination line and BMS feed.
+static void cmdStatus(cmd *) {
+    auto &chg = mppt.charger;
+    const auto &p = chg.params;
+    auto &bs = chg.batSt;
+    bool vcOk = bs.haveValidCellVoltage();
+    unsigned long ageS = bs.vcell_high > 0 ? (wallClockUs() - bs.vcell_high_t) / 1000000UL : 0;
+
+    UART_LOG("Charger: %s", (bool) chg.termCond ? "TERMINATED (float)" : "charging");
+    UART_LOG("  Vbat_max=%.2fV Vout_max=%.2fV  Ibat_lim=%.1fA Iout_max=%.1fA",
+             p.Vbat_max, chg.Vout_max(), p.Ibat_lim, chg.Iout_max());
+    UART_LOG("  v_term=%.3fV cv_min=%.3f cv_eoc=%.3f  Cbat=%.1fAh recharge_dod=%.2f",
+             chg.termCond.v_term(), p.cv_min, p.cv_eoc, p.Cbat, p.recharge_dod);
+    UART_LOG("  BMS vcell_high=%.3fV (%s, %lus ago)  ibat=%.2fA  ahSinceFull=%.2fAh  vout_avg=%.2fV",
+             bs.vcell_high, vcOk ? "ok" : "stale/na", ageS,
+             bs.ibatSmoothed(), bs.coulombCounter.ahSinceFull(), bs.vout_avg.get());
+}
+
 // svc [list]                       svc on|off|restart|rs <name>
 // svc log <name> <error|warn|info>
 static void cmdService(cmd *c) {
@@ -767,6 +785,7 @@ void setupCli() {
 #endif
     cli.addSingleArgCmd("vset", cmdVset);
     cli.addSingleArgCmd("iset", cmdIset);
+    cli.addCommand("status", cmdStatus);
 
     cli.addBoundlessCmd("hostname,hn", cmdHostname);
     cli.addBoundlessCmd("set-config,setc", cmdSetConfig);

@@ -171,6 +171,24 @@ the RT sampler starves and the latency watchdog trips `stopAndBackoff`. Lower, d
 latency (ISR local to RT_CORE) reduces that pressure — the watchdog itself is correct, the starvation
 is the bug.
 
+## Flash-cache disable stalls the non-IRAM RT path (incl. the alert ISR)
+
+*"Why RT_CORE=1" above says core1 keeps running during a core0 flash write — that is only true for
+the **IRAM-resident** code (the ADC continuous-DMA ISR).* A flash erase/write — littlefs (config
+read **or** write, the `get-config`/`set-config` path, coulomb/stats persist), NVS, OTA — disables
+the SPI-flash **cache globally** for its duration, and IDF parks the *other* core in IRAM while the
+op runs. So any **non-IRAM** code stalls too, on whichever core it's pinned to. Core pinning isolates
+the RT loop from core0's *CPU* work, not from a flash-cache-disable.
+
+The INA226 sampling path is **non-IRAM**: the alert GPIO ISR is installed with flags `0` (it must be
+— see the IRAM note above), so it is **masked for the whole cache-off window**, and the I2C read in
+`loopRT` lives in flash. So *any* littlefs / NVS / OTA write — including a console `get-config`, which
+is why polling tools hurt (see the loop-latency section) — freezes the INA226 sampler for the op's
+duration. That's a sampler-starvation source distinct from missed alert edges, and another feeder of
+the loop-latency shutdowns. Pinning doesn't help; what helps is **fewer/shorter flash ops on the hot
+path** (persist cadence, avoid `get-config` storms) or moving OV/OC to the hardware
+INA226-alert→gate-driver shutdown (see *Off-loading critical parts*), which is immune to cache state.
+
 ## Note about configTICK_RATE_HZ
 
 defaults to 1000 (1tick = 1ms).
@@ -338,14 +356,38 @@ console mux and allocate, holding the heap lock long enough that core1's RT path
 watchdog window. Net effect: a discovery / health poller that sends `ip`/`hostname`/`uptime` shuts the
 converter down on **every** poll. fry is stable when it is not polled.
 
-Fix candidates (not yet applied — live converter, pending decision):
+Fixes:
 
-- Get the log-queue allocation off the RT path (preallocated ring, as above) — removes the contention
-  at the source.
-- Make the loop-latency watchdog require the low-sps condition to persist across N consecutive windows,
-  so a one-off core0 stall can't trip `stopAndBackoff`.
-- Stop the poller from hitting these devices' console, or have lightweight commands (`ip`/`uptime`)
-  avoid the heavy logging/alloc path.
+- **APPLIED:** the loop-latency watchdog now requires the low-sps condition to persist across 3
+  consecutive windows before `stopAndBackoff`, so a one-off core0 stall (a poll) can't trip it
+  (`lfWatchdog`, commit 97f66f2). Per-sample OV/OC protection is unaffected. This is a mitigation.
+- Still open (removes the contention at the source): get the log-queue allocation off the RT path
+  (preallocated ring, as in *Deferred logging* above).
+- Still open: stop the poller from hitting these devices' console, or have lightweight commands
+  (`ip`/`uptime`) avoid the heavy logging/alloc path.
+
+# Boot-log backlog → MQTT, and the wifi-task stack trap
+
+To make boot debuggable remotely, `logging.cpp` captures early log lines into an 8 KB buffer
+(`s_bootLog`) and replays them to each sink as it attaches (`addLogCallback`) — so MQTT, which can't
+connect until WiFi is up (well after `setup()`), still gets the boot sequence in `pv/log/<host>`. The
+buffer freezes on first attach; `") mqtt:"`-tagged lines are skipped so the one-shot replay isn't
+dropped by `mqttLogCallback`'s own filter.
+
+**Trap that bricked flat (2026-05-28):** to capture the *`setup()` body* (not just post-setup), the
+`esp_log → vprintf_` hook (`enable_esp_log_to_telnet`) was moved to the *start* of `setup()`. That
+routes the **wifi task**'s connect-time logging burst through `vprintf_mux`, whose `loc_buf[300]`
+stack buffer (plus `vsnprintf` + callback frames) overflows the wifi task's **3072-byte stack** →
+`***ERROR*** A stack overflow in task wifi has been detected` → reboot loop, hung *before* any
+service starts (no telnet / MQTT / BLE → serial reflash only). The mock-ADC bench never associates
+with a real AP, so it booted clean and hid the bug; the live converter (flat) didn't.
+
+**Rule:** keep `enable_esp_log_to_telnet()` **after** `registerServices()` (the proven ordering) — the
+WiFi connect burst then uses the light default vprintf, not `vprintf_mux`, so the backlog captures
+only from there on (not the `setup()` body — accept that). To capture the `setup()` body safely,
+*first* raise `CONFIG_ESP_WIFI_TASK_STACK_SIZE` or shrink / move `vprintf_mux`'s `loc_buf` off-stack.
+Generally: any small-stack system task (wifi 3072 B) that logs through `vprintf_mux` risks this — keep
+the heavy 300 B-buffer formatting path off those tasks.
 
 # Flash Cache
 

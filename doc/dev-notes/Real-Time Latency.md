@@ -131,6 +131,41 @@ in ISR context on the RT core.
 The check macros in `src/etc/rt_core_check.h` enforce this and the other task placements
 at compile time — adding a Kconfig that drifts will fail the build.
 
+## GPIO alert ISR placement (INA226 / ADS)
+
+The INA226 (and ADS1x15) alert pin drives a GPIO interrupt whose handler does
+`vTaskNotifyGiveFromISR(loopRT)` to wake the RT sampler. If that GPIO ISR runs on **core0**, the
+notify is cross-core: it has to raise a scheduler interrupt on core1, adding latency and jitter to
+the wake path that the RT loop blocks on. We want the alert ISR on **RT_CORE** so the notify is
+local.
+
+The catch: the GPIO ISR is a single shared service, not per-pin. `arduino-esp32`'s
+`attachInterrupt()` *lazily* calls `gpio_install_isr_service()` on the first attach, pinning that
+shared service to whatever core called it. The first `attachInterrupt` happens in `setupSensors()`,
+which runs in `setup()` on **core0** — so by default every alert ISR lands on core0.
+
+To control it we pre-install the service on RT_CORE *before* any `attachInterrupt` runs (gated by
+`PIN_GPIO_ISR_TO_RT_CORE` in `main.cpp`); the later lazy install is then a no-op.
+
+**Landmine — do not wrap `gpio_install_isr_service()` in `esp_ipc_call_blocking(RT_CORE, …)`.**
+That function does its *own* internal `esp_ipc_call_blocking()` to the calling core (via
+`gpio_isr_register` → `esp_intr_alloc` on the target core). Calling it from inside an IPC callback on
+RT_CORE makes that core's single `ipc` worker wait on itself → **permanent deadlock in `setup()`**,
+before `loopRT` even exists, so nothing reboots it. This was diagnosed via JTAG (loopTask blocked in
+`esp_ipc_call_blocking`, `ipc1` blocked inside `gpio_install_isr_service`) and it silently bricked two
+field units after an OTA. The correct way to run it on RT_CORE is a **short-lived task pinned to
+RT_CORE** that calls `gpio_install_isr_service()` and notifies setup() when done — the `ipc` worker
+stays free, the nested IPC completes, and the ISR lands on RT_CORE.
+
+**IRAM:** the service is installed with `ESP_INTR_FLAG_IRAM`, so every per-pin handler added to it
+must be IRAM-safe (`ina226_alert` is `IRAM_ATTR`). Verify any new alert handler is too, or drop the
+flag.
+
+This couples to the loop-latency shutdowns seen on fry/flat: when INA226 alert edges are missed/late
+the RT sampler starves and the latency watchdog trips `stopAndBackoff`. Lower, deterministic wake
+latency (ISR local to RT_CORE) reduces that pressure — the watchdog itself is correct, the starvation
+is the bug.
+
 ## Note about configTICK_RATE_HZ
 
 defaults to 1000 (1tick = 1ms).

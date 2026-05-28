@@ -53,6 +53,9 @@
 
 #include <esp_task_wdt.h>
 #include <esp_pm.h>
+#include <esp_timer.h>
+#include <esp_ota_ops.h>
+#include <driver/gpio.h>
 #include <filesystem>
 
 #include "etc/rt_core_check.h"
@@ -225,6 +228,55 @@ static void setupConverterAndMppt(const ConfFile &boardConf, const Limits &lim, 
     }
 }
 
+// Default: install the GPIO ISR service on RT_CORE *before* any attachInterrupt() runs, so that
+// arduino-esp32's lazy gpio_install_isr_service() call inside attachInterrupt is a no-op (already
+// installed) and the INA226/ADS1115 alert handlers fire on RT_CORE. Otherwise the first
+// attachInterrupt — invoked from setupSensors() on CPU0 — pins the GPIO ISR to CPU0, adding IPC
+// latency variance to the RT sampler wake path (see [[project_ina226_timeout_loop_latency_shutdown]]).
+// Set to 0 in CMake / a build flag to revert to the previous CPU0 behavior for A/B comparison.
+#ifndef PIN_GPIO_ISR_TO_RT_CORE
+#define PIN_GPIO_ISR_TO_RT_CORE 1
+#endif
+
+#if PIN_GPIO_ISR_TO_RT_CORE
+struct GpioIsrInstallCtx {
+    esp_err_t r;
+    TaskHandle_t caller;
+};
+
+// gpio_install_isr_service() internally does its own esp_ipc_call_blocking() to the calling core
+// (to esp_intr_alloc the dispatcher on that core). Running it from *inside* esp_ipc_call_blocking()
+// makes RT_CORE's single ipc task wait on itself → permanent deadlock in setup() (observed: boot
+// hang). So run it on a plain task pinned to RT_CORE instead — the ipc worker stays free, the nested
+// IPC completes, and the GPIO ISR lands on RT_CORE.
+static void installGpioIsrTask(void *arg) {
+    auto *ctx = (GpioIsrInstallCtx *) arg;
+    ctx->r = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+    xTaskNotifyGive(ctx->caller);
+    vTaskDelete(nullptr);
+}
+
+static void pinGpioIsrToRtCore() {
+    GpioIsrInstallCtx ctx{ESP_FAIL, xTaskGetCurrentTaskHandle()};
+    TaskHandle_t t = nullptr;
+    xTaskCreatePinnedToCore(installGpioIsrTask, "gpioIsrInit", 3072, &ctx, RT_PRIO, &t, RT_CORE);
+    if (!t) {
+        ESP_LOGE("main", "failed to spawn gpioIsrInit; RT alert pinning skipped");
+        return;
+    }
+    if (!ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000))) {
+        ESP_LOGE("main", "gpioIsrInit timed out; RT alert pinning skipped");
+        return;
+    }
+    if (ctx.r == ESP_OK)
+        ESP_LOGI("main", "gpio_install_isr_service pinned to RT_CORE=%d", RT_CORE);
+    else if (ctx.r == ESP_ERR_INVALID_STATE)
+        ESP_LOGW("main", "gpio_install_isr_service already installed (likely on CPU0); RT alert pinning skipped");
+    else
+        ESP_LOGE("main", "gpio_install_isr_service(RT_CORE) failed: %s", esp_err_to_name(ctx.r));
+}
+#endif
+
 // Register the optional non-RT subsystems as services and start the enabled ones. MQTT keeps its
 // mppt/home-assistant wiring here (out of mqtt.cpp) via preStart, re-run on every start. Network
 // services that aren't Running at boot self-heal on the WiFi-up edge in loopNetwork_task.
@@ -255,10 +307,66 @@ static void registerServices() {
     g_services.startEnabledAtBoot(wifiIsConnected());
 }
 
+// A freshly-OTA'd image boots as ESP_OTA_IMG_PENDING_VERIFY (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE).
+// setup() is otherwise unguarded — loopRT (and its WDT coupling) only exists after setup() returns,
+// and the TWDT watches idle, which a yielding hang keeps feeding — so a one-shot esp_timer covers the
+// whole setup() window: if setup() never finishes, reboot, and the bootloader reverts to the previous
+// slot since this image was never confirmed.
+static constexpr int BOOT_WATCHDOG_TIMEOUT_S = 30;
+static constexpr uint32_t OTA_VALIDATE_UPTIME_MS = 20000;
+static esp_timer_handle_t s_bootWdt = nullptr;
+
+static void bootWatchdogFire(void *) {
+    ESP_LOGE("main", "boot watchdog: setup() didn't finish in %ds — restarting (rollback if unconfirmed)",
+             BOOT_WATCHDOG_TIMEOUT_S);
+    esp_restart();
+}
+
+static void bootWatchdogArm() {
+    const esp_timer_create_args_t args = {
+        .callback = bootWatchdogFire,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "bootWdt",
+        .skip_unhandled_events = false,
+    };
+    if (esp_timer_create(&args, &s_bootWdt) == ESP_OK)
+        esp_timer_start_once(s_bootWdt, (uint64_t) BOOT_WATCHDOG_TIMEOUT_S * 1000000ULL);
+    else
+        ESP_LOGE("main", "failed to arm boot watchdog");
+}
+
+static void bootWatchdogDisarm() {
+    if (!s_bootWdt) return;
+    esp_timer_stop(s_bootWdt);
+    esp_timer_delete(s_bootWdt);
+    s_bootWdt = nullptr;
+}
+
+// Confirm a PENDING_VERIFY image once the RT loop is proven alive (sampling). Runs from loopLF on
+// core 0 (one-shot otadata flash write). Non-pending state (normal flash) → cheap skip. Until this
+// runs, a reset reverts to the previous slot — that's the rollback safety net.
+static void lfMarkOtaValid() {
+    static bool done = false;
+    if (done || millis() < OTA_VALIDATE_UPTIME_MS) return;
+    if (!timeLastSampler || (wallClockUs() - timeLastSampler) > 1000000) return; // RT sampler alive?
+
+    done = true;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_img_states_t st;
+    if (esp_ota_get_state_partition(running, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
+        if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK)
+            ESP_LOGI("main", "OTA image confirmed valid (rollback cancelled)");
+        else
+            ESP_LOGE("main", "failed to confirm OTA image valid");
+    }
+}
+
 void setup() {
     consoleInit();
     setupCli();
     ESP_LOGI("main", "*** %s", format_version());
+    bootWatchdogArm();
 
     rtcount_test_cycle_counter();
 
@@ -316,10 +424,15 @@ void setup() {
         g_app.setupErr = true;
     }
 
+#if PIN_GPIO_ISR_TO_RT_CORE
+    // Must run before setupConverterAndMppt → setupSensors → ADC_INA226/ADS::init → attachInterrupt.
+    pinGpioIsrToRtCore();
+#endif
+
     setupConverterAndMppt(boardConf, lim, teleConf, noI2C);
 
     if (!g_app.setupErr) {
-        xTaskCreatePinnedToCore(loopRT, "loopRt", 4096 * 4, NULL, RT_PRIO, NULL, 1);
+        xTaskCreatePinnedToCore(loopRT, "loopRt", 4096 * 4, NULL, RT_PRIO, NULL, RT_CORE);
     } else {
         led.setHexShort(0x200);
     }
@@ -338,6 +451,7 @@ void setup() {
     ESP_LOGW("main", "HEAP_POISONING=LIGHT: every alloc has tail canary, free() asserts on overrun. Debug-only — revert sdkconfig when done.");
 #endif
 
+    bootWatchdogDisarm();
     ESP_LOGI("main", "setup() done.");
 
     /*g_app.manualPwm = true;
@@ -609,6 +723,7 @@ void loopLF(const unsigned long &nowUs) {
 
     lfWatchdog(nowUs, dt, sps, nSamples);
     lfControl();
+    lfMarkOtaValid();
     lfStatusLine(nSamples, sps, dt);
 
     lastNSamples = nSamples;

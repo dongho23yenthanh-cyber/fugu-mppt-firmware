@@ -102,7 +102,7 @@ If you change one of the features you need to run `... idf.py reconfigure`.
 | `WITH_VCONV`        |    off  | Replaces the physical gate driver + ADC with an in-firmware synchronous-buck plant (`src/sim/vconv.*`, configured via `vconv.conf`). For closed-loop control-algorithm work without hardware. Mutually exclusive with `WITH_MCPWM`. |
 
 Binary telemetry is no longer a build flag — it is a runtime setting in `tele.conf` (`binary=1` selects the
-symbol-table wire `sym_line_protocol.h`, `compressor=none|tamp`); the UDP `:8086` receiver must decode it.
+symbol-table wire `sym_line_protocol.h`, always tamp-compressed); the UDP `:8086` receiver must decode it.
 
 Other build env vars (prefix-style shown below is bash/zsh; on Windows use `set VAR=value && idf.py build`
 or `$env:VAR="value"; idf.py build` in PowerShell):

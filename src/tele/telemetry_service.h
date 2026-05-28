@@ -24,7 +24,7 @@ public:
 protected:
     bool onStart() override {
         if (!WiFi.isConnected()) return false;          // UDP is connectionless, nothing to open
-        teleLoadWireConf();                              // pick text|binary + compressor from tele.conf
+        teleLoadWireConf();                              // pick text|binary from tele.conf (binary wire = tamp)
         xTaskCreatePinnedToCore(flushTask, "teleflush", 4096, this, 1, &_flushTask, 0);
         return true;
     }

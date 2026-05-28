@@ -238,13 +238,13 @@ static void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
     msg.clear();
 }
 
-// Load tele.conf::binary + compressor at service start; cache so the hot path
-// doesn't read littlefs per point. teleCompressor() is only consulted when the
-// binary wire is selected; on text it stays null.
+// Load tele.conf::binary at service start; cache so the hot path doesn't read
+// littlefs per point. The binary wire is always tamp-compressed; on text the
+// compressor stays null.
 void teleLoadWireConf() {
     ConfFile conf{"/littlefs/conf/tele.conf"};
     g_teleBinary = conf.getLong("binary", 0) != 0;
-    s_teleCompressor = g_teleBinary ? &compressorByName(conf.c("compressor", "tamp")) : nullptr;
+    s_teleCompressor = g_teleBinary ? &compressorByName("tamp") : nullptr;
 }
 
 // Compress one batch of concatenated (already length-prefixed) wire frames, tag

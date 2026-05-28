@@ -50,6 +50,7 @@ public:
     size_t maxBatchRaw(size_t mtu) const override { return mtu * 3 / 2; }  // ~1.5x; telemetry tamps ~2x, margin for variance
 };
 
-// Shared instance by name ("none"/"tamp"); unknown -> NoCompress. Lets a conf
-// key (e.g. tele.conf compressor=tamp) pick the algorithm at startup.
+// Shared instance by name ("none"/"tamp"); unknown -> NoCompress. The binary
+// telemetry wire always selects "tamp"; NoCompress (id=0) stays for the receiver
+// and any other transport.
 Compressor &compressorByName(const char *name);

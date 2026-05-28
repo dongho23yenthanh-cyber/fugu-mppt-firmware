@@ -62,7 +62,7 @@ public:
 
 inline TelePoint makeTelePoint(const char *measurement) { return TelePoint(measurement); }
 
-void teleLoadWireConf();  // re-read tele.conf::binary + compressor (cache for the hot path)
+void teleLoadWireConf();  // re-read tele.conf::binary (cache for the hot path; binary wire = tamp)
 
 void telemetryAddPoint(TelePoint &p, uint16_t maxQueue = 40);
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """UDP proxy: decode the firmware's binary symbol-table wire protocol back to
-InfluxDB line protocol and forward it. Pair with a WITH_BINARY_TELE build.
+InfluxDB line protocol and forward it. Pair with a device running tele.conf::binary=1
+(the binary wire is always tamp-compressed).
 
 Datagram = <compressor_id:1B> <payload>.  id 0 = raw, 1 = tamp.
 payload  = (<varint len> <frame>)*  ; frame[0] = FrameT (1=data, 2=table).

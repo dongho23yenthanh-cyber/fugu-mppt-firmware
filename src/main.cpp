@@ -746,6 +746,16 @@ void loopLF(const unsigned long &nowUs) {
     lfWatchdog(nowUs, dt, sps, nSamples);
     lfControl();
     lfMarkOtaValid();
+
+    // converter.init() logs L0/rect_offset during setup(), before the MQTT/telnet log sinks exist,
+    // so it only reaches the boot serial console. Re-emit it once the MQTT sink is up so the config
+    // (e.g. rect_offset) is visible in the remote log after a boot.
+    static bool loggedConvCfg = false;
+    if (!loggedConvCfg) {
+        auto *mq = g_services.findByName("mqtt");
+        if (mq && mq->state() == ServiceState::Running) { loggedConvCfg = true; converter.logConfig(); }
+    }
+
     lfStatusLine(nSamples, sps, dt);
 
     lastNSamples = nSamples;

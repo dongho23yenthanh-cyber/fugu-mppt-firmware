@@ -92,6 +92,7 @@ class SynchronousConverter {
     bool forcedPwm = false;
 
     float fL = NAN; // fsw * L
+    float coilL0 = 0; // retained from coil.conf so logConfig() can re-emit the config line
 
 public:
     SynchronousConverter() : pwmDriver() {
@@ -149,6 +150,12 @@ public:
 
     void setRectOnOffset(int o) { rectOnOffset = (int16_t) o; } // DCM LS dead-time offset, counts
 
+    // Emitted from init() (boot serial) and re-fired once MQTT is up (so it lands in the MQTT/telnet
+    // log too — init() runs during setup(), before those sinks exist).
+    void logConfig() const {
+        ESP_LOGI("converter", "Coil L0=%.1f µH rect_offset=%d", coilL0 * 1e6f, rectOnOffset);
+    }
+
     [[nodiscard]] float voltageRatio() const { return outInVoltageRatio; } // M
 
     [[nodiscard]] bool manualRect_() const { return manualRect >= 0; }
@@ -183,10 +190,11 @@ public:
         if (forcedPwm)
             ESP_LOGW("converter", "%s", "forced_pwm");
 
-        auto L0 = coilConf.getFloat("L0");
+        coilL0 = coilConf.getFloat("L0");
+        const float L0 = coilL0;
         rectOnOffset = (int16_t) coilConf.getLong("rect_offset", 0);
 
-        ESP_LOGI("converter", "Coil L0=%.1f µH rect_offset=%d", L0 * 1e6f, rectOnOffset);
+        logConfig();
 
         pwmFrequency = boardConf.getLong("pwm_freq"); //39000; //  converter switching frequency
         assert_throw(pwmFrequency > 5e3 && pwmFrequency < 5e5, "");

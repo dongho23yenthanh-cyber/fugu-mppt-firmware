@@ -529,6 +529,28 @@ static void cmdGetConfig(cmd *c) {
     }
 }
 
+// conf-check — re-read the parameter confs and warn about keys no loader reads (typos / obsolete,
+// e.g. cv_min when the firmware reads cv_float). Reuses the real loaders (pure: no hardware side
+// effects) so the recognized-key set never drifts. Unlike the boot-time check this runs in console
+// context, so the warnings reach the telnet/MQTT client that issued the command.
+static void cmdConfCheck(cmd *) {
+    {
+        ConfFile cf{"/littlefs/conf/charger.conf", true};
+        if (cf) {
+            try { BatChargerParams p; p.load(cf); } catch (...) {}
+            cf.warnUnknownKeys();
+        }
+    }
+    {
+        ConfFile cf{"/littlefs/conf/limits.conf", true};
+        if (cf) {
+            try { Limits l{cf}; (void) l; } catch (...) {}
+            cf.warnUnknownKeys();
+        }
+    }
+    UART_LOG("conf-check done");
+}
+
 static void cmdVset(cmd *c) {
     float v = Command(c).getArg(0).getValue().toFloat();
     if (v >= 0 and v <= 999) mppt.charger.params.Vbat_max = v;
@@ -791,6 +813,7 @@ void setupCli() {
     cli.addBoundlessCmd("set-config,setc", cmdSetConfig);
     cli.addBoundlessCmd("del-config,delc", cmdDelConfig);
     cli.addBoundlessCmd("get-config,getc", cmdGetConfig);
+    cli.addBoundlessCmd("conf-check,confcheck", cmdConfCheck);
     cli.addBoundlessCmd("service,svc", cmdService);
 #ifdef WITH_BLE
     cli.addBoundlessCmd("ota-ble", cmdOtaBle);

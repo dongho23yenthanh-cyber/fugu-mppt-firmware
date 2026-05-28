@@ -214,11 +214,15 @@ static void setupConverterAndMppt(const ConfFile &boardConf, const Limits &lim, 
 
             mppt.charger.begin(chargerConf);
             converter.init(converterConf, boardConf, coilConf);
+            chargerConf.warnUnknownKeys();
+            converterConf.warnUnknownKeys();
+            coilConf.warnUnknownKeys();
         }
 
         if (!g_app.setupErr && !adcSampler.adcStates.empty()) {
             ConfFile trackerConf{"/littlefs/conf/tracker.conf", true};
             mppt.begin(trackerConf, boardConf, lim, teleConf);
+            trackerConf.warnUnknownKeys();
         }
     } catch (const std::runtime_error &er) {
         ESP_LOGE("main", "error during sensor/converter/tracker setup: %s", er.what());
@@ -430,7 +434,9 @@ void setup() {
 
     Limits lim{};
     try {
-        lim = Limits{ConfFile{"/littlefs/conf/limits.conf"}};
+        ConfFile limitsConf{"/littlefs/conf/limits.conf"};
+        lim = Limits{limitsConf};
+        limitsConf.warnUnknownKeys();
     } catch (const std::runtime_error &er) {
         logConfErr("limits.conf", er);
         g_app.setupErr = true;

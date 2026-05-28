@@ -6,6 +6,7 @@
 #include <string>
 #include <unistd.h>
 #include<unordered_map>
+#include <unordered_set>
 #include <numeric>
 #include <functional>
 #include <vector>
@@ -35,6 +36,7 @@ inline std::string trim(const std::string &s) {
 class ConfFile {
     std::unordered_map<std::string, std::string> _map;
     const char *path;
+    mutable std::unordered_set<std::string> _accessed; // keys any getX/getString/c asked for
 
 public:
     // In-memory ConfFile, primarily for tests. Skips the file read.
@@ -274,6 +276,7 @@ public:
     T getX(const std::string &key, T def, const std::function<T(const char *, char **)> &strto_,
            bool noDef = false) const {
         // strto_ error handling https://stackoverflow.com/questions/26080829/detecting-strtol-failure
+        _accessed.insert(key);
         auto i = _map.find(key);
         if (i != _map.end()) {
             char *endptr = nullptr;
@@ -359,6 +362,7 @@ public:
     float f(const std::string &key, float def = std::numeric_limits<float>::max()) { return getFloat(key, def); }
 
     const std::string &getString(const std::string &key) const {
+        _accessed.insert(key);
         auto i = _map.find(key);
         if (i != _map.end())
             return i->second;
@@ -366,6 +370,7 @@ public:
     }
 
     [[nodiscard]] const std::string &getString(const std::string &key, const std::string &def) const {
+        _accessed.insert(key);
         auto i = _map.find(key);
         if (i != _map.end()) {
             return i->second;
@@ -376,11 +381,22 @@ public:
     }
 
     const char *c(const std::string &key, const char *def = nullptr) {
+        _accessed.insert(key);
         auto i = _map.find(key);
         if (i != _map.end()) {
             return i->second.c_str();
         }
         return def;
+    }
+
+    // Warn for each key present in the file that no getX/getString/c call ever requested — i.e.
+    // typo'd or obsolete keys silently ignored at boot. Best-effort: only meaningful for confs whose
+    // keys are all read unconditionally by a single instance (parameter confs), not service confs
+    // (enabled/log_level read on a separate instance) or confs with hardware-conditional reads.
+    void warnUnknownKeys() const {
+        for (auto &kv: _map)
+            if (_accessed.find(kv.first) == _accessed.end())
+                ESP_LOGW(TAG, "%s: unknown key '%s' (ignored)", path, kv.first.c_str());
     }
 
     explicit operator bool() const { return !_map.empty(); }

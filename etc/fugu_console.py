@@ -10,7 +10,8 @@ it scans every transport for reachable devices (serial port globs, mDNS scope/te
 NAT-forwarded telnet endpoints in `nat.env`, BLE NUS, and — when `$MQTT_HOST` is set — hostnames
 seen on the broker's `pv/log/`) and prints what to pass to connect, without connecting. The transport and the line-console mechanics live in
 the `fugu` package (`fugu.transport`, `fugu.console.Console`); this file is the CLI and the plan.
-Defaults to serial; `--ble`/`--ip` select BLE or TCP/telnet.
+Defaults to serial; `--ble`/`--ip` select BLE or TCP/telnet, `--ble-proxy HOST` reaches BLE NUS
+through an ESPHome bluetooth_proxy (plaintext API, no noise encryption).
 
 The PWM/charger group is gated behind `--mock`. A mock build (fake ADC, no real switching —
 `config/lab/*_mock`, sensor.conf using ADC_Fake) can run the full set safely; on real hardware
@@ -25,6 +26,8 @@ Examples:
     python etc/fugu_console.py -p /dev/cu.usbmodem1101   # interactive REPL over serial (default)
     python etc/fugu_console.py --ip 192.168.4.2          # interactive REPL over TCP/telnet
     python etc/fugu_console.py --ble                     # interactive REPL over BLE
+    python etc/fugu_console.py --ble-proxy 192.168.1.50  # BLE via ESPHome bluetooth_proxy (by name)
+    python etc/fugu_console.py --ble-proxy 192.168.1.50 --address AA:BB:CC:DD:EE:FF  # by MAC
     python etc/fugu_console.py --test --mock             # run the full command PLAN on a mock build
     python etc/fugu_console.py --ip 192.168.4.2 --test   # run the safe subset over TCP/telnet
     python etc/fugu_console.py --mqtt 192.168.1.134 --mqtt-port 1882 -c "svc list"   # over MQTT
@@ -42,11 +45,13 @@ import threading
 import time
 
 try:  # works both as `python etc/fugu_console.py` and `python -m etc.fugu_console`
-    from fugu.transport import SerialTransport, SocketTransport, BleTransport, MqttTransport
+    from fugu.transport import (SerialTransport, SocketTransport, BleTransport,
+                                EspHomeBleTransport, MqttTransport)
     from fugu.console import Console
     from fugu.discover import discover_scope_servers
 except ImportError:
-    from etc.fugu.transport import SerialTransport, SocketTransport, BleTransport, MqttTransport
+    from etc.fugu.transport import (SerialTransport, SocketTransport, BleTransport,
+                                    EspHomeBleTransport, MqttTransport)
     from etc.fugu.console import Console
     from etc.fugu.discover import discover_scope_servers
 
@@ -664,6 +669,13 @@ def interactive(con: Console, elf_path: str | None = None):
 
 
 def make_transport(args):
+    if args.ble_proxy:
+        host, _, port = args.ble_proxy.partition(":")
+        port = int(port) if port else EspHomeBleTransport.API_PORT
+        target = args.address or f"name~{args.name!r}"
+        print(f"connecting via ESPHome bluetooth_proxy {host}:{port} → BLE NUS ({target})")
+        return EspHomeBleTransport(host, proxy_port=port, password=args.proxy_password,
+                                   address=args.address, name=args.name)
     if args.ble:
         print(f"scanning for BLE NUS (name contains {args.name!r}) …")
         return BleTransport(name=args.name, address=args.address)
@@ -691,7 +703,12 @@ def main():
     ap.add_argument("--ble", action="store_true", help="use the BLE NUS transport instead of serial")
     ap.add_argument("--name", default="fugu",
                     help="device-name substring filter (with --ble: advertised name; with --mqtt: hostname)")
-    ap.add_argument("--address", help="BLE address to connect to (with --ble)")
+    ap.add_argument("--address", help="BLE address to connect to (with --ble / --ble-proxy)")
+    ap.add_argument("--ble-proxy", metavar="HOST[:PORT]",
+                    help="reach BLE NUS through an ESPHome bluetooth_proxy at this host "
+                         "(plaintext API, no noise); scans by --name unless --address is given")
+    ap.add_argument("--proxy-password", default=os.environ.get("ESPHOME_API_PASSWORD", ""),
+                    help="ESPHome API password for --ble-proxy (default: $ESPHOME_API_PASSWORD)")
     ap.add_argument("--ip", help="use TCP/telnet to this address instead of serial")
     ap.add_argument("--mqtt", metavar="BROKER", help="use MQTT via this broker host instead of serial")
     ap.add_argument("--mqtt-port", type=int, default=int(os.environ.get("MQTT_PORT", "1883")),

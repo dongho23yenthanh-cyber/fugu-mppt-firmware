@@ -109,14 +109,20 @@ test('applyUpload after a device read overlays values, keeping the device baseli
   const board = window._state.files['conf/board.conf'];
   // device read is NOT discarded: original baseline preserved, overlay applied as a pending edit
   assert.equal(board.original.pwm_freq, '39000', 'device baseline preserved');
-  // only the genuinely-different field is flagged; mcu (matched) and i2c_sda (omitted) are not
+  // pwm_freq differs (flagged) and i2c_sda — present on device but omitted by the
+  // uploaded board.conf — is cleared (flagged); mcu matches and stays clean.
   // (spread into a test-realm array so deepEqual isn't tripped by cross-realm Array.prototype)
-  assert.deepEqual([...window.changedFields(board)].map(c => c.key), ['pwm_freq']);
+  assert.deepEqual([...window.changedFields(board)].map(c => c.key), ['pwm_freq', 'i2c_sda']);
   const ch = window.changedFields(board).find(c => c.key === 'pwm_freq');
   assert.equal(ch.cur, '40000');
   assert.equal(ch.orig, '39000');
-  // omitted key left untouched (a partial config never clears device keys)
-  assert.equal(board.model.lines.find(l => l.key === 'i2c_sda').value, '8');
+  // the file fully replaces board.conf: the omitted i2c_sda is removed from the
+  // model and cleared (will be del-config'd on upload)
+  assert.equal(board.model.lines.find(l => l.key === 'i2c_sda'), undefined);
+  assert.equal(board.extras.i2c_sda, '');
+  const ich = window.changedFields(board).find(c => c.key === 'i2c_sda');
+  assert.equal(ich.cur, '');
+  assert.equal(ich.orig, '8');
 
   // a file the device didn't have gets the overlay value as an addition ("was: (not set)")
   const limits = window._state.files['conf/limits.conf'];
@@ -135,4 +141,28 @@ test('applyUpload without a prior device read loads fresh (clears state)', async
   window.applyUpload(mkFiles({ 'b/conf/board.conf': 'mcu=esp32\n' }), 'second');
   assert.equal(window.document.getElementById('srcname').textContent, 'second');
   for (const p of Object.keys(window._state.files)) assert.ok(!p.startsWith('a/'), p);
+});
+
+// §2.3 — clicking the "was: …" hint reverts the field to its loaded value.
+function rowFor(window, key){
+  return [...window.document.querySelectorAll('#panes .row')].find(r => r._key === key);
+}
+test('clicking "was: …" restores the value the field loaded with', async () => {
+  const { window } = await loadEditor();
+  window.load(mkFiles({ 'conf/board.conf': 'pwm_freq=39000\n' }), 'demo');
+
+  const row = rowFor(window, 'pwm_freq');
+  const inp = row.querySelector('input');
+  inp.value = '40000';
+  inp.dispatchEvent(new window.Event('input'));
+
+  const board = window._state.files['conf/board.conf'];
+  assert.equal(window.changedFields(board).length, 1, 'edit flags the field');
+  const orig = row.querySelector('.orig');
+  assert.equal(orig.style.display, '', '"was: …" hint is visible');
+  assert.ok(orig.textContent.includes('39000'));
+
+  orig.click();  // restore
+  assert.equal(window.changedFields(board).length, 0, 'restore clears the change');
+  assert.equal(board.model.lines.find(l => l.key === 'pwm_freq').value, '39000');
 });

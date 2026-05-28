@@ -72,7 +72,8 @@
   .row .unit-suffix {
     position:absolute; right:10px; top:50%; transform:translateY(-50%);
     color:var(--unit); font-size:11px; pointer-events:none; user-select:none; white-space:nowrap; }
-  .row .orig { color:var(--muted); font-size:11px; margin-top:4px; }
+  .row .orig { color:var(--muted); font-size:11px; margin-top:4px; cursor:pointer; width:fit-content; }
+  .row .orig:hover { color:var(--fg); text-decoration:underline; }
   .row.extra .val input { background:#0a0d12; border-style:dashed; }
   .row.extra.filled .val input { background:var(--bg); border-style:solid; }
   .row .val input::placeholder { color:#5a6573; font-style:italic; }
@@ -657,8 +658,10 @@ function load(files, sourceName){
 /* Overlay uploaded conf values onto the current device-read state as pending
    edits, instead of discarding the read. Each file's `original` (the device
    values) is kept, so values that differ from the device light up as changed
-   and the user can review them before "Upload changes to device". Keys the
-   upload doesn't mention are left untouched. */
+   and the user can review them before "Upload changes to device". For a file
+   the upload includes, keys the device had but the upload omits are cleared
+   (shown as <not set>) — the uploaded file fully replaces that file. Files the
+   upload doesn't include at all are left untouched. */
 function mergeUpload(files, sourceName){
   for (const path of Object.keys(files)){
     if (!isConfPath(path)) continue;
@@ -672,10 +675,15 @@ function mergeUpload(files, sourceName){
       state.confPaths.push(target);
     }
     const f = state.files[target];
-    for (const l of parseConf(td.decode(files[path])).lines){
-      if (l.key == null) continue;
+    const uploaded = parseConf(td.decode(files[path])).lines.filter(l=>l.key!=null);
+    const uploadKeys = new Set(uploaded.map(l=>l.key));
+    for (const l of uploaded){
       if (f.model.lines.some(x=>x.key===l.key)) setConfValue(f.model, l.key, l.value);
       else { f.extras[l.key] = l.value; if (!f.order.includes(l.key)) f.order.push(l.key); }
+    }
+    // key the device reported but this uploaded file omits → clear the field
+    for (const key of Object.keys(f.original)){
+      if (!uploadKeys.has(key)){ removeConfKey(f.model, key); f.extras[key] = ""; }
     }
   }
   state.confPaths.sort((a,b)=>{
@@ -788,9 +796,17 @@ function renderPane(){
 
     right.appendChild(line);
     const origEl = document.createElement("div"); origEl.className="orig"; origEl.style.display="none";
+    origEl.title = "click to restore this value";
     right.appendChild(origEl);
 
     const orig = f.original[key];  // value loaded from the device/file (undefined if absent there)
+    // clicking "was: …" reverts the field to the value it loaded with
+    origEl.onclick = ()=>{
+      if (orig===undefined){ removeConfKey(model,key); f.extras[key]=""; }
+      else if (model.lines.some(x=>x.key===key)) setConfValue(model,key,orig);
+      else f.extras[key]=orig;
+      markDirty(path); renderPane(); refreshDirtyMarks();
+    };
     const updateOrig = ()=>{
       // mirror changedFields(): a key the device/file didn't have counts as
       // changed once it holds a non-empty value, so the row highlight always
@@ -1090,7 +1106,9 @@ async function importFromDevice(sourceLabel){
     for (let attempt=0; attempt<3 && kv===null; attempt++){
       showStatus("reading "+file+(attempt?" (retry "+attempt+")":"")+" …");
       if (attempt) await new Promise(r=>setTimeout(r, 250));   // let a late reply drain first
-      try { kv = await getConfig(file, 4000); } catch(e){ /* timeout: reply lost, retry */ }
+      // 1500ms: a real reply (incl. the empty-file OK marker) arrives sub-second even over MQTT;
+      // 4000ms was almost pure dead-wait on a QoS0 drop, ×3 retries ×16 files = the import slowdown.
+      try { kv = await getConfig(file, 1500); } catch(e){ /* timeout: reply lost, retry */ }
     }
     if (!kv){ missed.push(file); continue; }   // still no marker after retries
     const keys = Object.keys(kv);

@@ -42,9 +42,12 @@ live read as pending edits (`mergeUpload`), keeping each file's `original` (the
 device values) as the baseline. Every uploaded value that differs from the
 device lights up as a change (orange border + "was: …" / dirty dot) so the user
 can review what the file would alter before pushing it back with "Upload
-changes to device". Keys the upload doesn't mention are left untouched (a
-partial config never clears device keys). Files matched by basename; a file the
-device didn't report is added as a new tab. The source pill reads
+changes to device". Within a file the upload includes, a key the device
+reported but the uploaded file omits is **cleared** (removed from the model,
+shown as `<not set>`, and flagged as changed) — the uploaded file fully
+replaces that file. Files the upload doesn't include at all are left untouched
+(omitting a whole file never clears its device keys). Files matched by basename;
+a file the device didn't report is added as a new tab. The source pill reads
 `<device> ← <upload>`, and the editor jumps to the first changed file. A
 non-device load (zip/folder with no prior device read) still clears state as
 before.
@@ -90,7 +93,7 @@ Each `.conf` field is one row with:
 | text input     | the current value                                                  |
 | unit suffix    | rendered right-aligned inside the input (V, A, Ω, Hz, GPIO, …)     |
 | `×` clear-btn  | only visible when the input is non-empty                           |
-| "was: …" line  | shown when the current value differs from the value the source loaded with — "was: (empty)" for a cleared string, "was: (not set)" for a key the device/source didn't have but now holds a value (e.g. an overlay addition) |
+| "was: …" line  | shown when the current value differs from the value the source loaded with — "was: (empty)" for a cleared string, "was: (not set)" for a key the device/source didn't have but now holds a value (e.g. an overlay addition). **Clickable**: clicking it reverts the field to the value it loaded with (restoring the line, clearing it, or re-filling it as needed) and clears the row's changed state |
 
 Stable row order: keys present in the file first, then firmware-known keys
 from `FILE_KEYS` that the file omits. This keeps rows from jumping when the
@@ -107,6 +110,10 @@ user fills / clears a key.
 * **Clear button** (`×`): removes the key from the file model. Visible only
   when the input has a value; clicking it both empties the input and removes
   the key's line from the in-memory model.
+* **Restore** ("was: …" line): clicking the "was: …" hint reverts the field to
+  the value it loaded with. If the key was absent in the source it is cleared
+  again; if it was present its loaded value is restored. Reverting clears the
+  row highlight and the file's dirty dot.
 * **Adding a key**: an "+ add key" row at the bottom of each pane accepts an
   arbitrary `key` + `value` and appends it; thereafter the row is treated
   like a present field.

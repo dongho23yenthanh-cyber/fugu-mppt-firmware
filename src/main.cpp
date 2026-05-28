@@ -639,12 +639,28 @@ static void wifiShutdownIfHot(float chipTempC) {
 }
 
 // Latency watchdog. Fires when the RT loop is producing fewer samples per second than required
-// (slow ADC, blocked path, etc.) for ~0.9 lfPeriod and trips a backoff to recover.
+// (slow ADC, blocked path, etc.). Requires the starvation to persist across TRIP_WINDOWS consecutive
+// lfPeriod (~3s) windows before backing off, so a one-off core-0 stall — e.g. console-command
+// log-alloc contention (a discovery/health poller sending ip/uptime tripped this on every poll, see
+// doc/dev-notes/Real-Time Latency.md) — can't trigger stopAndBackoff; only sustained starvation does.
+// Per-sample OV/OC cutouts (mppt.protect) are independent and still fire every arriving sample.
 static void lfWatchdog(unsigned long nowUs, uint32_t dt, uint32_t sps, uint32_t nSamples) {
-    if (!((dt > (lfPeriod * 0.9f)) && sps < g_app.loopRateMin && !converter.disabled() &&
-          nSamples > max(g_app.loopRateMin * 5, 200) &&
-          !g_app.manualPwm && lastTimeOutUs && (nowUs - adcSampler.getTimeLastCalibrationUs()) > 2000000))
+    static uint8_t starvedWindows = 0;
+    constexpr uint8_t TRIP_WINDOWS = 3;
+
+    bool starved = (dt > (lfPeriod * 0.9f)) && sps < g_app.loopRateMin && !converter.disabled() &&
+                   nSamples > max(g_app.loopRateMin * 5, 200) &&
+                   !g_app.manualPwm && lastTimeOutUs && (nowUs - adcSampler.getTimeLastCalibrationUs()) > 2000000;
+    if (!starved) {
+        starvedWindows = 0;
         return;
+    }
+    if (++starvedWindows < TRIP_WINDOWS) {
+        ESP_LOGW("main", "Loop latency high (%lu<%hu Hz), window %d/%d", sps, g_app.loopRateMin,
+                 (int) starvedWindows, (int) TRIP_WINDOWS);
+        return;
+    }
+    starvedWindows = 0;
     auto loopRunTime = (nowUs - adcSampler.getTimeLastCalibrationUs());
     ESP_LOGE("main", "Loop latency high (%lu<%hu Hz), shutdown! (nSamples=%lu D=%u rt=%.1fs)",
              sps, g_app.loopRateMin, nSamples, converter.getCtrlOnPwmCnt(), loopRunTime * 1e-6f);

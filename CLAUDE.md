@@ -140,7 +140,7 @@ live in `src/main.cpp` (they touch `mppt`/`lcd`/`sensors`); `MqttService` *is* t
 Single command dispatcher `handleCommand()` in `src/main.cpp` handles input from UART, USB-CDC, telnet, **and** MQTT (
 same string protocol). Notable commands: `+N`/`-N` (PWM step), `dc N` (manual duty, switches to `manualPwm` mode),
 `sweep`, `mppt` (re-enable auto), `sync on/off/forced`, `bf 0/1` (backflow switch), `fan N`, `set-config`/`get-config`,
-`ota <url>`, `rt-stats`, `sensor`, `wifi-add ssid:psk`, `restart`. See `doc/Console.md`.
+`ota <url>`, `rt-stats`, `sensor`, `status` (charger/battery snapshot), `wifi-add ssid:psk`, `restart`. See `doc/Console.md`.
 
 Host-side console client: `etc/fugu_console.py` drives this protocol from a PC over **serial (`-p`),
 TCP/telnet (`--ip`), BLE/NUS (`--ble`), BLE via an ESPHome bluetooth_proxy (`--ble-proxy <host>`,

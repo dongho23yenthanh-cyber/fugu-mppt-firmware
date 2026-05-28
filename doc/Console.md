@@ -75,6 +75,7 @@ get-config converter.conf
 
 | Command | Description |
 | --- | --- |
+| `status` | Print a charger/battery snapshot: termination state, effective limits (`Vbat_max`/`Vout_max`, `Ibat_lim`/`Iout_max`), the termination line (`v_term`/`cv_min`/`cv_eoc`/`Cbat`/`recharge_dod`) and the BMS feed (`vcell_high` with staleness, `ibat`, `ahSinceFull`, `vout_avg`). |
 | `vset <float>` | Set the battery max voltage (`Vbat_max`), range 0–999. |
 | `iset <float>` | Set the battery current limit (`Ibat_lim`), range 0–999. |
 

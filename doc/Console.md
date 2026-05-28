@@ -54,6 +54,7 @@ Hardware and runtime parameters live in `.conf` files on the device's littlefs p
 | `set-config <file> <key> <value>` | Set a key in a config file and persist it to flash. |
 | `del-config <file> <key>` | Remove a key; the whole line, including any inline comment, is deleted. |
 | `get-config <file> [<key>]` | Print a single key, or dump every key if `<key>` is omitted. |
+| `conf-check` | Re-read `charger.conf`/`limits.conf` and warn about keys no loader reads (typos / obsolete, e.g. `cv_min` where the firmware reads `cv_float`). Same check runs at boot for the parameter confs. |
 
 Examples:
 
@@ -69,6 +70,8 @@ del-config sensor.conf vout_filt_len
 
 get-config mqtt.conf broker_uri
 get-config converter.conf
+
+conf-check
 ```
 
 # Charger Commands

@@ -187,6 +187,11 @@ class BatteryCharger {
     LinearGlide _floatGlide{5'000'000};
     bool _wasTerminated = false;
 
+    // Integrator step gate: advance vpack_pin only on a fresh BMS frame so the
+    // step rate matches the cell-voltage update rate (otherwise loopLF at 1 Hz
+    // runs the integrator 15× per BMS cycle and overshoots).
+    unsigned long _lastBmsFrameUs = 0;
+
 public:
     BatChargerParams params{};
     Li_ChgTerminationCondition termCond{params};
@@ -261,17 +266,27 @@ public:
         bool eocFeedback = batDataOk && batSt.vcell_high >= v_eoc && !(balancingMode && nowTerm);
 
         if (eocFeedback) {
-            // battery is full
+            // Integrate the cell-overvoltage error into vpack_pin itself; drives
+            // vcell_high → v_eoc with no steady-state floor. Step only when a new
+            // BMS frame arrives so the per-frame drop = gain·err regardless of
+            // loopLF cadence; the EWMA on vPin_raw still damps single-frame outliers.
             _fallbackGlide.reset();
             _floatGlide.reset();
-            constexpr auto OV_FEEDBACK_GAIN = 4;
-            float vPin_raw = fmin(batSt.vout_avg.get(), vbat) - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN;
-            _vPinFilt.add(vPin_raw);
-            float vPin = _vPinFilt.get();
-            if (isnan(vpack_pin) or vPin < vpack_pin - 0.01f)
-                ESP_LOGI("charger", "update vpPin:=%.3fV (raw=%.3f cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)",
-                         vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
-            vpack_pin = vPin;
+            constexpr float OV_FEEDBACK_GAIN = 1.f;
+            unsigned long bmsFrameUs = batSt.vcell_high_t;
+            bool newBmsFrame = bmsFrameUs != _lastBmsFrameUs;
+            if (newBmsFrame || isnan(vpack_pin)) {
+                _lastBmsFrameUs = bmsFrameUs;
+                float base = std::isfinite(vpack_pin) ? vpack_pin : fmin(batSt.vout_avg.get(), vbat);
+                float vPin_raw = fmaxf(base - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN,
+                                       params.Vbat_fallback);
+                _vPinFilt.add(vPin_raw);
+                float vPin = _vPinFilt.get();
+                if (isnan(vpack_pin) or vPin < vpack_pin - 0.01f)
+                    ESP_LOGI("charger", "update vpPin:=%.3fV (raw=%.3f cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)",
+                             vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
+                vpack_pin = vPin;
+            }
         } else if (nowTerm && batDataOk) {
             // balancing mode / float
             // terminated float: hold an absolute target, ignore feedback/EWMA

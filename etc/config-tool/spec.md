@@ -33,6 +33,22 @@ zip/folder is treated as the source label (equal keys: last one overwrites the p
 Only `*.conf` files are parsed for editing; any other file in the zip/folder
 is carried opaquely and re-emitted on download (same byte payload).
 
+### 1.1 Overlay after a device read
+
+Exception to "clears previously loaded state": once the config has been read
+**live from a device** (`state.fromDevice`), opening a `.zip` or folder does
+**not** reset the editor. Instead the uploaded values are *overlaid* onto the
+live read as pending edits (`mergeUpload`), keeping each file's `original` (the
+device values) as the baseline. Every uploaded value that differs from the
+device lights up as a change (orange border + "was: …" / dirty dot) so the user
+can review what the file would alter before pushing it back with "Upload
+changes to device". Keys the upload doesn't mention are left untouched (a
+partial config never clears device keys). Files matched by basename; a file the
+device didn't report is added as a new tab. The source pill reads
+`<device> ← <upload>`, and the editor jumps to the first changed file. A
+non-device load (zip/folder with no prior device read) still clears state as
+before.
+
 ZIP support: built-in reader (stored + deflate via `DecompressionStream`) and
 writer (stored only). No external zip dependency.
 
@@ -74,7 +90,7 @@ Each `.conf` field is one row with:
 | text input     | the current value                                                  |
 | unit suffix    | rendered right-aligned inside the input (V, A, Ω, Hz, GPIO, …)     |
 | `×` clear-btn  | only visible when the input is non-empty                           |
-| "was: …" line  | shown when the current value differs from the value the file loaded with (or "was: (empty)" for cleared strings) |
+| "was: …" line  | shown when the current value differs from the value the source loaded with — "was: (empty)" for a cleared string, "was: (not set)" for a key the device/source didn't have but now holds a value (e.g. an overlay addition) |
 
 Stable row order: keys present in the file first, then firmware-known keys
 from `FILE_KEYS` that the file omits. This keeps rows from jumping when the
@@ -114,7 +130,11 @@ just before any trailing blank line.
 ## 3. Saving (file output)
 
 "Download .zip" repacks all carried files plus the serialized `.conf`s into
-a new zip named `<source>-edited.zip`. Synthetic, untouched tabs are
+a new zip. The name reflects whether anything was changed: if any field is
+dirty it is `<source>-edited.zip`; if nothing was touched (e.g. a freshly read,
+unedited device config) it is `<source>-backup-<YYYY-MM-DD>.zip` (today's local
+date). `<source>` is the device hostname / zip / folder name with any
+`.zip` and any " ← overlay" suffix stripped. Synthetic, untouched tabs are
 dropped (only synthetic files the user actually filled get written).
 
 ---
@@ -184,7 +204,7 @@ Helpers:
 | `getConfig(file, timeoutMs=3000)`    | Sends `get-config <file>`, returns `{key:value, …}` when device echoes `OK: get-config <file>` |
 | `sendCommand(cmd, onRx, timeoutMs)`  | Sends one command; resolves `true`/`false` on `OK:`/`ERR:` echo; streams lines to `onRx` |
 | `fetchHostname()`                    | Sends `hostname`, picks the device's reply for labelling             |
-| `importFromDevice(label)`            | Loops `FILE_KEYS`, calls `getConfig` for each, then `load()` the result |
+| `importFromDevice(label)`            | Loops `FILE_KEYS`, calls `getConfig` (4000 ms) for each, then `load()` the result. Retries a file up to 3× **on timeout only**: a missing file still replies fast with the `OK: get-config` marker and zero keys (authoritatively absent — no retry), so a timeout means the command/reply was dropped (common over MQTT QoS 0) and the file would otherwise falsely look "not on device". Files still lost after retries are listed in the status line. |
 
 ### 5.1 Serial
 

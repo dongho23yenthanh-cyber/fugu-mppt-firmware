@@ -26,11 +26,11 @@ Files map roughly to spec sections (`../spec.md`):
 | ---- | ------------ |
 | `parse.test.js`      | §2.5 (conf parser), §2.3 (`<not set>` / `0` / `""` semantics via serialize) |
 | `meta.test.js`       | §4 (`META`, `FILE_META`, channel prefixes, ssid patterns) |
-| `zip.test.js`        | §1 (ZIP reader/writer), §3 (download path) |
-| `load.test.js`       | §1 (loading clears state), §2.1 (synthetic tabs, tab order) |
-| `edit.test.js`       | §2.2 (rows, "was: …", clear button), §2.1 (dirty dot) |
+| `zip.test.js`        | §1 (ZIP reader/writer), §3 (download path: `-edited` vs dated `-backup`) |
+| `load.test.js`       | §1 (loading clears state), §1.1 (upload overlays a device read), §2.1 (synthetic tabs, tab order) |
+| `edit.test.js`       | §2.2 (rows, "was: …" incl. "(not set)", clear button), §2.1 (dirty dot) |
 | `console.test.js`    | §7 (device-log panel, ANSI rendering, tail-follow, command input) |
-| `transports.test.js` | §5 (`sendCommand`, `getConfig`), §5.3 (MQTT scan modal + topics) |
+| `transports.test.js` | §5 (`sendCommand`, `getConfig`, `importFromDevice` retry-on-timeout), §5.3 (MQTT scan modal + topics) |
 | `browser/smoke.spec.js` | CDN sanity (real `mqtt@5` + `ansi-to-html` load); real-layout tail-follow; folder drag-drop via `webkitGetAsEntry` |
 
 ## Adding tests

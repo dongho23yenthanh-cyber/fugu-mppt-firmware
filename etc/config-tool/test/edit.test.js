@@ -82,6 +82,25 @@ test('changedFields lists del + set commands the upload will send', async () => 
   assert.equal(byKey.pwm_freq.orig,'39000');
 });
 
+test('filling a key the source omitted shows "was: (not set)" and marks it changed', async () => {
+  const { window } = await loadEditor();
+  window.load(mk(SRC), 'demo');
+  // i2c_sda is firmware-known (FILE_KEYS) but absent from the file → empty "extra" row
+  const row = rowFor(window, 'i2c_sda');
+  assert.ok(row && row.classList.contains('extra'), 'absent firmware key renders as an extra row');
+  const input = row.querySelector('input');
+  const orig  = row.querySelector('.orig');
+  assert.equal(orig.style.display, 'none', '"was:" hidden while the row is unset');
+  assert.ok(!row.classList.contains('changed'));
+
+  input.value = '8';
+  input.dispatchEvent(new window.Event('input'));
+
+  assert.ok(row.classList.contains('changed'), 'filled absent key highlights as changed (matches the tab dot)');
+  assert.match(orig.textContent, /was:\s*\(not set\)/);
+  assert.notEqual(activeTabDot(window).style.display, 'none', 'tab dot should appear');
+});
+
 test('"<not set>" vs 0: empty input omits the key, explicit 0 keeps the row', async () => {
   const { window } = await loadEditor();
   // load a file where pwm_freq=0 (a real value)

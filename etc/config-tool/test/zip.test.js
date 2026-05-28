@@ -33,3 +33,29 @@ test('readZip rejects non-zip input', async () => {
   const { window } = await loadEditor();
   await assert.rejects(window.readZip(new ArrayBuffer(16)), /not a zip/);
 });
+
+// §3 — an untouched config downloads as a dated backup; once edited it is "-edited".
+test('download names an untouched config "<src>-backup-<date>.zip", "-edited" once changed', async () => {
+  const { window } = await loadEditor();
+  const enc = new TextEncoder();
+  window.load({ 'config/conf/board.conf': enc.encode('mcu=esp32s3\npwm_freq=39000\n') }, 'fry');
+  window._state.fromDevice = true; window._state.deviceName = 'fry';
+
+  let dl = null;
+  window.URL.createObjectURL = () => 'blob:stub';
+  window.URL.revokeObjectURL = () => {};
+  window.HTMLAnchorElement.prototype.click = function(){ dl = this.download; };
+
+  // unedited → backup name with today's local date
+  await window.download();
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  assert.equal(dl, `fry-backup-${today}.zip`);
+
+  // edit a field → "-edited"
+  const r = [...window.document.querySelectorAll('#panes .row')].find(x => x._key === 'pwm_freq');
+  r.querySelector('input').value = '40000';
+  r.querySelector('input').dispatchEvent(new window.Event('input'));
+  await window.download();
+  assert.equal(dl, 'fry-edited.zip');
+});

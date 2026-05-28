@@ -81,6 +81,39 @@ test('mqttWrite publishes one trimmed line to pv/log/<host>/cmd', async () => {
   assert.equal(client._publishes[0].msg,   'get-config board.conf');
 });
 
+// §5 — importFromDevice hardening: retry on timeout (lost reply over MQTT QoS 0),
+// but trust an OK-with-zero-keys as authoritatively absent (no wasted retries).
+test('importFromDevice retries a lost reply but treats an empty OK as absent', async () => {
+  const { window } = await loadEditor();
+  window.fetchHostname = async () => 'fry';
+
+  const attempts = {};
+  window.getConfig = async (file) => {
+    attempts[file] = (attempts[file] || 0) + 1;
+    if (file === 'board.conf')  return { mcu: 'esp32s3' };          // present
+    if (file === 'limits.conf') {                                    // dropped once, recovers
+      if (attempts[file] < 2) throw new Error('timeout');
+      return { vin_max: '85' };
+    }
+    if (file === 'coil.conf')   throw new Error('timeout');          // permanently lost
+    return {};                                                       // genuinely absent (fast OK)
+  };
+
+  await window.importFromDevice('fry');
+
+  const f = p => window._state.files['conf/' + p];
+  // a dropped reply is recovered by the retry → real file, not a synthetic "new" tab
+  assert.ok(f('limits.conf') && !f('limits.conf').isNew, 'limits.conf should recover via retry');
+  // a genuinely-absent file replies fast with zero keys → exactly one attempt, no retries
+  assert.equal(attempts['sensor.conf'], 1);
+  // a permanently-lost file stays "not on device" and is surfaced in the status line
+  assert.ok(f('coil.conf').isNew, 'coil.conf should remain synthetic after retries');
+  assert.match(window.document.getElementById('serial-status').textContent,
+               /timed out, skipped:.*coil\.conf/);
+  // a successful read marks state for the overlay path (§1.1)
+  assert.equal(window._state.fromDevice, true);
+});
+
 test('MQTT modal: Scan connects to the broker and lists devices seen on pv/log/<host>', async () => {
   const { window } = await loadEditor();
   // open the modal and fill the URL

@@ -651,8 +651,58 @@ function load(files, sourceName){
     const an = map[a].isNew ? 1 : 0, bn = map[b].isNew ? 1 : 0;
     return (an - bn) || confSort(a, b);
   });
-  state = { sourceName, files:map, confPaths:allPaths, active:allPaths[0] };
+  state = { sourceName, files:map, confPaths:allPaths, active:allPaths[0], fromDevice:false };
   renderApp();
+}
+
+/* Overlay uploaded conf values onto the current device-read state as pending
+   edits, instead of discarding the read. Each file's `original` (the device
+   values) is kept, so values that differ from the device light up as changed
+   and the user can review them before "Upload changes to device". Keys the
+   upload doesn't mention are left untouched. */
+function mergeUpload(files, sourceName){
+  for (const path of Object.keys(files)){
+    if (!isConfPath(path)) continue;
+    const base = path.split("/").pop();
+    let target = state.confPaths.find(p => p.split("/").pop() === base);
+    if (!target){          // file the device didn't report: add it as a new tab
+      const ref = state.confPaths[0] || "conf/board.conf";
+      target = ref.slice(0, -ref.split("/").pop().length) + base;
+      state.files[target] = { isConf:true, model:parseConf(""), extras:{},
+                              order:[...(FILE_KEYS[base]||[])], original:{}, isNew:true };
+      state.confPaths.push(target);
+    }
+    const f = state.files[target];
+    for (const l of parseConf(td.decode(files[path])).lines){
+      if (l.key == null) continue;
+      if (f.model.lines.some(x=>x.key===l.key)) setConfValue(f.model, l.key, l.value);
+      else { f.extras[l.key] = l.value; if (!f.order.includes(l.key)) f.order.push(l.key); }
+    }
+  }
+  state.confPaths.sort((a,b)=>{
+    const an=state.files[a].isNew?1:0, bn=state.files[b].isNew?1:0;
+    return (an-bn) || confSort(a,b);
+  });
+  state.sourceName = (state.deviceName||"device") + " ← " + sourceName;
+  // surface the diff: jump to a changed file unless the active tab already has changes
+  let total=0, firstChanged=null;
+  for (const p of state.confPaths){
+    const n = changedFields(state.files[p]).length;
+    total += n;
+    if (n && !firstChanged) firstChanged = p;
+  }
+  if (firstChanged && !changedFields(state.files[state.active]).length) state.active = firstChanged;
+  renderApp();
+  showStatus(total
+    ? `Applied "${sourceName}" — ${total} field${total>1?"s":""} differ from the device; review the highlighted rows, then "Upload changes to device".`
+    : `Applied "${sourceName}" — every value already matches the device.`);
+}
+
+// Uploading after a device read overlays the values for review; otherwise (no
+// device read yet) a fresh upload loads from scratch as before.
+function applyUpload(files, sourceName){
+  if (state && state.fromDevice) mergeUpload(files, sourceName);
+  else load(files, sourceName);
 }
 
 function confSort(a,b){
@@ -741,11 +791,14 @@ function renderPane(){
     const origEl = document.createElement("div"); origEl.className="orig"; origEl.style.display="none";
     right.appendChild(origEl);
 
-    const orig = f.original[key];  // value loaded from the file (undefined if not in file)
+    const orig = f.original[key];  // value loaded from the device/file (undefined if absent there)
     const updateOrig = ()=>{
-      const show = orig!==undefined && inp.value!==orig;
+      // mirror changedFields(): a key the device/file didn't have counts as
+      // changed once it holds a non-empty value, so the row highlight always
+      // matches the tab's dirty dot.
+      const show = orig!==undefined ? inp.value!==orig : inp.value.trim()!=="";
       origEl.style.display = show ? "" : "none";
-      if (show) origEl.textContent = "was: " + (orig==="" ? "(empty)" : orig);
+      if (show) origEl.textContent = "was: " + (orig===undefined ? "(not set)" : orig==="" ? "(empty)" : orig);
       row.classList.toggle("changed", show);
     };
     inp.oninput = isExtra
@@ -829,9 +882,16 @@ async function download(){
     out[path] = f.isConf ? enc.encode(serializeFile(f)) : f.bytes;
   }
   const blob=writeZip(out);
+  // an untouched config is a backup of the source (e.g. a live device read), so
+  // name it "<src>-backup-<today>.zip"; only call it "-edited" once something
+  // actually changed. Drop the " ← overlay" suffix so the base stays clean.
+  const dirty = Object.values(state.files).some(isFileDirty);
+  const base = (state.deviceName || state.sourceName || "config").replace(/\.zip$/i,"").split(" ← ")[0].trim() || "config";
+  const d = new Date();
+  const today = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   const a=document.createElement("a");
   a.href=URL.createObjectURL(blob);
-  a.download=(state.sourceName.replace(/\.zip$/i,"")||"config")+"-edited.zip";
+  a.download = dirty ? base+"-edited.zip" : base+"-backup-"+today+".zip";
   a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000);
 }
 
@@ -847,7 +907,7 @@ function showStatus(msg, isErr){
 function showErr(msg){ showStatus(msg, true); }
 
 async function handleZipFile(file){
-  try { load(await readZip(await file.arrayBuffer()), file.name); }
+  try { applyUpload(await readZip(await file.arrayBuffer()), file.name); }
   catch(e){ showErr("Could not read "+file.name+": "+e.message); }
 }
 
@@ -861,7 +921,7 @@ async function handleFolder(fileList){
       files[rel] = new Uint8Array(await file.arrayBuffer());
     }
     const root=(arr[0].webkitRelativePath||"").split("/")[0] || "config";
-    load(files, root);
+    applyUpload(files, root);
   } catch(e){ showErr("Could not read folder: "+e.message); }
 }
 
@@ -891,7 +951,7 @@ async function handleEntries(entries){
     if (!collected.length) throw new Error("dropped folder is empty");
     const files={};
     for (const {file,path} of collected) files[path]=new Uint8Array(await file.arrayBuffer());
-    load(files, entries[0].name || "config");
+    applyUpload(files, entries[0].name || "config");
   } catch(e){ showErr("Could not read dropped folder: "+e.message); }
 }
 
@@ -1019,20 +1079,34 @@ function fetchHostname(timeoutMs=2500){
 async function importFromDevice(sourceLabel){
   let label = sourceLabel || "device";
   try { const hn = await fetchHostname(); if (hn) label = hn; } catch(_){}
-  const enc = new TextEncoder(); const files = {}; let n=0;
+  const enc = new TextEncoder(); const files = {}; const missed = []; let n=0;
+  // Over MQTT (QoS 0) the get-config command or its reply can be dropped, which
+  // would make a real file look absent (and then an overlaid backup shows its
+  // values as phantom additions). A file that genuinely doesn't exist still
+  // replies fast with the "OK: get-config" marker and zero Conf lines, so
+  // getConfig resolves an empty map — only a *timeout* (no marker) means the
+  // reply was lost. Retry just those before treating the file as absent.
   for (const file of Object.keys(FILE_KEYS)){
-    showStatus("reading "+file+" …");
-    try {
-      const kv = await getConfig(file);
-      const keys = Object.keys(kv);
-      if (!keys.length) continue;            // file absent or empty on device
-      files["conf/"+file] = enc.encode(keys.map(k=>k+"="+kv[k]).join("\n")+"\n");
-      n++;
-    } catch(e){ /* timeout: treat as absent, keep going */ }
+    let kv = null;
+    for (let attempt=0; attempt<3 && kv===null; attempt++){
+      showStatus("reading "+file+(attempt?" (retry "+attempt+")":"")+" …");
+      if (attempt) await new Promise(r=>setTimeout(r, 250));   // let a late reply drain first
+      try { kv = await getConfig(file, 4000); } catch(e){ /* timeout: reply lost, retry */ }
+    }
+    if (!kv){ missed.push(file); continue; }   // still no marker after retries
+    const keys = Object.keys(kv);
+    if (!keys.length) continue;                // device authoritatively has no such file
+    files["conf/"+file] = enc.encode(keys.map(k=>k+"="+kv[k]).join("\n")+"\n");
+    n++;
   }
   if (!n) throw new Error("no config received — is the device at the console prompt?");
   load(files, label);
-  showStatus("");
+  state.fromDevice = true; state.deviceName = label;
+  // surface lost files: their tabs will show as "not on device", so the user
+  // knows not to trust a backup overlay there.
+  showStatus(missed.length
+    ? `read ${n} file(s) from ${label} — ${missed.length} timed out, skipped: ${missed.join(", ")}`
+    : "");
 }
 
 async function disconnectSerial(){

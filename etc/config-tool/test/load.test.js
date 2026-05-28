@@ -35,8 +35,8 @@ test('tab order honours TAB_ORDER (board, sensor, limits, …)', async () => {
     'config/conf/sensor.conf': '',
   }), 'demo');
   const labels = tabLabels(window);
-  // first three in fixed order regardless of input order
-  assert.deepEqual(labels.slice(0, 3), ['board.conf', 'sensor.conf', 'limits.conf']);
+  // first three in fixed order regardless of input order (labels strip ".conf", §2.1)
+  assert.deepEqual(labels.slice(0, 3), ['board', 'sensor', 'limits']);
 });
 
 test('synthetic tabs are pushed to the right of all real (loaded) tabs', async () => {
@@ -56,16 +56,16 @@ test('synthetic tabs are pushed to the right of all real (loaded) tabs', async (
                             .filter(i => i >= 0).pop();
   // every real tab comes before any synthetic tab
   assert.ok(synthIndex > lastRealIndex, 'synthetic tabs should follow all real tabs');
-  // real tabs retained TAB_ORDER ranking
-  assert.deepEqual(realLabels, ['board.conf', 'charger.conf', 'wifi.conf']);
+  // real tabs retained TAB_ORDER ranking (labels strip ".conf", §2.1)
+  assert.deepEqual(realLabels, ['board', 'charger', 'wifi']);
 });
 
 test('synthetic tabs (files absent from the source) get the .new class', async () => {
   const { window } = await loadEditor();
   window.load(mkFiles({ 'config/conf/board.conf': 'mcu=esp32s3\n' }), 'demo');
   const tabs = [...window.document.querySelectorAll('#tabs .tab')];
-  const board = tabs.find(t => t.firstChild.textContent.trim() === 'board.conf');
-  const wifi  = tabs.find(t => t.firstChild.textContent.trim() === 'wifi.conf');
+  const board = tabs.find(t => t.firstChild.textContent.trim() === 'board');
+  const wifi  = tabs.find(t => t.firstChild.textContent.trim() === 'wifi');
   assert.ok(!board.classList.contains('new'),  'real tab should not be .new');
   assert.ok(wifi.classList.contains('new'),    'synthetic tab should be .new');
 });
@@ -89,5 +89,50 @@ test('loading a second source clears the first', async () => {
   window.load(mkFiles({ 'b/conf/board.conf': 'mcu=esp32\n'   }), 'second');
   assert.equal(window.document.getElementById('srcname').textContent, 'second');
   // confPaths from "first" must be gone
+  for (const p of Object.keys(window._state.files)) assert.ok(!p.startsWith('a/'), p);
+});
+
+// §1.1 — after a live device read, an upload overlays its values onto the read
+// (for review) instead of discarding it.
+test('applyUpload after a device read overlays values, keeping the device baseline', async () => {
+  const { window } = await loadEditor();
+  // simulate a device read: board.conf present (incl. i2c_sda), limits.conf absent on device
+  window.load(mkFiles({ 'conf/board.conf': 'mcu=esp32s3\npwm_freq=39000\ni2c_sda=8\n' }), 'fry');
+  window._state.fromDevice = true; window._state.deviceName = 'fry';
+
+  // overlay a backup that changes pwm_freq, omits i2c_sda, and adds limits.conf
+  window.applyUpload(mkFiles({
+    'conf/board.conf':  'mcu=esp32s3\npwm_freq=40000\n',
+    'conf/limits.conf': 'vin_max=85\n',
+  }), 'backup-fry');
+
+  const board = window._state.files['conf/board.conf'];
+  // device read is NOT discarded: original baseline preserved, overlay applied as a pending edit
+  assert.equal(board.original.pwm_freq, '39000', 'device baseline preserved');
+  // only the genuinely-different field is flagged; mcu (matched) and i2c_sda (omitted) are not
+  // (spread into a test-realm array so deepEqual isn't tripped by cross-realm Array.prototype)
+  assert.deepEqual([...window.changedFields(board)].map(c => c.key), ['pwm_freq']);
+  const ch = window.changedFields(board).find(c => c.key === 'pwm_freq');
+  assert.equal(ch.cur, '40000');
+  assert.equal(ch.orig, '39000');
+  // omitted key left untouched (a partial config never clears device keys)
+  assert.equal(board.model.lines.find(l => l.key === 'i2c_sda').value, '8');
+
+  // a file the device didn't have gets the overlay value as an addition ("was: (not set)")
+  const limits = window._state.files['conf/limits.conf'];
+  const lch = window.changedFields(limits).find(c => c.key === 'vin_max');
+  assert.equal(lch.cur, '85');
+  assert.equal(lch.orig, undefined);
+
+  // source pill reflects the overlay
+  assert.equal(window.document.getElementById('srcname').textContent, 'fry ← backup-fry');
+});
+
+test('applyUpload without a prior device read loads fresh (clears state)', async () => {
+  const { window } = await loadEditor();
+  window.load(mkFiles({ 'a/conf/board.conf': 'mcu=esp32s3\n' }), 'first');
+  // no fromDevice flag → applyUpload behaves like load()
+  window.applyUpload(mkFiles({ 'b/conf/board.conf': 'mcu=esp32\n' }), 'second');
+  assert.equal(window.document.getElementById('srcname').textContent, 'second');
   for (const p of Object.keys(window._state.files)) assert.ok(!p.startsWith('a/'), p);
 });

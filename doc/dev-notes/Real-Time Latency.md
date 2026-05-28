@@ -318,6 +318,36 @@ The first sensor-calibration completion fires 2-3 `ESP_LOGI`s back-to-back (`src
 To remove it, get the allocation off the RT path: preallocated buffer pool / fixed-size ring for the async log queue
 instead of `new char[l+1]` per entry.
 
+# Console commands trip the loop-latency watchdog (fry, 2026-05-28)
+
+After the boot deadlock and the `ESP_INTR_FLAG_IRAM` cache-error were fixed, fry booted and ran, but
+cycled `Loop latency high (<200 Hz), shutdown!` → `stopAndBackoff(5s)` → re-sweep + recalibrate. This
+is the same symptom long attributed to INA226 alert misses, but the field data points elsewhere.
+
+Quantified from the MQTT log over a clean hour (no flash writes involved):
+
+- ~7 shutdowns/hour. **No** cache panics, **no** reboots — the converter just keeps interrupting itself.
+- sps median 511 (healthy ~90% of the time); ~10% of 1 s windows dip < 200.
+- persistent max loop lag ~3 ms vs ~2 ms nominal at 511 sps — already near the edge.
+
+**Root cause — 7/7 correlation: every shutdown fired ~1 s after a console command** (`hostname`, `ip`,
+`uptime`, `getc`). The pure in-memory commands (`ip`/`uptime` read no flash) trip it just as the flash
+one does, so it is **not** the flash read — handling a command on core0 stalls the RT loop on core1
+below the 200 Hz floor. Same shared-lock contention as *Deferred logging still mallocs on the RT core*
+above: the command's `received serial command` log + its response + the `OK:` marker run through the
+console mux and allocate, holding the heap lock long enough that core1's RT path stalls for a whole
+watchdog window. Net effect: a discovery / health poller that sends `ip`/`hostname`/`uptime` shuts the
+converter down on **every** poll. fry is stable when it is not polled.
+
+Fix candidates (not yet applied — live converter, pending decision):
+
+- Get the log-queue allocation off the RT path (preallocated ring, as above) — removes the contention
+  at the source.
+- Make the loop-latency watchdog require the low-sps condition to persist across N consecutive windows,
+  so a one-off core0 stall can't trip `stopAndBackoff`.
+- Stop the poller from hitting these devices' console, or have lightweight commands (`ip`/`uptime`)
+  avoid the heavy logging/alloc path.
+
 # Flash Cache
 
 * IRAM

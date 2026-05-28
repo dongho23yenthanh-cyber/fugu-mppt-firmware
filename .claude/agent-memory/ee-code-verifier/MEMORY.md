@@ -1,0 +1,4 @@
+- [MCPWM operator has ONE shared DT submodule](project_mcpwm_dt_one_submodule.md) — delay LS posedge only; shave dtTicks off pwmMax for the LS→HS wrap; doc currently shows the wrong pattern
+- [MCPWM cmp update_on_tez=1 (confirmed)](project_mcpwm_cmp_update_on_tez.md) — TEZ-buffered atomic writes; doc and code now agree; glitch-free duty-step test is the regression guard
+- [pwmRect ceiling = pwmMax−pwmCtrl−1](project_lsoff_minus_one_guard.md) — cmpLS==period silently keeps LS HIGH through the wrap → shoot-through; keep the −1
+- [PWM tests use internal GPIO-matrix loopback](project_pwm_internal_loopback.md) — io_loop_back flag + esp_rom_gpio_connect_in_signal; zero jumpers; ±30 ns tolerance swallows matrix delay

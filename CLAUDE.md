@@ -25,6 +25,21 @@ below).
 the device (via MQTT/serial) to pull the new image. The device must already have network and an `ota.conf`/MQTT broker
 configured.
 
+`etc/ota.py` discovers devices (scope-server broadcast + NAT-router scan, falls back to `fallback_hosts`), serves
+`build/fugu-firmware.bin` on :9000 with a URL built from *this* host's IP as the device sees it (so it works through the
+NAT router), sends `ota <url>` to each, then prints a before/after version table. Run it from the repo root
+(`PYTHONPATH=./ python3 etc/ota.py`, or just `./ota.sh` to build first). Flags:
+
+- `-m REGEX` / `--match` — target only devices whose hostname matches (e.g. `-m flat` for a single board). **Always
+  scope with `-m` when you don't intend to update every discovered device.**
+- `-n` / `--dry-run` — discover + show the version delta and which hosts *would* update, without sending anything.
+- `-f` / `--force` — push even if the device already reports the local build's version.
+
+**Always `-n` first, and `-m <name>` to target, before OTAing `fry`/`flat`** — they're live converters and an OTA
+reboots them into the new image. Rollback (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`) + the `setup()` boot watchdog only
+auto-revert a bad image if the device is running a bootloader built with rollback (an app-only OTA keeps the old
+bootloader); confirm versions in the after-table.
+
 ## Provisioning (board configs)
 
 Hardware behavior (pins, ADC selection, voltage divider ratios, current sense factors, limits, MQTT broker, charger

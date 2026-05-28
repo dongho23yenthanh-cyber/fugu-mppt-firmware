@@ -1094,26 +1094,50 @@ function fetchHostname(timeoutMs=2500){
 async function importFromDevice(sourceLabel){
   let label = sourceLabel || "device";
   try { const hn = await fetchHostname(); if (hn) label = hn; } catch(_){}
-  const enc = new TextEncoder(); const files = {}; const missed = []; let n=0;
-  // Over MQTT (QoS 0) the get-config command or its reply can be dropped, which
-  // would make a real file look absent (and then an overlaid backup shows its
-  // values as phantom additions). A file that genuinely doesn't exist still
-  // replies fast with the "OK: get-config" marker and zero Conf lines, so
-  // getConfig resolves an empty map — only a *timeout* (no marker) means the
-  // reply was lost. Retry just those before treating the file as absent.
-  for (const file of Object.keys(FILE_KEYS)){
-    let kv = null;
-    for (let attempt=0; attempt<3 && kv===null; attempt++){
-      showStatus("reading "+file+(attempt?" (retry "+attempt+")":"")+" …");
-      if (attempt) await new Promise(r=>setTimeout(r, 250));   // let a late reply drain first
-      // 1500ms: a real reply (incl. the empty-file OK marker) arrives sub-second even over MQTT;
-      // 4000ms was almost pure dead-wait on a QoS0 drop, ×3 retries ×16 files = the import slowdown.
-      try { kv = await getConfig(file, 1500); } catch(e){ /* timeout: reply lost, retry */ }
+  const enc = new TextEncoder();
+  const allFiles = Object.keys(FILE_KEYS);
+  const result = {};        // file -> {key: value}, filled as Conf lines stream in
+  const seen = new Set();   // files whose "OK: get-config <file>" marker has arrived
+
+  // One listener for ALL files: Conf lines are keyed by filename (CONF_LINE) so replies may
+  // interleave freely. The marker means a file's reply is complete — marker + zero Conf lines =
+  // file absent on device; no marker = the command or reply was dropped (QoS0), which we retry.
+  const onLine = (ln) => {
+    const m = ln.match(CONF_LINE);
+    if (m && FILE_KEYS[m[1]]) { (result[m[1]] || (result[m[1]] = {}))[m[2]] = m[3]; return; }
+    if (ln.includes("OK: get-config "))
+      for (const f of allFiles) if (ln.includes("OK: get-config "+f)) { seen.add(f); break; }
+  };
+  const waitUntil = async (pred, timeoutMs) => {
+    const deadline = performance.now() + timeoutMs;
+    while (!pred() && performance.now() < deadline) await new Promise(r=>setTimeout(r, 80));
+  };
+
+  lineListeners.add(onLine);
+  try {
+    // Pipeline: fire every get-config back-to-back. The device answers them sequentially but the
+    // round-trips overlap, so total ≈ device processing + one round-trip, not 16×round-trip (the
+    // old per-file await was the MQTT slowdown). Writes stay sequential so serial bytes don't mix.
+    for (const f of allFiles) await activeWrite("get-config "+f+"\r\n");
+    showStatus("reading config from "+label+" …");
+    await waitUntil(()=>seen.size>=allFiles.length, 6000);
+    // Retry only the files whose marker never came (dropped), not every file.
+    let drop = allFiles.filter(f=>!seen.has(f));
+    for (let pass=0; pass<2 && drop.length; pass++){
+      showStatus("retrying "+drop.length+" file(s) …");
+      await new Promise(r=>setTimeout(r, 250));   // let a late reply drain first
+      for (const f of drop) await activeWrite("get-config "+f+"\r\n");
+      await waitUntil(()=>drop.every(f=>seen.has(f)), 2500);
+      drop = allFiles.filter(f=>!seen.has(f));
     }
-    if (!kv){ missed.push(file); continue; }   // still no marker after retries
-    const keys = Object.keys(kv);
-    if (!keys.length) continue;                // device authoritatively has no such file
-    files["conf/"+file] = enc.encode(keys.map(k=>k+"="+kv[k]).join("\n")+"\n");
+  } finally { lineListeners.delete(onLine); }
+
+  const files = {}; const missed = []; let n = 0;
+  for (const f of allFiles){
+    if (!seen.has(f)) { missed.push(f); continue; }   // no marker → reply lost, not authoritative
+    const kv = result[f];
+    if (!kv || !Object.keys(kv).length) continue;     // marker, no lines → file absent on device
+    files["conf/"+f] = enc.encode(Object.keys(kv).map(k=>k+"="+kv[k]).join("\n")+"\n");
     n++;
   }
   if (!n) throw new Error("no config received — is the device at the console prompt?");

@@ -286,7 +286,9 @@ def scan_ble_proxy(timeout=8.0):
     async def _scan():
         cli = APIClient(host, port, None)  # plaintext, no noise PSK
         try:
-            await cli.connect(login=True)
+            # aioesphomeapi's own connect timeout is ~60 s; bound it to our budget so an
+            # unreachable proxy can't stall the whole discovery scan.
+            await asyncio.wait_for(cli.connect(login=True), timeout)
         except Exception as e:
             print(f"  (ble-proxy {proxy}: {e})")
             return []
@@ -309,32 +311,15 @@ def scan_ble_proxy(timeout=8.0):
     return asyncio.run(_scan())
 
 
-def discover_devices():
-    """Scan every transport for reachable Fugu devices and print what to pass to connect.
-
-    The scans block for different durations (serial is instant, mDNS ~2 s, BLE/MQTT/proxy ~5-8 s),
-    so run them concurrently and join — total time is the slowest scan, not their sum.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-    print("scanning for Fugu devices on all transports …\n")
-
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        f_serial = ex.submit(scan_serial)
-        f_telnet = ex.submit(scan_telnet)
-        f_ble = ex.submit(scan_ble)
-        f_mqtt = ex.submit(scan_mqtt)
-        f_nat = ex.submit(scan_nat)
-        f_bleproxy = ex.submit(scan_ble_proxy)
-        ports, hosts, devs, mqtt_hosts, nat, proxy_devs = (
-            f_serial.result(), f_telnet.result(), f_ble.result(), f_mqtt.result(),
-            f_nat.result(), f_bleproxy.result())
-
-    print("serial:")
+def _print_serial(ports):
+    print("\nserial:")
     for p in ports:
         print(f"  {p:<32} →  -p {p}")
     if not ports:
         print("  (none)")
 
+
+def _print_telnet(hosts):
     print("\ntelnet/scope (mDNS):")
     if hosts is None:
         print("  (skipped — `pip install zeroconf`)")
@@ -344,6 +329,8 @@ def discover_devices():
         if not hosts:
             print("  (none)")
 
+
+def _print_nat(nat):
     print("\ntelnet via NAT (nat.env):")
     if nat is None:
         print("  (skipped — set $NAT_TELNET, or edit etc/nat.env)")
@@ -354,6 +341,8 @@ def discover_devices():
         if not nat:
             print("  (none)")
 
+
+def _print_ble(devs):
     print("\nBLE (NUS):")
     if devs is None:
         print("  (skipped — `pip install bleak`)")
@@ -363,6 +352,8 @@ def discover_devices():
         if not devs:
             print("  (none)")
 
+
+def _print_ble_proxy(proxy_devs):
     print("\nBLE via ESPHome proxy ($BLE_PROXY):")
     if proxy_devs is None:
         print("  (skipped — set $BLE_PROXY in nat.env, and `pip install aioesphomeapi`)")
@@ -373,6 +364,8 @@ def discover_devices():
         if not proxy_devs:
             print("  (none)")
 
+
+def _print_mqtt(mqtt_hosts):
     print("\nMQTT (pv/log):")
     if mqtt_hosts is None:
         print("  (skipped — set $MQTT_HOST, or pass --mqtt to connect)")
@@ -382,6 +375,31 @@ def discover_devices():
             print(f"  {h:<24} →  --mqtt {broker} --name {h}")
         if not mqtt_hosts:
             print("  (none)")
+
+
+def discover_devices():
+    """Scan every transport for reachable Fugu devices and print what to pass to connect.
+
+    The scans block for different durations (serial is instant, mDNS ~2 s, BLE/MQTT/proxy ~5-8 s),
+    so run them concurrently and print each section the moment its scan returns (completion order,
+    fast transports first) instead of joining all of them. Total time is still the slowest scan,
+    but useful results appear immediately rather than after the slowest one finishes.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    print("scanning for Fugu devices on all transports …")
+
+    jobs = [
+        (scan_serial, _print_serial),
+        (scan_telnet, _print_telnet),
+        (scan_nat, _print_nat),
+        (scan_ble, _print_ble),
+        (scan_ble_proxy, _print_ble_proxy),
+        (scan_mqtt, _print_mqtt),
+    ]
+    with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+        futs = {ex.submit(scan): printer for scan, printer in jobs}
+        for fut in as_completed(futs):
+            futs[fut](fut.result())
     return 0
 
 

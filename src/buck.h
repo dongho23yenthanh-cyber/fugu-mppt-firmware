@@ -247,12 +247,13 @@ public:
         }
 
 #if WITH_MCPWM
-        // pwmMax pinned to LEDC-equivalent so rect_offset/pwmRectMin calibration stays bit-identical.
-        constexpr uint32_t kFixedTicks = 2048;
+        // bestTiming picks the max period_ticks the hardware can give us at pwmFrequency
+        // (highest src clock + integer prescaler, 16-bit period cap). See doc/mcpwm-sync-buck-driver.md.
+        // rect_offset is stored in counts and must be re-measured when migrating from LEDC.
+        uint32_t resolutionHz = bestTiming(pwmFrequency).resolution_hz;
         uint32_t dtTicks = (uint32_t) std::lround(
-            boardConf.getFloat("pwm_deadtime_ns", 0.f) * 1e-9f
-            * (float) pwmFrequency * (float) kFixedTicks);
-        pwmDriver.init(0, pwmFrequency, pinCtrl, pinRect, dtTicks, pwmEnLogic, kFixedTicks);
+            boardConf.getFloat("pwm_deadtime_ns", 0.f) * 1e-9f * (float) resolutionHz);
+        pwmDriver.init(0, pwmFrequency, pinCtrl, pinRect, dtTicks, pwmEnLogic);
         uint8_t faultPin = boardConf.getByte("pwm_fault_pin", 255);
         if (faultPin != 255) {
             faultBrake.initGpio(0, faultPin, boardConf.getByte("pwm_fault_active_high", 0));

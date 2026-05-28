@@ -374,12 +374,6 @@ static void lfMarkOtaValid() {
 
 void setup() {
     consoleInit();
-#ifdef WITH_NETW
-    // Route esp_log through vprintf_mux from the very start of setup() so the boot-log backlog
-    // captures the whole setup() body (replayed to MQTT once it connects). vprintf_mux writes UART
-    // synchronously first, so an abort during setup still reaches the console.
-    enable_esp_log_to_telnet();
-#endif
     setupCli();
     ESP_LOGI("main", "*** %s", format_version());
     bootWatchdogArm();
@@ -456,6 +450,14 @@ void setup() {
     }
 
     registerServices();
+
+    // esp_log -> vprintf_mux (telnet/MQTT/boot-log sinks). Kept LATE on purpose: hooking it before
+    // WiFi connects routes the wifi task's connect-time logging burst through vprintf_mux's 300B
+    // stack buffer, overflowing the 3072B wifi task stack (this bricked flat). So the boot-log
+    // backlog captures from here on, not the setup() body — accept that over the brick.
+#ifdef WITH_NETW
+    enable_esp_log_to_telnet();
+#endif
 
 #if CONFIG_HEAP_POISONING_COMPREHENSIVE
     ESP_LOGW("main", "HEAP_POISONING=COMPREHENSIVE: every alloc has head/tail canaries + fill, expect 5-10%% perf hit and ~16B/alloc RAM cost. Debug-only.");

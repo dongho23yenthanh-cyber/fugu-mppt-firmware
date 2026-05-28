@@ -256,37 +256,39 @@ void flush_async_uart_log() {
 static int vprintf_mux(const char *fmt, va_list argptr) {
     char loc_buf[300]; // stack-local: vprintf_mux re-enters across core-0 tasks (net loop + mqtt), a static races
 
-    int r = old_vprintf(fmt, argptr);
-
-    if (log_telnet or logCallbackCount or s_bootLogOpen) {
-        va_list ap2;            // argptr is spent by old_vprintf; the mirror needs its own copy
-        va_copy(ap2, argptr);
-        int l = vsnprintf(loc_buf, sizeof(loc_buf), fmt, ap2);
+    // Format once, then reuse the string for UART + every mirror sink. Formatting twice (one
+    // vsnprintf for UART, another for the mirror) overflowed the 3072-byte ESP-IDF wifi task during
+    // auth, since log emission runs on the caller's stack. va_copy before the first vsnprintf: it
+    // spends argptr, and the long-line refmt below needs the args again.
+    va_list ap2;
+    va_copy(ap2, argptr);
+    int l = vsnprintf(loc_buf, sizeof(loc_buf), fmt, argptr);
+    if (l <= 0) {
         va_end(ap2);
-        if (l > 0) {
-            char *buf = loc_buf;
-            // vsnprintf returns the untruncated length; writing l from loc_buf over-reads the stack
-            if (l >= (int) sizeof(loc_buf)) {
-                buf = (char *) malloc(l + 1);
-                if (buf) {
-                    va_copy(ap2, argptr);
-                    vsnprintf(buf, l + 1, fmt, ap2);
-                    va_end(ap2);
-                } else {
-                    buf = loc_buf;
-                    l = sizeof(loc_buf) - 1;
-                }
-            }
-            if (log_telnet) log_telnet->write((uint8_t *) buf, l);
-            LogCallback cbs[kMaxLogCallbacks];
-            int n = snapshotLogCallbacks(cbs);
-            for (int i = 0; i < n; ++i) cbs[i](buf, l);
-            bootLogCapture(buf, l);
-            if (buf != loc_buf) free(buf);
-        }
+        return l;
     }
 
-    return r;
+    char *buf = loc_buf;
+    // vsnprintf returns the untruncated length; reading l from loc_buf would over-read the stack.
+    if (l >= (int) sizeof(loc_buf)) {
+        buf = (char *) malloc(l + 1);
+        if (buf) vsnprintf(buf, l + 1, fmt, ap2);
+        else { buf = loc_buf; l = sizeof(loc_buf) - 1; }
+    }
+    va_end(ap2);
+
+    printf_old("%s", buf); // UART/JTAG console (always)
+
+    if (log_telnet or logCallbackCount or s_bootLogOpen) {
+        if (log_telnet) log_telnet->write((uint8_t *) buf, l);
+        LogCallback cbs[kMaxLogCallbacks];
+        int n = snapshotLogCallbacks(cbs);
+        for (int i = 0; i < n; ++i) cbs[i](buf, l);
+        bootLogCapture(buf, l);
+    }
+
+    if (buf != loc_buf) free(buf);
+    return l;
 }
 
 

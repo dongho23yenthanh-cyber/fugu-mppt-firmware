@@ -90,7 +90,7 @@ idf.py flash
 ## Configuring Build
 
 Build-time features are toggled via environment variables read. Set them on the `idf.py build` invocation, e.g.
-`WITH_BLE=1 WITH_BINARY_TELE=1 idf.py build` (windows users: `set WITH_BINARY_TELE=1 && idf.py build`).
+`WITH_BLE=1 idf.py build` (windows users: `set WITH_BLE=1 && idf.py build`).
 If you change one of the features you need to run `... idf.py reconfigure`.
 
 | Flag                | Default | What it does                                                                                                                                                                                                                |
@@ -98,9 +98,11 @@ If you change one of the features you need to run `... idf.py reconfigure`.
 | `WITH_NETW`         |     on  | WiFi, mDNS, MQTT, telemetry (UDP/InfluxDB), HTTPS OTA, certificates, web server, FTP, telnet. Set `WITH_NETW=0` to strip all of them. Saves ~700 KB; BLE console and BLE OTA remain. Layers in `sdkconfig.no_netw` when off. |
 | `WITH_BLE`          |    off  | NimBLE NUS console (`BleConsoleService`) and BLE OTA push (`otab` command). Layers in `sdkconfig.ble`. Costs ~150 KB.                                                                                                       |
 | `WITH_MCPWM`        |    off  | Swaps the LEDC gate driver for the MCPWM driver (hardware dead-time, GPIO OST brake, glitch-free comparator updates). See [`doc/mcpwm-sync-buck-driver.md`](doc/mcpwm-sync-buck-driver.md).                                  |
-| `WITH_BINARY_TELE`  |    off  | Sends telemetry as a binary symbol-table wire format (`sym_line_protocol.h`) with optional `tamp` compression. The UDP `:8086` receiver must decode it — plain InfluxDB ingestion no longer works.                          |
 | `WITH_SPROFILER`    |    off  | Compiles in the semihosting sampling profiler (`sprofiler_initialize`, only useful with OpenOCD attached). When off, the `esp32-semihosting-profiler` component is excluded entirely (~8 KB BSS).                            |
 | `WITH_VCONV`        |    off  | Replaces the physical gate driver + ADC with an in-firmware synchronous-buck plant (`src/sim/vconv.*`, configured via `vconv.conf`). For closed-loop control-algorithm work without hardware. Mutually exclusive with `WITH_MCPWM`. |
+
+Binary telemetry is no longer a build flag — it is a runtime setting in `tele.conf` (`binary=1` selects the
+symbol-table wire `sym_line_protocol.h`, `compressor=none|tamp`); the UDP `:8086` receiver must decode it.
 
 Other build env vars (prefix-style shown below is bash/zsh; on Windows use `set VAR=value && idf.py build`
 or `$env:VAR="value"; idf.py build` in PowerShell):

@@ -12,7 +12,7 @@ Before any `idf.py` invocation, source ESP-IDF into the shell. The repo ships a 
 ```bash
 . ./idf-export.sh          # sources ../../esp/idf5.5/export.sh, sets IDF_TARGET=esp32s3, autodetects $ESPPORT
 idf.py set-target esp32s3  # only needed once per build dir
-WITH_BINARY_TELE=1 idf.py build   # BLE on by default; pass WITH_BLE=0 to drop the NimBLE stack
+idf.py build               # WITH_BLE=1 adds the NimBLE stack (BLE console + OTA); binary telemetry is a tele.conf setting, not a build flag
 idf.py -p $ESPPORT flash monitor
 ```
 

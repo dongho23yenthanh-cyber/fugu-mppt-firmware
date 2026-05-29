@@ -5,7 +5,7 @@ Reuses the etc/fugu console package and fugu_console.make_transport, so every tr
 serial (-p), telnet/NAT (--ip host:port), BLE NUS (--ble [--address]), ESPHome BLE proxy
 (--ble-proxy host [--address]) or MQTT (--mqtt broker). Sends only read-only commands
 (ip/status/mem/svc list/sensor) — never drives the converter. Output is a Markdown table by
-default (--plain for aligned columns).
+default (--plain for aligned columns). Requires: tabulate (pip install tabulate).
 
   python etc/fugu_health.py --ble --address <UUID>
   python etc/fugu_health.py --ip 192.168.1.173:232
@@ -16,6 +16,8 @@ import os
 import re
 import sys
 import time
+
+from tabulate import tabulate
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fugu.console import Console
@@ -225,17 +227,11 @@ def build_rows(st, status, mem, svcs, sensors, cd):
     return rows
 
 
-def render_md(rows):
-    out = ["| Check | Reading | Verdict |", "|---|---|---|"]
-    for c, r, v in rows:
-        out.append(f"| **{c}** | {r} | {v} |")
-    return "\n".join(out)
-
-
-def render_plain(rows):
-    w0 = max(len(c) for c, _, _ in rows)
-    w1 = max(len(r) for _, r, _ in rows)
-    return "\n".join(f"{v} {c.ljust(w0)}  {r.ljust(w1)}" for c, r, v in rows)
+def render(rows, plain=False):
+    # verdict first in plain mode (reads as a status column), last in the Markdown table
+    table = ([(v, c, r) for c, r, v in rows] if plain else [(c, r, v) for c, r, v in rows])
+    headers = ["", "Check", "Reading"] if plain else ["Check", "Reading", "Verdict"]
+    return tabulate(table, headers=headers, tablefmt="simple" if plain else "github")
 
 
 def add_transport_args(ap):
@@ -285,7 +281,7 @@ def main():
 
     rows = build_rows(st, sd, parse_mem(mem), parse_svc(svc), parse_sensors(sensor),
                       parse_coredump(cd))
-    print(render_plain(rows) if args.plain else render_md(rows))
+    print(render(rows, plain=args.plain))
     return 0
 
 

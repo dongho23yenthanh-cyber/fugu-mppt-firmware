@@ -8,7 +8,7 @@ links, and fits the OTA slot (1,803,360 B / ~4% free). On device: boots with BLE
 `ble.conf enabled=1`, `svc start/stop ble` advertise/teardown cleanly (justworks security), RT
 loop unaffected (steady ~1.1 ms max lag; one-time ~16 ms `BLEDevice::init` transient on the core-0
 network loop at start). **Still untested:** actual BLE client connection (pairing + NUS round-trip
-from a phone / WebBLE) — needs a central. Build with `WITH_BLE=1 idf.py build`.
+from a phone / WebBLE) — needs a central. Build with `idf.py menuconfig (enable CONFIG_FUGU_WITH_BLE), then idf.py build`.
 - `src/console_ble.{h,cpp}` — NimBLE NUS server (RX queue → `loopConsole`, TX notify, configurable
   security, log mirror), no-op stubs when `WITH_BLE` undefined.
 - `src/logging.{h,cpp}` — single `logCallback` → array + `removeLogCallback` (MQTT switched to it).
@@ -192,7 +192,7 @@ and parses responses. Add a **sibling WebBLE transport** that reuses the same co
 1. **Build (no BLE) still works & unchanged size**:
    `. ./idf-export.sh && idf.py build` → confirm `build/fugu-firmware.bin` ≈ 1.55 MB.
 2. **Build with BLE**:
-   `WITH_BLE=1 idf.py build` then check size fits:
+   `idf.py menuconfig (enable CONFIG_FUGU_WITH_BLE), then idf.py build` then check size fits:
    `ls -l build/fugu-firmware.bin` must be **< 1,871,872 B**; also `idf.py size`.
 3. **Core affinity**: flash, then on the serial console run `rt-stats` and confirm no BLE/NimBLE
    task is on core 1; RT loop timing (`rtcount`) is unaffected.

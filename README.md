@@ -89,17 +89,22 @@ idf.py flash
 
 ## Configuring Build
 
-Build-time features are toggled via environment variables read. Set them on the `idf.py build` invocation, e.g.
-`WITH_BLE=1 idf.py build` (windows users: `set WITH_BLE=1 && idf.py build`).
-If you change one of the features you need to run `... idf.py reconfigure`.
+Build-time features are Kconfig options (`CONFIG_FUGU_WITH_*`, under **"Fugu MPPT firmware"** in
+`idf.py menuconfig`), or set them in an sdkconfig fragment / `sdkconfig.defaults`. The old `WITH_*`
+*environment variables* are no longer accepted — the build errors out if one is set, pointing here.
+`menuconfig` reconfigures automatically; editing a fragment takes effect on the next `idf.py build`.
 
-| Flag                | Default | What it does                                                                                                                                                                                                                |
-|---------------------|--------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `WITH_NETW`         |     on  | WiFi, mDNS, MQTT, telemetry (UDP/InfluxDB), HTTPS OTA, certificates, web server, FTP, telnet. Set `WITH_NETW=0` to strip all of them. Saves ~700 KB; BLE console and BLE OTA remain. Layers in `sdkconfig.no_netw` when off. |
-| `WITH_BLE`          |    off  | NimBLE NUS console (`BleConsoleService`) and BLE OTA push (`otab` command). Layers in `sdkconfig.ble`. Costs ~150 KB.                                                                                                       |
-| `WITH_MCPWM`        |    off  | Swaps the LEDC gate driver for the MCPWM driver (hardware dead-time, GPIO OST brake, glitch-free comparator updates). See [`doc/mcpwm-sync-buck-driver.md`](doc/mcpwm-sync-buck-driver.md).                                  |
-| `WITH_SPROFILER`    |    off  | Compiles in the semihosting sampling profiler (`sprofiler_initialize`, only useful with OpenOCD attached). When off, the `esp32-semihosting-profiler` component is excluded entirely (~8 KB BSS).                            |
-| `WITH_VCONV`        |    off  | Replaces the physical gate driver + ADC with an in-firmware synchronous-buck plant (`src/sim/vconv.*`, configured via `vconv.conf`). For closed-loop control-algorithm work without hardware. Mutually exclusive with `WITH_MCPWM`. |
+| Kconfig option            | Default | What it does                                                                                                                                                                                                                |
+|---------------------------|--------:|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `CONFIG_FUGU_WITH_NETW`     |     on  | WiFi, mDNS, MQTT, telemetry (UDP/InfluxDB), HTTPS OTA, certificates, web server, FTP, telnet. Turn off to strip all of them — saves ~700 KB; BLE console and BLE OTA remain. Layers in `sdkconfig.no_netw` when off. |
+| `CONFIG_FUGU_WITH_BLE`      |     on  | NimBLE NUS console (`BleConsoleService`) and BLE OTA push (`otab` command). `select`s `BT_ENABLED`; the NimBLE host + radio/thermal tunings live in `sdkconfig.ble` (layered when on). Costs ~250 KB.                 |
+| `CONFIG_FUGU_WITH_MCPWM`    |    off  | Swaps the LEDC gate driver for the MCPWM driver (hardware dead-time, GPIO OST brake, glitch-free comparator updates). See [`doc/mcpwm-sync-buck-driver.md`](doc/mcpwm-sync-buck-driver.md).                                  |
+| `CONFIG_FUGU_WITH_SPROFILER`|    off  | Compiles in the semihosting sampling profiler (`sprofiler_initialize`, only useful with OpenOCD attached). When off, the `esp32-semihosting-profiler` component is excluded entirely (~8 KB BSS).                            |
+| `CONFIG_FUGU_WITH_VCONV`    |    off  | Replaces the physical gate driver + ADC with an in-firmware synchronous-buck plant (`src/sim/vconv.*`, configured via `vconv.conf`). For closed-loop control-algorithm work without hardware. Kconfig-enforced mutually exclusive with `CONFIG_FUGU_WITH_MCPWM`. |
+
+To build a non-default variant non-interactively (e.g. CI), point `SDKCONFIG_DEFAULTS` at a fragment:
+`SDKCONFIG_DEFAULTS="sdkconfig.defaults;my.frag" idf.py build` where `my.frag` has `CONFIG_FUGU_WITH_BLE=n`
+(see `etc/matrix_build.sh`).
 
 Binary telemetry is no longer a build flag — it is a runtime setting in `tele.conf` (`binary=1` selects the
 symbol-table wire `sym_line_protocol.h`, always tamp-compressed); the UDP `:8086` receiver must decode it.
@@ -128,7 +133,7 @@ You find existing board configuration in the folder [`config/`](config/):
 * `psu_12v`: example for a 12V power supply using Forced PWM
 * `lab/dry_mock`: uses a mock ADC producing sinusoidal readings, useful for testing with ESP32 dev boards
 * `lab/dry_int`: uses the internal ADC for dry testing
-* `lab/vconv_mock`: pairs with `WITH_VCONV=1` — drives the in-firmware converter plant (`src/sim/vconv.*`) instead of real PWM/ADC
+* `lab/vconv_mock`: pairs with `CONFIG_FUGU_WITH_VCONV=y` — drives the in-firmware converter plant (`src/sim/vconv.*`) instead of real PWM/ADC
 * `lab/wokwi_mock`: setup for the [Wokwi](https://wokwi.com) ESP32-S3 simulator (mock ADC, see also `wokwi_mock_esp32` for classic ESP32)
 
 To flash these files on the ESP32(S3), use the `provision.py` helper. It builds a littlefs image with `littlefs-python`

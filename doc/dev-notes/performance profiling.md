@@ -32,7 +32,7 @@ In this firmware:
 > **Opt-in via `WITH_SPROFILER=1`.** Default builds exclude the `esp32-semihosting-profiler`
 > component to save flash (~6 KB) and DIRAM (~8 KB `.bss`). To profile, build with:
 > ```
-> WITH_SPROFILER=1 idf.py reconfigure build
+> idf.py menuconfig (enable CONFIG_FUGU_WITH_SPROFILER), then idf.py build
 > ```
 > The `reconfigure` is required: the env var toggles `EXCLUDE_COMPONENTS` in the top-level
 > `CMakeLists.txt`, which a plain `idf.py build` won't re-detect. `main.cpp` guards the profiler

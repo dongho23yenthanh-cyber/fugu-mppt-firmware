@@ -48,6 +48,8 @@ rejection message for invalid arguments / wrong context.
 | `scan-i2c` | Run an I²C bus scan. |
 | `adc-restart` | Re-initialize the ADC backends. |
 | `adc-reset` | Reset the ADC peripherals. |
+| `coredump [info\|get\|erase]` *(needs `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH`)* | Inspect or extract the panic core dump saved to the `coredump` flash partition. `info` (default) reports presence, size and integrity (`check=ok`); `get` streams the raw partition image as base64 between `==COREDUMP-BEGIN==`/`==COREDUMP-END==` markers (mirrors to telnet/MQTT/BLE, so a backtrace can be pulled with no serial); `erase` clears it. Decode host-side with `etc/fugu_console.py --coredump get`, then `esp-coredump info_corefile --core-format raw -c dump.bin build/fugu-firmware.elf` (registers + all task stacks; needs the exact build ELF) — or `xtensa-esp32s3-elf-addr2line -e build/fugu-firmware.elf <backtrace PCs>` as the SHA-independent fallback. |
+| `crash <null\|abort\|stack>` *(needs `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH`)* | **Deliberately panic** the device to exercise the coredump path: `null` (write to 0x0 → StoreProhibited), `abort` (`abort()`), `stack` (unbounded recursion → stack overflow). The explicit subtype is required (the console is reachable over MQTT). Bench/test only. |
 
 # Config Commands
 

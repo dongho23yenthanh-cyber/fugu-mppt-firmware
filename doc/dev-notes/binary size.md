@@ -66,7 +66,7 @@ for WITH_BLE=1 builds.
 
 - **`WITH_MEASURE_COIL` (default off)** — drops `src/measure_coil.cpp` (~11 KB), the `measure-coil` console command,
   and the `isMeasuring()` guards in `cli.cpp` / `main.cpp`. Bench-only tool ported from `etc/measure_coil.py`; enable
-  with `WITH_MEASURE_COIL=1 idf.py build` when running coil sweeps on the bench.
+  with `idf.py menuconfig` (CONFIG_FUGU_WITH_MEASURE_COIL) then `idf.py build` when running coil sweeps on the bench.
 
 ### 2026-05-25 round (per-file optimization)
 

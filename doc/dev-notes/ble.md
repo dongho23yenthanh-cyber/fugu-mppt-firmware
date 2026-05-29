@@ -126,7 +126,7 @@ Verification
 1. Build (no BLE) still works & unchanged size:
    . ./idf-export.sh && idf.py build → confirm build/fugu-firmware.bin ≈ 1.55 MB.
 2. Build with BLE:
-   WITH_BLE=1 idf.py build then check size fits:
+   idf.py menuconfig (enable CONFIG_FUGU_WITH_BLE), then idf.py build then check size fits:
    ls -l build/fugu-firmware.bin must be < 1,871,872 B; also idf.py size.
 3. Core affinity: flash, then on the serial console run rt-stats and confirm no BLE/NimBLE
    task is on core 1; RT loop timing (rtcount) is unaffected.

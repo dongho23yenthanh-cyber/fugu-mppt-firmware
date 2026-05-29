@@ -2,7 +2,8 @@
 """Console client + exerciser for the Fugu MPPT firmware.
 
 Talks the device's string command protocol (the same one served on UART/USB-CDC/telnet/MQTT/BLE,
-see `doc/Console.md`) over any transport. Modes: a single command (`-c`), the test PLAN (`--test`,
+see `doc/Console.md`) over any transport. Modes: one command or several (`-c`, repeatable; or
+`--stdin` to read newline-separated commands — both run over a single connection), the test PLAN (`--test`,
 walks every console command in a meaningful order — read-only diagnostics, config round-trips and
 service ops, then the converter/PWM commands that move power — and reports PASS/FAIL/SKIP), or —
 given a transport but no mode flag — an interactive REPL (the default). With *no arguments at all*
@@ -34,6 +35,8 @@ Examples:
     python etc/fugu_console.py --mqtt 192.168.1.134 --mqtt-port 1882 -c "svc list"   # over MQTT
     python etc/fugu_console.py --mqtt 192.168.1.134 --mqtt-readonly  # passive log monitor (REPL)
     python etc/fugu_console.py -c "svc list"             # run one command, print the reply
+    python etc/fugu_console.py --ip 192.168.4.2 -c status -c sensor   # several commands, one connection
+    python etc/fugu_console.py --ble --name fry --stdin  # commands from stdin (one per line), one connection
 """
 
 import argparse
@@ -859,7 +862,12 @@ def main():
                     help="device runs a mock setup (fake ADC, no real PWM) — enables the PWM/charger commands")
     ap.add_argument("--include-network", action="store_true",
                     help="also run network/NVS-mutating commands (wifi on, hostname)")
-    ap.add_argument("-c", "--command", help="send a single command, print the reply, exit")
+    ap.add_argument("-c", "--command", action="append", metavar="CMD",
+                    help="send a command and print the reply, then exit; repeat -c to run several "
+                         "commands over one connection")
+    ap.add_argument("--stdin", action="store_true",
+                    help="read newline-separated commands from stdin and run them over one "
+                         "connection (blank lines and # comments skipped); exits on EOF")
     ap.add_argument("--test", action="store_true",
                     help="run the PASS/FAIL/SKIP command PLAN instead of the interactive REPL")
     ap.add_argument("--elf", default=None,
@@ -884,8 +892,16 @@ def main():
         return 1
     elf_path = peek_symbols.find_elf(args.elf)
     try:
-        if args.command:
-            dispatch_command(con, args.command, elf_path)
+        commands = list(args.command or [])
+        if args.stdin:
+            commands += [ln for ln in (raw.strip() for raw in sys.stdin)
+                         if ln and not ln.startswith("#")]
+        if commands or args.stdin:
+            delimit = args.stdin or len(commands) > 1  # tag each reply when running a sequence
+            for cmd in commands:
+                if delimit:
+                    print(f"=== {cmd} ===")
+                dispatch_command(con, cmd, elf_path)
             return 0
         if args.coredump:
             return pull_coredump(con, args.coredump, elf_path)

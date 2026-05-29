@@ -176,8 +176,11 @@ same string protocol). Notable commands: `+N`/`-N` (PWM step), `dc N` (manual du
 Host-side console client: `etc/fugu_console.py` drives this protocol from a PC over **serial (`-p`),
 TCP/telnet (`--ip`), BLE/NUS (`--ble`), BLE via an ESPHome bluetooth_proxy (`--ble-proxy <host>`,
 plaintext API/no noise — by `--name` or `--address`), or MQTT (`--mqtt`)** — `-c "<cmd>"` runs one
-command, `-i` is a REPL, and the default mode is a PASS/FAIL/SKIP exerciser over a fixed command PLAN
-(`--mock` adds the PWM/charger group, `--include-network` the NVS/Wi-Fi group). Transport +
+command (repeat `-c` for several over one connection), `--stdin` runs newline-separated commands
+from stdin over one connection (best for scripted/agent use — one connect, replies tagged `=== cmd ===`),
+`--test` is a PASS/FAIL/SKIP exerciser over a fixed command PLAN (`--mock` adds the PWM/charger group,
+`--include-network` the NVS/Wi-Fi group), and the default (a transport but no mode flag) is an
+interactive REPL. With no args at all it scans every transport for devices. Transport +
 line-console mechanics live in the vendored `etc/fugu/` package (its own repo, `fl4p/fugu-py`):
 `transport.py` (`SerialTransport`/`SocketTransport`/`BleTransport`/`EspHomeBleTransport`/
 `MqttTransport`), `console.py` (`Console`: line assembly, `command()→Reply`); `fugu.py::FuguDevice`

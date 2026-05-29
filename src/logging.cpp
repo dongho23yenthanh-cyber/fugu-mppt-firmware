@@ -1,6 +1,7 @@
 #include "logging.h"
 
 #include <cstring>
+#include <new>
 #include <ESPTelnet.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>   // pcTaskGetName (wifi-task bypass in vprintf_)
@@ -113,7 +114,8 @@ static int enqueue_log(const char *fmt, size_t l, const va_list &args, bool appe
     assert((xPortGetCoreID() == 1)); // ensure RT core
 
     if (uart_async_log_queue.size_approx() > 200) return -1;
-    auto buf = new char[l + 1];
+    auto buf = new(std::nothrow) char[l + 1]; // RT path: drop the line on OOM, never throw/abort
+    if (!buf) return -1;
     int len = 0;
     if (timestamp) {
         len = snprintf(buf, l + 1, "(%lu): ", micros());

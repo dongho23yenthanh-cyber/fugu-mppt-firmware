@@ -15,6 +15,12 @@ CONFIG_ARDUINO_SERIAL_EVENT_RUN_CORE0=y
 CONFIG_ARDUINO_UDP_RUNNING_CORE=0
 CONFIG_ARDUINO_UDP_RUN_CORE0=y
 
+# The IDF default-loop task (sys_evt) dispatches WiFi/IP events incl. arduino's _eventCallback.
+# Our esp_log hook (vprintf_mux) emits on the caller's stack with a 300 B buffer + mirror, which
+# overflows the 2304 B default during a WiFi-reconnect storm and corrupts esp_event's handler-list
+# walk (LoadProhibited in esp_event_loop_run). Give it headroom.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+
 CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED=y
 CONFIG_MQTT_USE_CORE_0=y
 

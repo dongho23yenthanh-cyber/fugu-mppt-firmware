@@ -62,28 +62,29 @@ boot-time stack/cache traps that cause such hangs.
 ## ELF archive (for coredump symbolication)
 
 `esp-coredump` is SHA-gated: a dump only decodes against the *exact* build ELF (its `app_elf_sha256`, stored in the
-`.bin`/coredump but zeroed in the `.elf`). `etc/elf_archive.py` keeps that ELF around per flash so a later coredump can
-still be symbolicated.
+`.bin`/coredump but zeroed in the `.elf`). The archiver lives in the vendored **`etc/idf-devtools`** submodule
+(github.com/fl4p/idf-devtools — generic ESP-IDF tooling); it keeps that ELF around per flash so a later coredump can
+still be symbolicated. `idf_ext.py` at the repo root is a thin shim delegating to it.
 
 - **OTA** (`etc/ota.py`) archives automatically after each verified-successful push.
-- **Serial:** `idf.py flash`/`app-flash` archive automatically — the project's `idf_ext.py` wraps the stock flash
-  callback (so `idf.py flash monitor` still works; archiving happens before monitor). The device name comes from
-  `$FUGU_DEVICE`, else the serial-port basename. `./flash.sh <device-name> [idf.py args]` is a thin wrapper that just
-  sets `FUGU_DEVICE` (e.g. `./flash.sh fry -p /dev/cu.usbmodem1101 flash monitor`).
+- **Serial:** `idf.py flash`/`app-flash` archive automatically — the `idf_ext.py` shim wraps the stock flash callback
+  (so `idf.py flash monitor` still works; archiving happens before monitor). The device name comes from `$FUGU_DEVICE`,
+  else the serial-port basename. `./flash.sh <device-name> [idf.py args]` is a thin wrapper that just sets
+  `FUGU_DEVICE` (e.g. `./flash.sh fry -p /dev/cu.usbmodem1101 flash monitor`).
 
 It stores one `zstd -19` ELF per unique build (~35 MB → ~9.7 MB) under the gitignored `elf-archive/`, deduped by sha,
 with an `index.jsonl` flash log (time, device, method, version, sha). Compression runs **detached** so it never blocks
-the flash flow; retention keeps the **30** most-recently-flashed builds (`KEEP_BUILDS`). Decode a dump:
+the flash flow; retention keeps the **30** most-recently-flashed builds (`ELF_ARCHIVE_KEEP`). Decode a dump:
 
 ```bash
-python3 etc/elf_archive.py decode <core.bin>             # auto-matches the ELF by sha bytes in the dump
-python3 etc/elf_archive.py decode --device flat <core.bin>   # fallback: latest build flashed to flat
-python3 etc/elf_archive.py list                          # flash history
-python3 etc/elf_archive.py find --device flat -o fw.elf  # extract an archived ELF
+python3 etc/idf-devtools/elf_archive.py decode <core.bin>           # auto-matches the ELF by sha bytes in the dump
+python3 etc/idf-devtools/elf_archive.py decode --device flat <core.bin>  # fallback: latest build flashed to flat
+python3 etc/idf-devtools/elf_archive.py list                        # flash history
+python3 etc/idf-devtools/elf_archive.py find --device flat -o fw.elf # extract an archived ELF
 ```
 
 Only builds flashed *after* this was added are archived; older dumps still need their ELF passed to `esp-coredump`
-manually.
+manually. After a fresh checkout run `git submodule update --init etc/idf-devtools`.
 
 ## Provisioning (board configs)
 

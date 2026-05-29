@@ -42,7 +42,9 @@ from etc.fugu.discover import discover_scope_servers
 from etc.fugu.fugu import FuguDevice
 from etc.fugu.transport import SocketTransport
 from etc.fugu_console import scan_nat_async
-from etc import elf_archive
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'idf-devtools'))
+import elf_archive  # vendored submodule (github.com/fl4p/idf-devtools)
 
 # CLion / PyCharm Run consoles report as a TTY but don't render ANSI escapes —
 # disable color/style so the boxes don't come out wrapped in raw \x1b[...m codes.

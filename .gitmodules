@@ -44,3 +44,6 @@
 [submodule "test/host-stub/arduino-shim"]
 	path = test/host-stub/arduino-shim
 	url = https://github.com/fl4p/arduino-host-shim
+[submodule "etc/idf-devtools"]
+	path = etc/idf-devtools
+	url = https://github.com/fl4p/idf-devtools.git

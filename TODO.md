@@ -1,5 +1,9 @@
 # todo
 
+* critical commits
+  * the esp32 adc fix
+  * the RT core pining
+
 ❯ is there any advertising ble protocol to publish bms data?
 
 ⏺ Yes — a few options, with one obvious winner for your HA context: 

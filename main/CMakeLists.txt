@@ -12,6 +12,7 @@ if ($ENV{RUN_TESTS})
             "../test/test_conf.cpp"
             "../test/test_pwm.cpp"
             "../test/test_ina226.cpp"
+            "../test/test_adc_hw.cpp"
     )
 elseif ($ENV{MAIN_SRC})
     set(MAIN_SRC $ENV{MAIN_SRC})
@@ -116,6 +117,12 @@ endif ()
 if ($ENV{FUGU_BAT_V})
     # 14.25, 28.5, 57
     component_compile_definitions("FUGU_BAT_V=$ENV{FUGU_BAT_V}")
+endif ()
+
+# TEST_ADC_HW (with RUN_TESTS): run ONLY the internal-ADC + INA226 liveness tests (test_adc_hw.cpp)
+# and skip the PWM/MCPWM tests that drive gate pins — safe to flash onto a live converter.
+if ($ENV{TEST_ADC_HW})
+    component_compile_definitions("TEST_ADC_HW=1")
 endif ()
 
 if (WITH_BLE)

@@ -11,16 +11,17 @@ proxy, not the host. The proxy path talks the ESPHome native API (plaintext, no 
 reuses the same NUS RX/TX + OTA FW characteristics over the proxied GATT connection.
 
 Protocol (device side in src/etc/ota_ble.cpp):
-  host -> RX  : "otab begin <size> <sha256hex>\n"   arm + erase passive partition
+  host -> RX  : "ota-ble begin <size> <sha256hex>\n" arm + erase passive partition
   dev  -> TX  : "OTAB READY ..."                    erased, ready to receive
   dev  -> TX  : "OTAB CRED <G>"                      may stream up to cumulative byte offset G
   host -> FW  : raw firmware bytes (write-no-response), throttled to the credit window
   dev  -> TX  : "OTAB PROG <w>/<size>" ...           progress
-  host -> RX  : "otab end\n"                         finalize
+  host -> RX  : "ota-ble end\n"                       finalize
   dev  -> TX  : "OTAB OK rebooting" | "OTAB FAIL <reason>"
 
 Usage:
     python -m etc.ota_ble [-f|--force] [build/fugu-firmware.bin] [device-name-or-address]
+    python -m etc.ota_ble -n fry build/fugu-firmware.bin                   # name as a flag
     python -m etc.ota_ble --ble-proxy 192.168.1.231 --name fry            # via ESPHome proxy (by name)
     python -m etc.ota_ble --ble-proxy 192.168.1.231 --address AA:BB:..    # via ESPHome proxy (by MAC)
 
@@ -44,6 +45,16 @@ ESPHOME_API_PORT = 6053
 
 APP_DESC_MAGIC = 0xABCD5432
 RE_APP_LINE = re.compile(r'App:\s+(\S+)\s+v\S+\s+(\S+)\s+\(built (.+),\s+IDF\s+(\S+)\)')
+
+# Strings present only in a WITH_BLE build: the otab receiver + NUS console (both #ifdef WITH_BLE) and
+# the NimBLE host (absent when CONFIG_BT_ENABLED is off). Flashing an image missing all of these over
+# BLE would disable the very console/OTA path we're using — so we warn before doing it.
+BLE_SIGNATURES = (b"OTAB CRED", b"OTAB READY", b"(NUS console)", b"BLE_HS")
+
+
+def image_has_ble(data):
+    """Heuristic: does this firmware image look like a BLE-enabled (WITH_BLE) build?"""
+    return any(sig in data for sig in BLE_SIGNATURES)
 
 
 def read_local_app_desc(bin_path):
@@ -96,18 +107,28 @@ class BleakLink:
         from bleak import BleakScanner
         if name_or_addr and re.fullmatch(r"[0-9A-Fa-f:\-]{11,}", name_or_addr):
             return await BleakScanner.find_device_by_address(name_or_addr, timeout=15)
+        # Scan once and match locally. bleak's find_device_by_name keys off the advertised local_name,
+        # which CoreBluetooth frequently omits (it sets the cached d.name instead) — so it misses devices
+        # that discover() plainly sees. Match against both names here.
+        items = list((await BleakScanner.discover(timeout=15, return_adv=True)).values())
+        names = lambda d, ad: [n for n in ((d.name or ""), (ad.local_name or "")) if n]
         if name_or_addr:
-            return await BleakScanner.find_device_by_name(name_or_addr, timeout=15)
+            hits = [d for d, ad in items if name_or_addr in names(d, ad)]  # prefer exact
+            if not hits:
+                hits = [d for d, ad in items if any(name_or_addr in n for n in names(d, ad))]
+            if len(hits) > 1:
+                lst = ", ".join(f"{d.name} [{d.address}]" for d in hits)
+                raise RuntimeError(f"{name_or_addr!r} matches several devices — be more specific: {lst}")
+            return hits[0] if hits else None
         # No name given: restrict to fugu peripherals (firmware always advertises a `fugu-` name) so we
         # don't grab some other NUS device. Refuse to guess when several are in range — one may be a live
         # converter — and make the user disambiguate with a name/address.
-        devs = await BleakScanner.discover(timeout=15, return_adv=True)
-        fugu = [d for d, ad in devs.values()
+        fugu = [d for d, ad in items
                 if NUS_SVC in (s.lower() for s in (ad.service_uuids or []))
-                and (d.name or "").startswith("fugu-")]
+                and (d.name or ad.local_name or "").startswith("fugu-")]
         if len(fugu) > 1:
-            names = ", ".join(f"{d.name} [{d.address}]" for d in fugu)
-            raise RuntimeError(f"multiple fugu devices in range — pass a name to pick one: {names}")
+            lst = ", ".join(f"{d.name} [{d.address}]" for d in fugu)
+            raise RuntimeError(f"multiple fugu devices in range — pass a name to pick one: {lst}")
         return fugu[0] if fugu else None
 
     async def open(self):
@@ -117,10 +138,29 @@ class BleakLink:
             raise RuntimeError("no fugu BLE device found (advertising? ble service enabled?)")
         self.target = dev.address  # pin to this exact device so verify() re-finds it after reboot
         print(f"connecting to {dev.name or dev.address} ...")
-        self._cli = BleakClient(dev, disconnected_callback=lambda _: self.disconnected.set())
-        await self._cli.connect()
-        await self._cli.start_notify(TX_UUID, lambda _, p: self._cb(bytes(p)))
-        self.mtu = self._cli.mtu_size
+        # macOS/CoreBluetooth intermittently rejects connect or the notify subscription with CBATTError 17
+        # ("resources are insufficient") when a prior connection's CCCD wasn't released — dropping the link
+        # and retrying after a short settle clears it. Retry the whole connect+subscribe a few times.
+        last = None
+        for attempt in range(1, 4):
+            self._cli = BleakClient(dev, disconnected_callback=lambda _: self.disconnected.set())
+            try:
+                await self._cli.connect()
+                await self._cli.start_notify(TX_UUID, lambda _, p: self._cb(bytes(p)))
+                self.mtu = self._cli.mtu_size
+                self.disconnected.clear()  # a failed attempt's disconnect may have set it
+                return
+            except Exception as e:
+                last = e
+                print(f"  connect attempt {attempt}/3 failed: {e}")
+                try:
+                    await self._cli.disconnect()
+                except Exception:
+                    pass
+                self._cli = None
+                if attempt < 3:
+                    await asyncio.sleep(2.0)
+        raise RuntimeError(f"could not establish BLE link after 3 attempts: {last}")
 
     async def write_cmd(self, data):
         await self._cli.write_gatt_char(RX_UUID, data, response=True)
@@ -313,11 +353,26 @@ class ProxyLink:
             self._api = None
 
 
-async def push(bin_path, link, force=False):
+async def push(bin_path, link, force=False, assume_yes=False):
     data = open(bin_path, "rb").read()
     sha = hashlib.sha256(data).hexdigest()
     local_ver = read_local_app_desc(bin_path)
     print(f"image {bin_path}: {len(data)} bytes, sha256={sha}, version={local_ver}")
+
+    # Pushing a non-BLE image over BLE bricks the BLE console/OTA on the device (serial or WiFi to
+    # recover) — confirm before doing something self-defeating.
+    if not image_has_ble(data):
+        print("⚠️  this image looks like a build WITHOUT BLE (no NUS console / otab receiver found).")
+        print("    Flashing it over BLE will disable the BLE console and BLE-OTA on the device —")
+        print("    you'd then need serial or WiFi to recover it.")
+        if assume_yes:
+            print("    -y/--yes given, proceeding anyway.")
+        elif not sys.stdin.isatty():
+            print("    non-interactive; aborting (pass -y/--yes to override).")
+            return False
+        elif input("    Continue anyway? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("    aborted.")
+            return False
 
     granted = 0          # cumulative byte offset the device permits us to send up to
     credit_ev = asyncio.Event()
@@ -375,7 +430,7 @@ async def push(bin_path, link, force=False):
             print(f"  ☑️ skip: already at {local_ver} (use --force to push anyway)")
             return True
 
-        await link.write_cmd(f"otab begin {len(data)} {sha}\n".encode())
+        await link.write_cmd(f"ota-ble begin {len(data)} {sha}\n".encode())
         try:
             await asyncio.wait_for(ready_ev.wait(), timeout=30)  # waits out the partition erase
         except asyncio.TimeoutError:
@@ -402,7 +457,7 @@ async def push(bin_path, link, force=False):
         except asyncio.TimeoutError:
             print("timeout waiting for full flush"); return False
 
-        await link.write_cmd(b"otab end\n")
+        await link.write_cmd(b"ota-ble end\n")
         # On success the device reboots right after queuing OTAB OK, so the notify usually never drains:
         # accept either an explicit OK or the link dropping (reboot) as success; only OTAB FAIL fails.
         await asyncio.wait([asyncio.create_task(done_ev.wait()),
@@ -439,10 +494,15 @@ def main():
     ap = argparse.ArgumentParser(description="Push firmware to a Fugu device over BLE")
     ap.add_argument("bin", nargs="?", default="build/fugu-firmware.bin",
                     help="firmware image (default build/fugu-firmware.bin)")
-    ap.add_argument("name", nargs="?", default=os.environ.get("BLE_NAME"),
+    ap.add_argument("name", nargs="?", default=None,
+                    help="device name (or BLE address) filter (positional; or use -n/--name)")
+    ap.add_argument("-n", "--name", dest="name_opt", metavar="NAME",
+                    default=os.environ.get("BLE_NAME"),
                     help="device name (or BLE address) filter (default $BLE_NAME)")
     ap.add_argument("-f", "--force", action="store_true",
                     help="push even if the device already reports this version")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the confirmation prompt for a non-BLE image")
     ap.add_argument("--ble-proxy", metavar="HOST[:PORT]",
                     help="reach the device through an ESPHome bluetooth_proxy at this host "
                          "(plaintext API, no noise); scans by name unless --address is given")
@@ -450,10 +510,11 @@ def main():
     ap.add_argument("--proxy-password", default=os.environ.get("ESPHOME_API_PASSWORD", ""),
                     help="ESPHome API password for --ble-proxy (default: $ESPHOME_API_PASSWORD)")
     args = ap.parse_args()
+    args.name = args.name or args.name_opt  # positional takes precedence over -n/--name/$BLE_NAME
 
     if not os.path.exists(args.bin):
         print(f"no such file: {args.bin}"); return 1
-    ok = asyncio.run(push(args.bin, make_link(args), force=args.force))
+    ok = asyncio.run(push(args.bin, make_link(args), force=args.force, assume_yes=args.yes))
     print("OTA over BLE:", "✅ success (device rebooting)" if ok else "❌ failed")
     return 0 if ok else 1
 

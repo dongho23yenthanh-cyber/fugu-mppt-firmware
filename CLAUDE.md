@@ -45,7 +45,8 @@ reboots them into the new image. Confirm versions in the after-table.
 boot as `ESP_OTA_IMG_PENDING_VERIFY`. The app must confirm itself or the bootloader reverts to the previous slot on the
 next reset:
 
-- `lfMarkOtaValid()` (`main.cpp`, from `loopLF`) calls `esp_ota_mark_app_valid_cancel_rollback()` **only once the RT loop
+- `lfMarkOtaValid()` (`main.cpp`, from `loopLF`) calls `esp_ota_mark_app_valid_cancel_rollback()` **only once the RT
+  loop
   is proven healthy** (>20 s uptime + sampler producing samples). A directly-flashed image (state `UNDEFINED`, not
   `PENDING_VERIFY`) is left alone — the confirm is a no-op there.
 - A one-shot `esp_timer` **boot watchdog** armed at the top of `setup()` (30 s) `esp_restart()`s if `setup()` never
@@ -53,7 +54,8 @@ next reset:
   watches idle, which a yielding hang keeps feeding, and `loopRT` — the only WDT-coupled task — doesn't exist yet.)
 
 **Caveat that bit us:** rollback is a *bootloader* feature, and an OTA only writes the app — so a device that last got
-the rollback bootloader via **serial** is protected, but one that's only ever been app-OTA'd keeps its old (pre-rollback)
+the rollback bootloader via **serial** is protected, but one that's only ever been app-OTA'd keeps its old (
+pre-rollback)
 bootloader and will **brick, not revert**, on a bad image. To put rollback on a converter, do a full **serial** flash
 (bootloader + app, omitting littlefs to keep its config) once; OTAs after that self-revert. A bricked device (hung in
 `setup()` before WiFi/services) can only be recovered by serial — see [doc/dev-notes/Real-Time Latency.md] for the
@@ -206,7 +208,8 @@ live in `src/main.cpp` (they touch `mppt`/`lcd`/`sensors`); `MqttService` *is* t
 Single command dispatcher `handleCommand()` in `src/main.cpp` handles input from UART, USB-CDC, telnet, **and** MQTT (
 same string protocol). Notable commands: `+N`/`-N` (PWM step), `dc N` (manual duty, switches to `manualPwm` mode),
 `sweep`, `mppt` (re-enable auto), `sync on/off/forced`, `bf 0/1` (backflow switch), `fan N`, `set-config`/`get-config`,
-`ota <url>`, `rt-stats`, `sensor`, `status` (charger/battery snapshot), `wifi-add ssid:psk`, `restart`. See `doc/Console.md`.
+`ota <url>`, `rt-stats`, `sensor`, `status` (charger/battery snapshot), `wifi-add ssid:psk`, `restart`. See
+`doc/Console.md`.
 
 Host-side console client: `etc/fugu_console.py` drives this protocol from a PC over **serial (`-p`),
 TCP/telnet (`--ip`), BLE/NUS (`--ble`), BLE via an ESPHome bluetooth_proxy (`--ble-proxy <host>`,
@@ -254,9 +257,10 @@ for noise debugging.
 - if you want to `git revert` but there are local dirty files, do a `git stash` before and `git stash pop` after
 - **Never ever run `git reset --hard`**
 - if you cannot find the `timeout` command, run `brew install coreutils` and try again
-- Never copy/mirror an existing `#define` that defines a constant value  to another file, just because you cannot include the file were it is defined. Look for a header file that both files already include and put it there (e.g. util.h).
-- there is a console command `peek`, that allows you to read memory at an address. `fugu_console.py` implements a symbol resolver.
-
+- Never copy/mirror an existing `#define` that defines a constant value to another file, just because you cannot include
+  the file were it is defined. Look for a header file that both files already include and put it there (e.g. util.h).
+- there is a console command `peek`, that allows you to read memory at an address. `fugu_console.py` implements a symbol
+  resolver.
 
 # Connecting to devices
 
@@ -309,3 +313,6 @@ You can find battery data in InfluxDB with `batmon()` in
   summary. for example instead of
   `keep retrying that same network via WiFi.reconnect() for wifi.conf::switch_delay seconds (default 30, 0=off)` write
   `keep retrying that same network for switch_delay seconds`
+- The devices print every error (or panic) on the console. Any error with the ADC like `E (9378) main: ADC error`
+  is critical and you must report it. After a panic the device stores a coredump, which you can retrieve with the
+  `coredump` command.

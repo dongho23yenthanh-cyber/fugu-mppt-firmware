@@ -552,8 +552,13 @@ static void loopRT(void *arg) {
         if (adcSampler.halted) continue;
 
         if (samplerRet == ADC_Sampler::UpdateRet::AdcError) {
-            ESP_LOGE("main", "ADC error");
-            stopAndBackoff(16);
+            // AdcError repeats every poll while the ADC is down and the loop busy-spins, so only
+            // log/re-trip on the backoff edge — else "ADC error"/"backoff" floods the console at
+            // loop rate (the backoff window is what's meant to suppress the per-tick spam).
+            if (!mppt.inBackoff()) {
+                ESP_LOGE("main", "ADC error");
+                stopAndBackoff(16);
+            }
             // A stalled continuous-ADC DMA reports AdcError every poll but nothing restarts it
             // (the converter is now disabled, so the timeout-driven resetPeripherals below is
             // skipped). Re-init the ADCs here, throttled, so a dead DMA self-heals.

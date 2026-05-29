@@ -39,6 +39,10 @@ bool handleCommand(const String &) { return false; }
 // RUN_TESTS swaps main.cpp out, so re-provide the stub here.
 extern "C" void *esp_netif_create_default_wifi_ap(void) { return nullptr; }
 
+// adc/adc_esp32_cont.h + INA226 interrupt-path liveness (test_adc_hw.cpp) — on-target, no converter
+void test_internal_adc_continuous_samples();
+void test_ina226_alert_interrupt();
+
 void test_meter();
 
 void test_meter_storage();
@@ -186,6 +190,17 @@ void test_conf_remove_strips_inline_comment_too();
 void test_conf_remove_missing_key_returns_false();
 
 void setup() {
+#ifdef TEST_ADC_HW
+    // Safe to flash onto a live converter: force both gate-driver inputs low (fry pwm_hi=21,
+    // pwm_li=14, HiLi logic -> both FETs off). The tests then re-run from loop() so a console
+    // attached at any time (fugu_console.py) catches a fresh cycle — no reset-timing needed.
+    pinMode(21, OUTPUT);
+    digitalWrite(21, LOW);
+    pinMode(14, OUTPUT);
+    digitalWrite(14, LOW);
+    return;
+#endif
+
     UNITY_BEGIN();
 
     // PWM-test iteration speedup: skip all unrelated tests. To re-enable the full
@@ -340,6 +355,18 @@ void setup() {
 }
 
 void loop() {
+#ifdef TEST_ADC_HW
+    // One ADC at a time: if the board stalls, the last ESP_LOGI step localises which ADC + step.
+    UNITY_BEGIN();
+    printf("\n===== ADC #1: internal continuous =====\n");
+    RUN_TEST(test_internal_adc_continuous_samples);
+    delay(500);
+    printf("\n===== ADC #2: INA226 (alert interrupt) =====\n");
+    RUN_TEST(test_ina226_alert_interrupt);
+    UNITY_END();
+    delay(5000);
+    return;
+#endif
     //vTaskDelay(5);
     delay(10);
     //delay(1);

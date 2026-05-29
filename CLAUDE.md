@@ -12,7 +12,7 @@ Before any `idf.py` invocation, source ESP-IDF into the shell. The repo ships a 
 ```bash
 . ./idf-export.sh          # sources ../../esp/idf5.5/export.sh, sets IDF_TARGET=esp32s3, autodetects $ESPPORT
 idf.py set-target esp32s3  # only needed once per build dir
-idf.py build               # WITH_BLE=1 adds the NimBLE stack (BLE console + OTA); binary telemetry is a tele.conf setting, not a build flag
+idf.py build               # feature flags live in Kconfig now (CONFIG_FUGU_WITH_*, idf.py menuconfig -> "Fugu MPPT firmware"): BLE/NETW default on, MCPWM/VCONV/SPROFILER/MEASURE_COIL off. The old WITH_* env vars are rejected. Binary telemetry is a tele.conf setting, not a build flag
 idf.py -p $ESPPORT flash monitor
 ```
 
@@ -209,8 +209,9 @@ for noise debugging.
   `undefined reference to 'basic_stringbuf_nop'`. Use `snprintf` / `UART_LOG(fmt, …)` / `std::string` concatenation
   instead.
 - `sdkconfig` is gitignored — it's a generated artifact that varies with target + `WITH_*` flags + IDF version.
-  Source of truth is `sdkconfig.defaults` (+ `sdkconfig.defaults.esp32` overlay, `sdkconfig.ble` when `WITH_BLE=1`,
-  `sdkconfig.no_netw` when `WITH_NETW=0`). Delete `sdkconfig` to force regeneration if it ever looks wrong.
+  Source of truth is `sdkconfig.defaults` (+ `sdkconfig.defaults.esp32` overlay, `sdkconfig.ble` when
+  `CONFIG_FUGU_WITH_BLE=y`, `sdkconfig.no_netw` when `CONFIG_FUGU_WITH_NETW=n` — layered by the top
+  `CMakeLists.txt`). Delete `sdkconfig` to force regeneration if it ever looks wrong.
 - if you want to `git revert` but there are local dirty files, do a `git stash` before and `git stash pop` after
 - **Never ever run `git reset --hard`**
 - if you cannot find the `timeout` command, run `brew install coreutils` and try again

@@ -37,6 +37,8 @@ make_root() {
     echo "$root"
 }
 
+_yn() { [ "$1" = "1" ] && echo y || echo n; }
+
 run_one() {
     local name="$1" target="$2" with_ble="$3" with_netw="$4"
     local root; root="$(make_root "$name")"
@@ -45,10 +47,14 @@ run_one() {
 
     echo "=== [$name] target=$target WITH_BLE=$with_ble WITH_NETW=$with_netw ==="
 
+    # Feature flags moved from WITH_* env vars to Kconfig: seed this variant's CONFIG_FUGU_WITH_*
+    # via a fragment layered onto sdkconfig.defaults. The top CMakeLists reads the same chain.
+    printf 'CONFIG_FUGU_WITH_BLE=%s\nCONFIG_FUGU_WITH_NETW=%s\n' \
+        "$(_yn "$with_ble")" "$(_yn "$with_netw")" > "$root/sdkconfig.matrix"
+
     (
         export IDF_TARGET="$target"
-        export WITH_BLE="$with_ble"
-        export WITH_NETW="$with_netw"
+        export SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.matrix"
         idf.py -C "$root" -B "$bdir" -DIDF_TARGET="$target" set-target "$target"
         idf.py -C "$root" -B "$bdir" build
     ) >"$log" 2>&1

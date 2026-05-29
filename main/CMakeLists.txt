@@ -19,9 +19,9 @@ else ()
     # cli.cpp and measure_coil.cpp extern main.cpp's globals, so they're only built alongside the
     # real main (not test mains).
     set(MAIN_SRC "../src/main.cpp" "../src/cli.cpp")
-    # WITH_MEASURE_COIL=1 compiles in the on-device coil inductance sweep + `measure-coil` console
-    # command (src/measure_coil.cpp). Bench-only tool — saves ~11 KB in production builds.
-    if ($ENV{WITH_MEASURE_COIL})
+    # CONFIG_FUGU_WITH_MEASURE_COIL compiles in the on-device coil inductance sweep + `measure-coil`
+    # console command (src/measure_coil.cpp). Bench-only tool — saves ~11 KB in production builds.
+    if (CONFIG_FUGU_WITH_MEASURE_COIL)
         list(APPEND MAIN_SRC "../src/selftest/measure_coil.cpp")
     endif ()
 endif ()
@@ -39,12 +39,12 @@ set(NETW_SRC
         "../src/etc/ota.cpp"
 )
 
-# WITH_NETW=1 (default) compiles the WiFi/mDNS/MQTT/telemetry/HTTPS-OTA path. WITH_NETW=0 drops
-# all of the above; the firmware then runs UART/USB/BLE consoles only. Reverse polarity to
-# WITH_BLE on purpose — backwards-compat default is "network on". Keep in sync with the
-# sdkconfig.no_netw layering in the top-level CMakeLists.
-set(WITH_NETW 1)
-if (DEFINED ENV{WITH_NETW} AND NOT $ENV{WITH_NETW})
+# CONFIG_FUGU_WITH_NETW (default y) compiles the WiFi/mDNS/MQTT/telemetry/HTTPS-OTA path; off drops
+# all of the above and the firmware runs UART/USB/BLE consoles only. The sdkconfig.no_netw layering
+# in the top-level CMakeLists tracks the same symbol.
+if (CONFIG_FUGU_WITH_NETW)
+    set(WITH_NETW 1)
+else ()
     set(WITH_NETW 0)
 endif ()
 
@@ -57,28 +57,23 @@ set(BLE_SRC
         "../src/etc/ota_ble.cpp"
 )
 
-# WITH_BLE on by default; set WITH_BLE=0 to drop the NimBLE console + OTA path.
-# Keep in sync with the sdkconfig.ble layering in the top-level CMakeLists.
-set(WITH_BLE 1)
-if (DEFINED ENV{WITH_BLE} AND NOT $ENV{WITH_BLE})
+# CONFIG_FUGU_WITH_BLE (default y) compiles the NimBLE console + OTA path; the sdkconfig.ble layering
+# in the top-level CMakeLists tracks the same symbol.
+if (CONFIG_FUGU_WITH_BLE)
+    set(WITH_BLE 1)
+else ()
     set(WITH_BLE 0)
-endif ()
-
-if (NOT WITH_BLE)
     set(BLE_SRC "")
 endif ()
 
-# WITH_VCONV=1 replaces the physical gate driver + ADC with a software converter plant
-# (src/sim/vconv.*). Mutually exclusive with WITH_MCPWM. See
+# CONFIG_FUGU_WITH_VCONV replaces the physical gate driver + ADC with a software converter plant
+# (src/sim/vconv.*). Kconfig enforces mutual exclusion with the MCPWM driver. See
 # docs/superpowers/specs/2026-05-23-virtual-converter-design.md.
-set(WITH_VCONV 0)
-if ($ENV{WITH_VCONV})
-    if ($ENV{WITH_MCPWM})
-        message(FATAL_ERROR "WITH_VCONV and WITH_MCPWM are mutually exclusive")
-    endif ()
+if (CONFIG_FUGU_WITH_VCONV)
     set(WITH_VCONV 1)
     set(VCONV_SRC "../src/sim/vconv.cpp")
 else ()
+    set(WITH_VCONV 0)
     set(VCONV_SRC "")
 endif ()
 
@@ -122,9 +117,9 @@ if (WITH_BLE)
     component_compile_definitions("WITH_BLE=1")
 endif ()
 
-# WITH_MCPWM=1 swaps the LEDC gate driver for the MCPWM driver (src/pwm/mcpwm.h):
+# CONFIG_FUGU_WITH_MCPWM swaps the LEDC gate driver for the MCPWM driver (src/pwm/mcpwm.h):
 # hardware dead-time, GPIO OST brake, glitch-free comparator updates. See doc/mcpwm-sync-buck-driver.md.
-if ($ENV{WITH_MCPWM})
+if (CONFIG_FUGU_WITH_MCPWM)
     component_compile_definitions("WITH_MCPWM=1")
 endif ()
 
@@ -132,14 +127,14 @@ if (WITH_VCONV)
     component_compile_definitions("WITH_VCONV=1")
 endif ()
 
-# WITH_SPROFILER=1 compiles in the semihosting sampling profiler (sprofiler_initialize, only useful
-# with OpenOCD attached). Off by default; the top-level CMakeLists then EXCLUDE_COMPONENTS the
-# esp32-semihosting-profiler component so its flash + ~8 KB .bss is dropped entirely.
-if ($ENV{WITH_SPROFILER})
+# CONFIG_FUGU_WITH_SPROFILER compiles in the semihosting sampling profiler (sprofiler_initialize,
+# only useful with OpenOCD attached). Off by default; the top-level CMakeLists then
+# EXCLUDE_COMPONENTS the esp32-semihosting-profiler component so its flash + ~8 KB .bss is dropped.
+if (CONFIG_FUGU_WITH_SPROFILER)
     component_compile_definitions("WITH_SPROFILER=1")
 endif ()
 
-if ($ENV{WITH_MEASURE_COIL})
+if (CONFIG_FUGU_WITH_MEASURE_COIL)
     component_compile_definitions("WITH_MEASURE_COIL=1")
 endif ()
 
@@ -164,7 +159,7 @@ endif ()
 if (WITH_BLE)
     list(APPEND _size_opt_srcs ${BLE_SRC})
 endif ()
-if ($ENV{WITH_MEASURE_COIL})
+if (CONFIG_FUGU_WITH_MEASURE_COIL)
     list(APPEND _size_opt_srcs ../src/selftest/measure_coil.cpp)
 endif ()
 set_source_files_properties(${_size_opt_srcs} PROPERTIES COMPILE_OPTIONS "-Os")

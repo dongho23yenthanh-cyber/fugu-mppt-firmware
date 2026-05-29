@@ -1,43 +1,60 @@
 cmake_minimum_required(VERSION 3.16)
 
-# Catch WITH_* env-var typos early. CMake silently treats unknown $ENV{WITH_FOO} as empty,
-# so e.g. WITH_BINRAY_TELE=1 would build with the option *off* and no warning.
-set(_known_with_vars
-        WITH_BLE WITH_NETW WITH_SPROFILER WITH_VCONV WITH_MCPWM
-        WITH_MEASURE_COIL)
-execute_process(COMMAND ${CMAKE_COMMAND} -E environment OUTPUT_VARIABLE _all_env)
-string(REPLACE "\n" ";" _all_env "${_all_env}")
-foreach (_line IN LISTS _all_env)
-    if (_line MATCHES "^(WITH_[A-Za-z0-9_]+)=")
-        if (NOT CMAKE_MATCH_1 IN_LIST _known_with_vars)
-            message(FATAL_ERROR
-                    "Unknown env var ${CMAKE_MATCH_1}. Known: ${_known_with_vars}")
-        endif ()
+# Feature flags moved from WITH_* env vars to Kconfig (main/Kconfig.projbuild, CONFIG_FUGU_WITH_*).
+# Reject stale env usage so an old `WITH_BLE=0 idf.py build` can't silently build the feature *on*.
+foreach (_legacy WITH_BLE WITH_NETW WITH_SPROFILER WITH_VCONV WITH_MCPWM WITH_MEASURE_COIL)
+    if (DEFINED ENV{${_legacy}})
+        message(FATAL_ERROR
+                "${_legacy} env flag is gone — use CONFIG_FUGU_${_legacy} (idf.py menuconfig -> "
+                "'Fugu MPPT firmware', or an sdkconfig fragment). See main/Kconfig.projbuild.")
     endif ()
 endforeach ()
 
-# Layer optional sdkconfig fragments on top of the defaults so flag-gated features (and their
-# flash cost) are only baked into builds that ask for them. Order matters — later fragments win.
-set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
-# BLE on by default; set WITH_BLE=0 to skip the NimBLE sdkconfig fragment.
-# Keep in sync with the WITH_BLE define in main/CMakeLists.txt.
-set(WITH_BLE 1)
-if (DEFINED ENV{WITH_BLE} AND NOT $ENV{WITH_BLE})
-    set(WITH_BLE 0)
-endif ()
-if (WITH_BLE)
-    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.ble")
-endif ()
-# WITH_NETW=0 disables IDF networking (mbedtls / esp_http_client / esp_https_ota / mDNS / optionally WiFi+lwIP).
-# Keep in sync with the WITH_NETW define in main/CMakeLists.txt.
-if (DEFINED ENV{WITH_NETW} AND NOT $ENV{WITH_NETW})
-    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.no_netw")
+# Three flags must act *before* project() runs Kconfig (sdkconfig fragment layering,
+# EXCLUDE_COMPONENTS), so they can't read CONFIG_* directly. Resolve them by reading the same
+# CONFIG_FUGU_* symbols out of the sdkconfig defaults chain (+ any live sdkconfig). main/CMakeLists
+# reads CONFIG_FUGU_* normally for everything that happens after project().
+if (NOT SDKCONFIG_DEFAULTS)
+    if (DEFINED ENV{SDKCONFIG_DEFAULTS})
+        set(SDKCONFIG_DEFAULTS $ENV{SDKCONFIG_DEFAULTS})
+    else ()
+        set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
+    endif ()
 endif ()
 
-# The sampling profiler (components/esp32-semihosting-profiler) is opt-in via WITH_SPROFILER=1.
-# When off (default), drop the whole component so its flash + ~8 KB .bss isn't linked; main.cpp
-# guards its use with #ifdef WITH_SPROFILER. Keep in sync with main/CMakeLists.txt.
-if (NOT DEFINED ENV{WITH_SPROFILER})
+# Resolve a CONFIG_FUGU_* bool from the defaults chain then the live sdkconfig (later wins),
+# falling back to `fallback` when set nowhere (mirrors the Kconfig default).
+function(fugu_kconfig_bool out sym fallback)
+    set(_v ${fallback})
+    foreach (_f ${SDKCONFIG_DEFAULTS} sdkconfig)
+        set(_p "${CMAKE_CURRENT_SOURCE_DIR}/${_f}")
+        if (EXISTS "${_p}")
+            file(STRINGS "${_p}" _on REGEX "^${sym}=y")
+            file(STRINGS "${_p}" _off REGEX "^(${sym}=n|# ${sym} is not set)")
+            if (_on)
+                set(_v 1)
+            elseif (_off)
+                set(_v 0)
+            endif ()
+        endif ()
+    endforeach ()
+    set(${out} ${_v} PARENT_SCOPE)
+endfunction()
+
+# Layer optional sdkconfig fragments / drop components so flag-gated features (and their flash cost)
+# are only baked into builds that ask for them. Order matters — later fragments win.
+fugu_kconfig_bool(_fugu_ble CONFIG_FUGU_WITH_BLE 1)
+if (_fugu_ble)
+    # NimBLE host selection + radio/thermal tunings Kconfig can't default from a projbuild.
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.ble")
+endif ()
+fugu_kconfig_bool(_fugu_netw CONFIG_FUGU_WITH_NETW 1)
+if (NOT _fugu_netw)
+    list(APPEND SDKCONFIG_DEFAULTS "sdkconfig.no_netw")
+endif ()
+fugu_kconfig_bool(_fugu_sprof CONFIG_FUGU_WITH_SPROFILER 0)
+if (NOT _fugu_sprof)
+    # main.cpp guards its use; dropping the component removes its flash + ~8 KB .bss entirely.
     set(EXCLUDE_COMPONENTS esp32-semihosting-profiler)
 endif ()
 

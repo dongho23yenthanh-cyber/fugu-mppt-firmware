@@ -1,0 +1,51 @@
+menu "Fugu MPPT firmware"
+
+# Build-time feature flags. These replace the old WITH_* env-var build flags; the CMake build
+# reads CONFIG_FUGU_WITH_* and re-emits the matching WITH_* compile define + selects the source
+# files / sdkconfig fragments. Toggle with `idf.py menuconfig` or an sdkconfig(.defaults) fragment.
+
+config FUGU_WITH_NETW
+    bool "Networking (WiFi / mDNS / MQTT / telemetry / HTTPS-OTA)"
+    default y
+    help
+        Compile the WiFi/mDNS/MQTT/telemetry/HTTPS-OTA path. When off, the firmware runs the
+        UART/USB/BLE consoles only and the linker garbage-collects wifi/lwip/mbedtls/esp-tls.
+
+config FUGU_WITH_BLE
+    bool "BLE NUS console + OTA (NimBLE)"
+    default y
+    select BT_ENABLED
+    help
+        NimBLE console + OTA push. Adds ~250 KB flash. The NimBLE host selection and radio/thermal
+        tunings that Kconfig can't default from here live in sdkconfig.ble, layered by CMakeLists
+        when this is on.
+
+config FUGU_WITH_MCPWM
+    bool "MCPWM gate driver (instead of LEDC)"
+    default n
+    help
+        Drive the half-bridge with the MCPWM peripheral (hardware dead-time, OST brake, glitch-free
+        comparator updates) instead of LEDC. See doc/mcpwm-sync-buck-driver.md.
+
+config FUGU_WITH_VCONV
+    bool "Virtual converter plant (simulation, no hardware)"
+    default n
+    depends on !FUGU_WITH_MCPWM
+    help
+        Replace the physical gate driver + ADC with a software converter plant (src/sim/vconv.*).
+        Mutually exclusive with the MCPWM driver.
+
+config FUGU_WITH_SPROFILER
+    bool "Semihosting sampling profiler"
+    default n
+    help
+        Compile the semihosting sampling profiler (only useful with OpenOCD attached). When off the
+        whole esp32-semihosting-profiler component is excluded (flash + ~8 KB .bss).
+
+config FUGU_WITH_MEASURE_COIL
+    bool "On-device coil inductance measurement"
+    default n
+    help
+        Compile the on-device coil L0/Ls sweep + `measure-coil` console command. Bench-only tool.
+
+endmenu

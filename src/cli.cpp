@@ -24,6 +24,7 @@
 #include "util.h"
 #include "buck.h"
 #include "mppt.h"
+#include "tele/console_ble.h"
 #ifdef WITH_MEASURE_COIL
 #include "measure_coil.h"
 #endif
@@ -457,8 +458,10 @@ static void cmdOta(cmd *c) {
         CMD_FAIL_RETURN("ota: expected url");
     stopAndBackoff(10);
     adcSampler.halted = true; // disable ADC reading
-    doOta(url.c_str());
+    bool ok = doOta(url.c_str()); // reboots on success and never returns
     adcSampler.halted = false;
+    if (!ok)
+        CMD_FAIL_RETURN("ota: update failed");
 }
 #endif
 

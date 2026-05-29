@@ -4,8 +4,8 @@
 Reuses the etc/fugu console package and fugu_console.make_transport, so every transport works:
 serial (-p), telnet/NAT (--ip host:port), BLE NUS (--ble [--address]), ESPHome BLE proxy
 (--ble-proxy host [--address]) or MQTT (--mqtt broker). Sends only read-only commands
-(ip/status/mem/svc list/sensor) — never drives the converter. Output is a Markdown table by
-default (--plain for aligned columns). Requires: tabulate (pip install tabulate).
+(ip/status/mem/svc list/sensor) — never drives the converter. Prints a rich table (like ota.py;
+--plain for a borderless one). Requires: rich (pip install rich).
 
   python etc/fugu_health.py --ble --address <UUID>
   python etc/fugu_health.py --ip 192.168.1.173:232
@@ -17,7 +17,9 @@ import re
 import sys
 import time
 
-from tabulate import tabulate
+from rich.box import SIMPLE
+from rich.console import Console as RichConsole
+from rich.table import Table
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fugu.console import Console
@@ -25,6 +27,13 @@ from fugu.transport import SocketTransport
 import fugu_console
 
 OK, WARN, BAD = "✅", "⚠️", "❌"
+
+# CLion/PyCharm run consoles claim TTY but don't render ANSI — match ota.py's handling.
+_in_jb_run = bool(os.environ.get("PYCHARM_HOSTED"))
+_console = RichConsole(color_system=None if _in_jb_run else "auto",
+                       force_terminal=False if _in_jb_run else None,
+                       highlight=not _in_jb_run,
+                       width=200 if _in_jb_run else None)
 
 # one periodic status line: V=65.3/26.23 I=0.00/ 0.00A  0.0W 29℃37℃ 443sps  0㎅/s ... st=START,0 lag=68131㎲ N=.. rssi=-37
 _NUM = r"([\d.+-]+|nan)"
@@ -228,10 +237,13 @@ def build_rows(st, status, mem, svcs, sensors, cd):
 
 
 def render(rows, plain=False):
-    # verdict first in plain mode (reads as a status column), last in the Markdown table
-    table = ([(v, c, r) for c, r, v in rows] if plain else [(c, r, v) for c, r, v in rows])
-    headers = ["", "Check", "Reading"] if plain else ["Check", "Reading", "Verdict"]
-    return tabulate(table, headers=headers, tablefmt="simple" if plain else "github")
+    t = Table(show_header=True, header_style="bold", box=(SIMPLE if plain else None))
+    t.add_column("Check")
+    t.add_column("Reading")
+    t.add_column("Verdict", justify="center")
+    for c, r, v in rows:
+        t.add_row(c, r, v)
+    _console.print(t)
 
 
 def add_transport_args(ap):
@@ -254,7 +266,7 @@ def main():
     fugu_console.load_env_file()
     ap = argparse.ArgumentParser(description="Fugu device health check (read-only)")
     add_transport_args(ap)
-    ap.add_argument("--plain", action="store_true", help="aligned columns instead of Markdown")
+    ap.add_argument("--plain", action="store_true", help="borderless table (no box)")
     ap.add_argument("--timeout", type=float, default=6.0, help="per-command timeout (s)")
     args = ap.parse_args()
 
@@ -281,7 +293,7 @@ def main():
 
     rows = build_rows(st, sd, parse_mem(mem), parse_svc(svc), parse_sensors(sensor),
                       parse_coredump(cd))
-    print(render(rows, plain=args.plain))
+    render(rows, plain=args.plain)
     return 0
 
 

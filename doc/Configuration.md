@@ -40,7 +40,7 @@ Conventions used in the tables below:
 | `ina22x_addr`           |      | int    | —       | INA226 I2C address                             |
 | `ina22x_resistor`       | Ω    | float  | —       | INA226 current-sense shunt resistance          |
 | `ina22x_range`          | A    | float  | —       | INA226 max current range for PGA config        |
-| `ina22x_conv_time_us`   | µs   | int    | 588     | INA226 per-conversion time (rounded up to nearest device step); lower = faster/noisier |
+| `ina22x_conv_time_us`   | µs   | int    | 1100     | INA226 per-conversion time (rounded up to nearest device step); lower = faster/noisier |
 | `pwm_freq`              | Hz   | int    | —       | Converter PWM switching frequency              |
 | `pwm_driver_logic`      |      | enum   | —       | Gate driver logic: `HiLi` or `InEn`            |
 | `pwm_hi`                | GPIO | int    | —       | High-side gate driver pin (HiLi mode)          |

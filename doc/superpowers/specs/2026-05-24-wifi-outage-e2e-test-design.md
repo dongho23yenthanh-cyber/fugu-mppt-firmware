@@ -1,5 +1,10 @@
 *this document is an LLM generated placeholder*
 
+> **Update:** the two webhook tests this spec refers to were merged into
+> `etc/e2e-test/test_wifi_outage.py` (`--mode stick|roam`), and the shared `Tap`/`Results`/poll
+> helpers now live in `etc/e2e-test/_harness.py`. The test this spec describes is
+> `etc/e2e-test/test_wifi_outage_service_recovery.py`.
+
 # E2E test — WiFi outage / network-service recovery (serial-controlled router)
 
 ## Purpose
@@ -68,7 +73,7 @@ telnet_probe(host, port, timeout) -> str
 ```
 
 All console I/O goes through `etc/fugu` (`SerialTransport` + `Console`), same as
-`test_stick_to_wifi.py`. The status-line `Tap` pattern is reused too.
+`test_wifi_outage.py`. The status-line `Tap` pattern is reused too (now `_harness.EventLog`).
 
 ## Setup (run once, at test start)
 
@@ -140,7 +145,7 @@ existing tests).
 
 ## What this does NOT cover
 
-- Multi-AP roaming (covered by `test_stick_to_wifi.py` / `test_wifi_roam_on_long_outage.py`).
+- Multi-AP roaming / stick (covered by `test_wifi_outage.py --mode stick|roam`).
 - `wifi off <minutes>` timer behavior (covered by `test_wifi_off_timeout.py`).
 - The 30-min MPPT re-sweep gate, charger flow, etc.
 

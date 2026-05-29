@@ -10,6 +10,7 @@
 constexpr auto OTA_TIMEOUT_SECONDS = 2 * 60;
 
 void systemRestart();
+void consoleFlush(); // push progress over a buffered console (BLE) during the blocking download
 
 #if CONFIG_MBEDTLS_PSK_MODES
 
@@ -129,6 +130,7 @@ esp_err_t _ota_http_event_handler(esp_http_client_event_t *evt) {
                                  contentReceived * 1000 / (wallClockUs() - tStart)
                         );
                     }
+                    consoleFlush(); // download blocks the net loop; push this line to a buffered (BLE) console now
                 }
             }
             break;
@@ -164,7 +166,7 @@ void otaWatchdog(void *arg) {
 }
 
 
-void doOta(const char *url) {
+bool doOta(const char *url) {
     //ESP_LOGE("ota", "Not available. Enable CONFIG_MBEDTLS_PSK_MODES");
 
     esp_http_client_config_t config{};
@@ -212,7 +214,7 @@ void doOta(const char *url) {
     xTaskCreate(otaWatchdog, "otaWD", 4096, NULL, 20, &wdTask);
     if (!wdTask) {
         ESP_LOGE("ota", "Firmware upgrade failed");
-        return;
+        return false;
     }
 
     esp_err_t ret = esp_https_ota(&ota_config);
@@ -220,10 +222,13 @@ void doOta(const char *url) {
 
     if (ret == ESP_OK) {
         ESP_LOGI("ota", "OTA Succeed, Rebooting...");
+        consoleFlush(); // get the result out over a buffered console before the reboot tears the link down
         systemRestart();
-    } else {
-        ESP_LOGE("ota", "Firmware upgrade failed");
+        return true;
     }
+    ESP_LOGE("ota", "Firmware upgrade failed");
+    consoleFlush();
+    return false;
 }
 
 

@@ -7,23 +7,24 @@ behind a default-off Kconfig flag, so the test first probes `netstat`: if the fi
 know the command, every check is reported SKIP and the run still exits 0 (nothing is broken —
 the feature just isn't compiled in).
 
-What's asserted
----------------
-  * netstat     — replies OK and prints a `mac=` line (always present).
-  * nslookup    — a literal IP resolves to itself with no DNS (`8.8.8.8 -> 8.8.8.8`); a hostname
-                  is a soft check (PASS if it resolves, SKIP if DNS is down).
-  * ping        — the session runs end-to-end and prints the `N sent, M received` summary; a reply
-                  actually arriving (M>=1) is a soft check (the gateway, parsed from netstat, may
-                  filter ICMP).
-  * tcpconnect  — produces a well-formed verdict line (`open` / `refused` / `timeout`); reaching an
-                  open port (default 8.8.8.8:53) is a soft check that needs internet.
-  * curl GET    — an HTTPS GET against `--url` prints an `HTTP <status>` line (TLS verified via the
-                  cert bundle).
-  * curl POST   — `-X POST -d <data>` against an echo endpoint (`--echo`, default httpbin) prints
-                  the status line; the echoed payload appearing in the body is a soft check.
+`netstat` reports the link state; the test then branches:
 
-The network-reaching checks are soft (SKIP, not FAIL) so the test is meaningful on a device with
-no upstream internet — it still proves the commands parse, run, and emit well-formed output.
+WiFi DOWN (regression for the no-tcpip-thread crash)
+  curl/ping/nslookup/tcpconnect resolve names / open sockets, which post to the lwip tcpip
+  thread that only exists once WiFi is up. Each MUST refuse gracefully ("network down"), not
+  fault in tcpip_send_msg_wait_sem — and the device MUST stay alive afterwards. This runs on any
+  associated-or-not device and is the headline regression check.
+
+WiFi UP (functional happy-path)
+  * nslookup    — `8.8.8.8` resolves to itself (hard); a hostname is soft (SKIP if DNS down).
+  * ping        — prints the `N sent, M received` summary (hard); an actual reply is soft (the
+                  gateway, parsed from netstat, may filter ICMP).
+  * tcpconnect  — emits a verdict (`open`/`refused`/`timeout`); reaching `--probe` open is soft.
+  * curl GET    — an HTTPS GET against `--url` prints `HTTP <status>` (TLS via the cert bundle).
+  * curl POST   — `-X POST -d <data>` against `--echo` prints the status; body echo is soft.
+
+netstat always asserts a `mac=` line. The feature is behind a default-off Kconfig flag, so if the
+firmware doesn't know `netstat` every check is SKIPped and the run still exits 0.
 
 Usage
 -----
@@ -74,65 +75,81 @@ def main():
                 res.skip(name, "feature not built")
             return 0
 
-        # --- netstat ---
+        # --- netstat (works regardless of link state) ---
         res.check("netstat prints a mac= line", "mac=" in net.text, net.text.strip()[:80])
         gw = None
         if m := re.search(r"gw=(\d+\.\d+\.\d+\.\d+)", net.text):
             gw = m.group(1)
             print(f"  gateway={gw}", flush=True)
-
-        # --- nslookup: literal IP (no DNS) is a hard check; a hostname is soft ---
-        nl = con.command("nslookup 8.8.8.8", timeout=4.0)
-        res.check("nslookup resolves a literal IP", nl.ok and "8.8.8.8 -> 8.8.8.8" in nl.text,
-                  nl.text.strip()[:80])
-        host = con.command("nslookup example.com", timeout=6.0)
-        if host.ok and "->" in host.text:
-            res.check("nslookup resolves a hostname (DNS)", True, host.text.strip().splitlines()[-1][:60])
-        else:
-            res.skip("nslookup resolves a hostname (DNS)", "DNS unavailable / declined")
-
-        # --- ping: session must run end-to-end; a reply is soft ---
-        target = gw or "8.8.8.8"
-        pg = con.command(f"ping {target} 2", timeout=8.0)
-        msum = re.search(r"(\d+) sent, (\d+) received", pg.text)
-        res.check("ping runs and prints a summary", pg.ok and msum is not None,
-                  pg.text.strip().splitlines()[-1][:80] if pg else "no reply")
-        if msum and int(msum.group(2)) >= 1:
-            res.check(f"ping got a reply from {target}", True, f"{msum.group(2)}/{msum.group(1)}")
-        else:
-            res.skip(f"ping got a reply from {target}", "no echo reply (ICMP filtered / offline)")
-
-        # --- tcpconnect: well-formed verdict is hard; reaching 'open' is soft ---
+        net_up = bool(re.search(r"wifi:\s*connected", net.text))
+        print(f"  wifi {'up' if net_up else 'down'}", flush=True)
         phost, _, pport = args.probe.partition(":")
-        tc = con.command(f"tcpconnect {phost} {pport or 80}", timeout=8.0)
-        verdict = re.search(r"tcpconnect: \S+ (open|refused|timeout|error)", tc.text)
-        res.check("tcpconnect emits a verdict", verdict is not None,
-                  verdict.group(0) if verdict else tc.text.strip()[:80])
-        if verdict and verdict.group(1) == "open":
-            res.check(f"tcpconnect reached {args.probe}", True)
-        else:
-            res.skip(f"tcpconnect reached {args.probe}",
-                     verdict.group(1) if verdict else "no verdict")
+        pport = pport or "80"
 
-        # --- curl GET: HTTPS via cert bundle ---
-        cg = con.command(f"curl {args.url}", timeout=15.0)
-        status = re.search(r"curl: HTTP (\d+)", cg.text)
-        if status:
-            res.check("curl GET returns an HTTP status", True, f"HTTP {status.group(1)}")
+        if not net_up:
+            # WiFi down: the net commands resolve names / open sockets, which post to the lwip
+            # tcpip thread that only exists once WiFi is up. They MUST refuse gracefully ("network
+            # down"), not fault in tcpip_send_msg_wait_sem. Regression for that crash.
+            for label, cmd in (("nslookup", "nslookup 8.8.8.8"), ("ping", "ping 8.8.8.8 1"),
+                               ("tcpconnect", f"tcpconnect {phost} {pport}"), ("curl", f"curl {args.url}")):
+                r = con.command(cmd, timeout=8.0)
+                res.check(f"{label} refuses gracefully when WiFi down",
+                          (not r.ok) and "network down" in r.text,
+                          (r.text.strip().splitlines() or ["no reply"])[-1][:70])
+            res.check("device still alive after net cmds (no crash/reboot)",
+                      con.command("uptime", timeout=4.0).ok)
+            res.skip("functional curl/ping/nslookup", "WiFi not connected — run with the device associated")
         else:
-            res.skip("curl GET returns an HTTP status", "no status line (offline / TLS failed)")
-
-        # --- curl POST: -X POST -d ---
-        cp = con.command(f"curl -X POST -d nettools=1 {args.echo}", timeout=15.0)
-        pstatus = re.search(r"curl: HTTP (\d+)", cp.text)
-        if pstatus:
-            res.check("curl POST returns an HTTP status", True, f"HTTP {pstatus.group(1)}")
-            if "nettools" in cp.text:
-                res.check("curl POST body was echoed back", True)
+            # --- nslookup: literal IP (no DNS) is a hard check; a hostname is soft ---
+            nl = con.command("nslookup 8.8.8.8", timeout=4.0)
+            res.check("nslookup resolves a literal IP", nl.ok and "8.8.8.8 -> 8.8.8.8" in nl.text,
+                      nl.text.strip()[:80])
+            host = con.command("nslookup example.com", timeout=6.0)
+            if host.ok and "->" in host.text:
+                res.check("nslookup resolves a hostname (DNS)", True, host.text.strip().splitlines()[-1][:60])
             else:
-                res.skip("curl POST body was echoed back", "endpoint did not echo (not an echo server?)")
-        else:
-            res.skip("curl POST returns an HTTP status", "no status line (offline / TLS failed)")
+                res.skip("nslookup resolves a hostname (DNS)", "DNS unavailable / declined")
+
+            # --- ping: session must run end-to-end; a reply is soft ---
+            target = gw or "8.8.8.8"
+            pg = con.command(f"ping {target} 2", timeout=8.0)
+            msum = re.search(r"(\d+) sent, (\d+) received", pg.text)
+            res.check("ping runs and prints a summary", pg.ok and msum is not None,
+                      pg.text.strip().splitlines()[-1][:80] if pg else "no reply")
+            if msum and int(msum.group(2)) >= 1:
+                res.check(f"ping got a reply from {target}", True, f"{msum.group(2)}/{msum.group(1)}")
+            else:
+                res.skip(f"ping got a reply from {target}", "no echo reply (ICMP filtered)")
+
+            # --- tcpconnect: well-formed verdict is hard; reaching 'open' is soft ---
+            tc = con.command(f"tcpconnect {phost} {pport}", timeout=8.0)
+            verdict = re.search(r"tcpconnect: \S+ (open|refused|timeout|error)", tc.text)
+            res.check("tcpconnect emits a verdict", verdict is not None,
+                      verdict.group(0) if verdict else tc.text.strip()[:80])
+            if verdict and verdict.group(1) == "open":
+                res.check(f"tcpconnect reached {args.probe}", True)
+            else:
+                res.skip(f"tcpconnect reached {args.probe}", verdict.group(1) if verdict else "no verdict")
+
+            # --- curl GET: HTTPS via cert bundle ---
+            cg = con.command(f"curl {args.url}", timeout=15.0)
+            status = re.search(r"curl: HTTP (\d+)", cg.text)
+            if status:
+                res.check("curl GET returns an HTTP status", True, f"HTTP {status.group(1)}")
+            else:
+                res.skip("curl GET returns an HTTP status", "no status line (TLS failed?)")
+
+            # --- curl POST: -X POST -d ---
+            cp = con.command(f"curl -X POST -d nettools=1 {args.echo}", timeout=15.0)
+            pstatus = re.search(r"curl: HTTP (\d+)", cp.text)
+            if pstatus:
+                res.check("curl POST returns an HTTP status", True, f"HTTP {pstatus.group(1)}")
+                if "nettools" in cp.text:
+                    res.check("curl POST body was echoed back", True)
+                else:
+                    res.skip("curl POST body was echoed back", "endpoint did not echo")
+            else:
+                res.skip("curl POST returns an HTTP status", "no status line (TLS failed?)")
     finally:
         con.close()
 

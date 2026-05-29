@@ -4,6 +4,13 @@
   * the esp32 adc fix
   * the RT core pining
 
+The transitive include chain (adc.h → store.h → littlefs/nvs) is too heavy to shim
+ad-hoc — the host path isn't worth it. The canonical proof is on-target. Let me
+first confirm the test is actually invoked in the runner (not just declared), then
+decide on running
+
+
+
 ❯ is there any advertising ble protocol to publish bms data?
 
 ⏺ Yes — a few options, with one obvious winner for your HA context: 

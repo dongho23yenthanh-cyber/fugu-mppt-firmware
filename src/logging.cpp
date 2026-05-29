@@ -3,6 +3,7 @@
 #include <cstring>
 #include <ESPTelnet.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/task.h>   // pcTaskGetName (wifi-task bypass in vprintf_)
 
 #include "etc/readerwriterqueue.h"
 
@@ -299,9 +300,17 @@ static int vprintf_(const char *fmt, va_list argptr) {
     // (so boot-log capture sees the setup() body). core1 behaviour is unchanged.
     if (xPortGetCoreID() == 1 && (deferLogs || !xPortCanYield())) {
         return enqueue_log(fmt, 200, argptr);
-    } else {
-        return vprintf_mux(fmt, argptr);
     }
+    // The ESP-IDF wifi task has only a 3072B stack; vprintf_mux's 300B loc_buf + mirror-sink frames
+    // overflow it on connect/reconnect once this hook is active (post-setup reconnects bricked
+    // devices that couldn't immediately associate). Route the wifi task to the light default vprintf
+    // (UART only) so a reconnect can't crash it. Guarded to task context (pcTaskGetName is not ISR-safe).
+    if (xPortCanYield()) {
+        const char *tn = pcTaskGetName(nullptr);
+        if (tn && strncmp(tn, "wifi", 4) == 0)
+            return old_vprintf(fmt, argptr);
+    }
+    return vprintf_mux(fmt, argptr);
 }
 
 void set_logging_telnet(ESPTelnet *telnet) {

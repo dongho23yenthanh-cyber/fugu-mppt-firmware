@@ -35,6 +35,10 @@ CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECK_BOOT=y
 CONFIG_ESP_COREDUMP_STACK_SIZE=2304
+# Store the full 64-char ELF SHA string in the dump (default 9). esp-coredump gates its full
+# register/stack decode on this string matching the ELF's; a 9-char truncation never equals the
+# 64-char ELF SHA, so the gate skips and you drop to an addr2line-only backtrace. ~55 B RAM.
+CONFIG_APP_RETRIEVE_LEN_ELF_SHA=64
 
 
 # CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

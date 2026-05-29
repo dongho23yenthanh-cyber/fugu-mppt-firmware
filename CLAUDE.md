@@ -86,6 +86,11 @@ python3 etc/idf-devtools/elf_archive.py find --device flat -o fw.elf # extract a
 Only builds flashed *after* this was added are archived; older dumps still need their ELF passed to `esp-coredump`
 manually. After a fresh checkout run `git submodule update --init etc/idf-devtools`.
 
+The submodule also ships other generic ESP-IDF host tools: `etc/idf-devtools/flash-diff.sh` (incremental
+`esptool --diff-with` flashing) and `rts.py` (serial RTS/DTR board reset) — these replace the former
+repo-root copies. (`etc/peek_symbols.py` and `etc/nvs_dump.py` remain in-tree; the console's `peek`/`sym`
+import the local `etc/peek_symbols.py`.)
+
 ## Provisioning (board configs)
 
 Hardware behavior (pins, ADC selection, voltage divider ratios, current sense factors, limits, MQTT broker, charger

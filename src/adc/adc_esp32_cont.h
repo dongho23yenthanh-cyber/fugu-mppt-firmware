@@ -86,8 +86,10 @@ public:
     }
 
     void deinit() override {
+        if (!handle) return;
         adc_continuous_stop(handle);
         adc_continuous_deinit(handle);
+        handle = nullptr;
     }
 
     void setNtcCh(uint8_t ch) { ntcCh = ch; }
@@ -103,7 +105,7 @@ public:
 
     void setMaxExpectedVoltage(uint8_t ch, float voltage) override {
         adc_atten_t atten;
-        assert(ch < adc_channel_t::ADC_CHANNEL_9);
+        assert_throw(ch <= adc_channel_t::ADC_CHANNEL_9, "adc channel out of range");
 
         // esp32-s3 measurable voltage range:
         // https://docs.espressif.com/projects/esp-idf/en/v4.4/esp32s3/api-reference/peripherals/adc.html#adc-attenuation
@@ -169,10 +171,5 @@ public:
     float getInputImpedance(uint8_t ch) override { return 500e3; } //  500k ESP ADC impedance?
 
     bool IRAM_ATTR convDoneCallback() { return notification.notifyFromIsr(); }
-
-    void stop() {
-        ESP_ERROR_CHECK(adc_continuous_stop(handle));
-        ESP_ERROR_CHECK(adc_continuous_deinit(handle));
-    }
 };
 

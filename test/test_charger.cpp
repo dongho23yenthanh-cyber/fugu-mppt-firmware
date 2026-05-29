@@ -117,12 +117,19 @@ void test_termination_release_via_voltage_floor() {
     tc.update(3.70f, 14.0f, 0.0f);
     TEST_ASSERT_TRUE(bool(tc));
 
-    // Voltage just above floor (cv_min - 0.05V = 3.32V): still terminated
-    tc.update(p.cv_min - 0.04f, 0.0f, 0.0f);
+    // Release floor is cv_min - 0.1V, debounced over several BMS frames so a single
+    // I·R sag doesn't release. Just above the floor: stays terminated.
+    tc.update(p.cv_min - 0.08f, 0.0f, 0.0f);
     TEST_ASSERT_TRUE(bool(tc));
 
-    // Below voltage floor: released even without any Ah counted
-    tc.update(p.cv_min - 0.06f, 0.0f, 0.0f);
+    // A single sub-threshold dip is ignored; going back above the floor resets the streak.
+    tc.update(p.cv_min - 0.15f, 0.0f, 0.0f);
+    TEST_ASSERT_TRUE(bool(tc));
+    tc.update(p.cv_min - 0.08f, 0.0f, 0.0f);
+    TEST_ASSERT_TRUE(bool(tc));
+
+    // Sustained below the floor: released even without any Ah counted.
+    for (int i = 0; i < 6; ++i) tc.update(p.cv_min - 0.15f, 0.0f, 0.0f);
     TEST_ASSERT_FALSE(bool(tc));
 }
 
@@ -138,8 +145,8 @@ void test_termination_dod_release_skipped_when_cbat_missing() {
     tc.update(3.40f, 0.0f, 1000.0f);
     TEST_ASSERT_TRUE(bool(tc));
 
-    // Voltage floor still works regardless of Cbat
-    tc.update(p.cv_min - 0.06f, 0.0f, 1000.0f);
+    // Voltage floor still works regardless of Cbat (sustained sub-threshold).
+    for (int i = 0; i < 6; ++i) tc.update(p.cv_min - 0.15f, 0.0f, 1000.0f);
     TEST_ASSERT_FALSE(bool(tc));
 }
 

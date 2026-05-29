@@ -142,8 +142,8 @@ void test_buck_sync_rect_active_in_dcm_with_current() {
 
 void test_buck_bootstrap_min_default() {
     SynchronousConverter c;
-    initConv(c); // no boot_refresh_ns -> default 1500 ns
-    auto expect = (uint16_t) std::ceil(1500e-9f * kFsw * (float) c.pwmMaxDriver());
+    initConv(c); // no boot_refresh_ns -> default 500 ns (buck.h)
+    auto expect = (uint16_t) std::ceil(500e-9f * kFsw * (float) c.pwmMaxDriver());
     TEST_ASSERT_EQUAL_UINT(expect, c.getRectOnPwmMin());
 }
 

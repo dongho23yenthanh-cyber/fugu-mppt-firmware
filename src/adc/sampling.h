@@ -461,6 +461,7 @@ public:
                 if (cr > calibRes) calibRes = cr;
             });
             rtcount("adc.update.read");
+            if (!adc->isGood()) calibRes = UpdateRet::AdcError;
         } else if (readMode == AdcReadMode::SnapshotAllChannels) {
             calibRes = UpdateRet::NoNewData;
             for (int i = 0; i < state.sensorByCh.size(); ++i) {

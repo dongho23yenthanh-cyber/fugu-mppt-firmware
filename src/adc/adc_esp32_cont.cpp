@@ -25,6 +25,7 @@ s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *
 
 
 void ADC_ESP32_Cont::start() {
+    good_ = true;
     adc_continuous_handle_cfg_t adc_config = {
         .max_store_buf_size = ADC1_READ_LEN * 2,
         .conv_frame_size = ADC1_READ_LEN / 2, // use half read len to drain buffer while data exists
@@ -45,7 +46,7 @@ void ADC_ESP32_Cont::start() {
         if (attenByCh[ch] != (adc_atten_t) -1) {
             assert(patLen < SOC_ADC_PATT_LEN_MAX);
             adc_pattern[patLen].atten = attenByCh[ch];
-            adc_pattern[patLen].channel = ch & 0x7;
+            adc_pattern[patLen].channel = ch;
             adc_pattern[patLen].unit = ADC_UNIT_1;
             adc_pattern[patLen].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
             ESP_LOGI("adc_esp32", "pattern[%lu] = {.atten=%d, .channel=%d}", patLen, attenByCh[ch], ch);
@@ -62,7 +63,7 @@ void ADC_ESP32_Cont::start() {
             if (attenByCh[ch] != (adc_atten_t) -1 && ch != ntcCh) {
                 assert(patLen < SOC_ADC_PATT_LEN_MAX);
                 adc_pattern[patLen].atten = attenByCh[ch];
-                adc_pattern[patLen].channel = ch & 0x7;
+                adc_pattern[patLen].channel = ch;
                 adc_pattern[patLen].unit = ADC_UNIT_1;
                 adc_pattern[patLen].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
                 ESP_LOGI("adc_esp32", "pattern[%lu] = {.atten=%d, .channel=%d}", patLen, attenByCh[ch], ch);
@@ -136,8 +137,10 @@ uint32_t ADC_ESP32_Cont::read(SampleCallback &&newSampleCallback) {
         //ESP_LOGW("adc_esp32", "Read timeout.");
         //vTaskDelay(100);
     } else {
-        assert(ret == ESP_ERR_INVALID_STATE);
-        ESP_ERROR_CHECK_THROW(ret);
+        // unexpected driver error: never throw from the RT loop. Flag unhealthy so the sampler
+        // treats it as AdcError via isGood(); start() clears the flag on recovery.
+        if (good_) ESP_LOGE("adc_esp32", "adc_continuous_read error 0x%x", ret);
+        good_ = false;
     }
 
     return ret_num;

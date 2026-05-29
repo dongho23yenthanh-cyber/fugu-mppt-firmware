@@ -28,6 +28,7 @@ private:
     TaskNotification notification;
     adc_continuous_handle_t handle = nullptr;
     uint8_t result[ADC1_READ_LEN] = {0};
+    bool good_ = true; // cleared on a continuous-read driver error, restored by start()
 
 
     uint32_t sr = 0; // sampling rate of driver
@@ -94,6 +95,8 @@ public:
     float getSample() override { abort(); }
 
     bool hasData() override { return notification.wait(1); }
+
+    bool isGood() override { return good_; }
 
     void setMaxExpectedVoltage(uint8_t ch, float voltage) override {
         adc_atten_t atten;

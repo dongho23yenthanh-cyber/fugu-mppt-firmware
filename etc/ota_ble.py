@@ -15,14 +15,16 @@ Protocol (device side in src/etc/ota_ble.cpp):
   dev  -> TX  : "OTAB OK rebooting" | "OTAB FAIL <reason>"
 
 Usage:
-    python -m etc.ota_ble [build/fugu-firmware.bin] [device-name-or-address]
+    python -m etc.ota_ble [-f|--force] [build/fugu-firmware.bin] [device-name-or-address]
 
-Requires: pip install bleak
+Skips the push if the device already reports the image's version (probed via `uptime` over the
+BLE console); pass --force to push regardless. Requires: pip install bleak
 """
 import asyncio
 import hashlib
 import os
 import re
+import struct
 import sys
 
 from bleak import BleakClient, BleakScanner
@@ -31,6 +33,30 @@ NUS_SVC = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # write: console commands
 TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # notify: status/log mirror
 FW_UUID = "6e400004-b5a3-f393-e0a9-e50e24dcca9e"  # write-no-response: firmware bytes
+
+APP_DESC_MAGIC = 0xABCD5432
+RE_APP_LINE = re.compile(r'App:\s+(\S+)\s+v\S+\s+(\S+)\s+\(built (.+),\s+IDF\s+(\S+)\)')
+
+
+def read_local_app_desc(bin_path):
+    """Parse the firmware version string out of a .bin's esp_app_desc_t, or None."""
+    try:
+        with open(bin_path, 'rb') as f:
+            data = f.read(0x200)
+    except FileNotFoundError:
+        return None
+    off = data.find(struct.pack('<I', APP_DESC_MAGIC))
+    if off < 0:
+        return None
+    return data[off + 0x10:off + 0x30].split(b'\x00', 1)[0].decode('utf-8', 'replace')
+
+
+def parse_device_version(lines):
+    """Pull the version from the App: line of an `uptime` reply, or None."""
+    for l in lines:
+        if m := RE_APP_LINE.search(l):
+            return m.group(2)
+    return None
 
 
 def progress_bar(done, total, label, width=30):
@@ -56,10 +82,11 @@ async def find_device(name_or_addr):
     return dev
 
 
-async def push(bin_path, name_or_addr):
+async def push(bin_path, name_or_addr, force=False):
     data = open(bin_path, "rb").read()
     sha = hashlib.sha256(data).hexdigest()
-    print(f"image {bin_path}: {len(data)} bytes, sha256={sha}")
+    local_ver = read_local_app_desc(bin_path)
+    print(f"image {bin_path}: {len(data)} bytes, sha256={sha}, version={local_ver}")
 
     dev = await find_device(name_or_addr)
     if not dev:
@@ -75,12 +102,14 @@ async def push(bin_path, name_or_addr):
     disc_ev = asyncio.Event()    # link dropped (device rebooting after a successful end)
     result = {"ok": False, "fail": False}
     rxbuf = ""
+    rx_lines = []                # every console line received (for the version probe)
 
     def on_tx(_, payload: bytearray):
         nonlocal granted, rxbuf
         rxbuf += payload.decode("utf-8", "replace")
         while "\n" in rxbuf:
             line, rxbuf = rxbuf.split("\n", 1)
+            rx_lines.append(line)
             if "OTAB READY" in line:
                 print("  <", line.strip()); ready_ev.set()
             elif "OTAB CRED" in line:
@@ -104,6 +133,17 @@ async def push(bin_path, name_or_addr):
         print(f"connected, mtu={cli.mtu_size}, chunk={chunk}")
 
         await cli.write_gatt_char(RX_UUID, b"ping\n", response=True)
+
+        # Skip the push if the device already runs this exact version (mirrors ota.py).
+        rx_lines.clear()
+        await cli.write_gatt_char(RX_UUID, b"uptime\n", response=True)
+        await asyncio.sleep(2)
+        dev_ver = parse_device_version(rx_lines)
+        print(f"  device version: {dev_ver or '?'}")
+        if local_ver and dev_ver == local_ver and not force:
+            print(f"  ☑️ skip: already at {local_ver} (use --force to push anyway)")
+            return True
+
         await cli.write_gatt_char(
             RX_UUID, f"otab begin {len(data)} {sha}\n".encode(), response=True)
         try:
@@ -156,11 +196,16 @@ async def push(bin_path, name_or_addr):
 
 
 def main():
-    bin_path = sys.argv[1] if len(sys.argv) > 1 else "build/fugu-firmware.bin"
-    name = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("BLE_NAME")
+    argv = sys.argv[1:]
+    force = False
+    for f in ("-f", "--force"):
+        if f in argv:
+            argv.remove(f); force = True
+    bin_path = argv[0] if len(argv) > 0 else "build/fugu-firmware.bin"
+    name = argv[1] if len(argv) > 1 else os.environ.get("BLE_NAME")
     if not os.path.exists(bin_path):
         print(f"no such file: {bin_path}"); return 1
-    ok = asyncio.run(push(bin_path, name))
+    ok = asyncio.run(push(bin_path, name, force=force))
     print("OTA over BLE:", "✅ success (device rebooting)" if ok else "❌ failed")
     return 0 if ok else 1
 

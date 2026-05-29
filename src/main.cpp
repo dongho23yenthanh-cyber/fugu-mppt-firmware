@@ -554,6 +554,14 @@ static void loopRT(void *arg) {
         if (samplerRet == ADC_Sampler::UpdateRet::AdcError) {
             ESP_LOGE("main", "ADC error");
             stopAndBackoff(16);
+            // A stalled continuous-ADC DMA reports AdcError every poll but nothing restarts it
+            // (the converter is now disabled, so the timeout-driven resetPeripherals below is
+            // skipped). Re-init the ADCs here, throttled, so a dead DMA self-heals.
+            static unsigned long lastAdcResetMs = 0;
+            if (nowMs - lastAdcResetMs > 8000) {
+                lastAdcResetMs = nowMs;
+                adcSampler.resetPeripherals();
+            }
         }
 
         if (samplerRet == ADC_Sampler::UpdateRet::CalibFailure) {

@@ -36,7 +36,7 @@ void ADC_ESP32_Cont::start() {
 
         .flags = {.flush_pool = false}, // TODO
     };
-    ESP_ERROR_CHECK(adc_continuous_new_handle(&adc_config, &handle));
+    ESP_ERROR_CHECK_THROW(adc_continuous_new_handle(&adc_config, &handle));
 
 
     adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {};

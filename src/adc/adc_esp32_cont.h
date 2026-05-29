@@ -100,6 +100,23 @@ public:
 
     void start() override;
 
+    // The continuous DMA can silently stall (conv-done stops firing) — isGood()'s no-sample
+    // watchdog detects it but nothing else restarts the driver. Tear down and re-start in place
+    // so the sampler's recovery path can heal a dead DMA without a reboot. atten/cali config is
+    // kept (set once via setMaxExpectedVoltage); start() restores good_/lastDataUs_.
+    bool resetPeripherals() override {
+        ESP_LOGW("adc_esp32", "resetPeripherals: restarting continuous ADC");
+        deinit();
+        try {
+            start();
+        } catch (const std::exception &e) {
+            ESP_LOGE("adc_esp32", "restart failed: %s", e.what());
+            good_ = false;
+            return false;
+        }
+        return true;
+    }
+
     void startReading(uint8_t channel) override { abort(); } // this should never get called
     float getSample() override { abort(); }
 

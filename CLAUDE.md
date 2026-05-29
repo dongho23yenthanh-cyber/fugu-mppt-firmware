@@ -86,10 +86,10 @@ python3 etc/idf-devtools/elf_archive.py find --device flat -o fw.elf # extract a
 Only builds flashed *after* this was added are archived; older dumps still need their ELF passed to `esp-coredump`
 manually. After a fresh checkout run `git submodule update --init etc/idf-devtools`.
 
-The submodule also ships other generic ESP-IDF host tools: `etc/idf-devtools/flash-diff.sh` (incremental
-`esptool --diff-with` flashing) and `rts.py` (serial RTS/DTR board reset) — these replace the former
-repo-root copies. (`etc/peek_symbols.py` and `etc/nvs_dump.py` remain in-tree; the console's `peek`/`sym`
-import the local `etc/peek_symbols.py`.)
+The submodule is also the single home for the generic ESP-IDF host tools: `etc/idf-devtools/flash-diff.sh`
+(incremental `esptool --diff-with` flashing), `rts.py` (serial RTS/DTR reset), `nvs_dump.py` (NVS partition parser),
+and `peek_symbols.py` (symbol→address — `fugu_console.py`'s `peek`/`sym` import it from there). Repo-root
+`provision.py` is a thin wrapper that execs `etc/idf-devtools/provision.py`.
 
 ## Provisioning (board configs)
 

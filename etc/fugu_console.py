@@ -60,12 +60,10 @@ except ImportError:
     from etc.fugu.console import Console
     from etc.fugu.discover import discover_scope_servers
 
-# `peek <symbol>` resolver + `sym <pattern>` are firmware-specific (need the build ELF), so they
-# live next to this CLI rather than in the shared `fugu/` package.
-try:
-    import peek_symbols
-except ImportError:
-    from etc import peek_symbols  # type: ignore[no-redef]
+# `peek <symbol>` resolver + `sym <pattern>` need the build ELF; the implementation lives in the
+# vendored idf-devtools submodule (generic ESP-IDF symbol lookup).
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'idf-devtools'))
+import peek_symbols  # noqa: E402
 
 _PORT_GLOBS = [
     "/dev/cu.usbmodem*", "/dev/cu.usbserial*", "/dev/cu.wchusbserial*", "/dev/cu.SLAB_USBtoUART*",

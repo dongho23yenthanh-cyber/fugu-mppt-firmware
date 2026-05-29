@@ -8,6 +8,8 @@
 #include <cstring>
 #include <esp_timer.h>
 #include <esp_memory_utils.h>
+#include <esp_core_dump.h>
+#include <esp_partition.h>
 #include <SimpleCLI.h>
 
 #include "logging.h"
@@ -406,6 +408,81 @@ static void cmdPeek(cmd *c) {
     }
 }
 
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+// coredump [info|get|erase] — inspect/extract the panic core dump saved to the `coredump` flash
+// partition. `get` streams the raw partition image as base64 over the console (mirrors to MQTT/telnet),
+// so a backtrace can be pulled from a converter that has no serial. Decode host-side:
+//   collect lines between the BEGIN/END markers -> base64 -decode-> dump.bin
+//   esp-coredump info_corefile --core-format raw -c dump.bin build/fugu-firmware.elf
+static int b64enc(const uint8_t *in, size_t n, char *out) {
+    static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int o = 0;
+    size_t i = 0;
+    for (; i + 3 <= n; i += 3) {
+        uint32_t v = (in[i] << 16) | (in[i + 1] << 8) | in[i + 2];
+        out[o++] = T[(v >> 18) & 63]; out[o++] = T[(v >> 12) & 63];
+        out[o++] = T[(v >> 6) & 63];  out[o++] = T[v & 63];
+    }
+    if (i < n) {
+        uint32_t v = in[i] << 16;
+        if (i + 1 < n) v |= in[i + 1] << 8;
+        out[o++] = T[(v >> 18) & 63];
+        out[o++] = T[(v >> 12) & 63];
+        out[o++] = (i + 1 < n) ? T[(v >> 6) & 63] : '=';
+        out[o++] = '=';
+    }
+    return o;
+}
+static void cmdCoredump(cmd *c) {
+    Command cc(c);
+    std::string sub = cc.countArgs() >= 1 ? cc.getArg(0).getValue().c_str() : "info";
+
+    if (sub == "erase") {
+        esp_err_t e = esp_core_dump_image_erase();
+        if (e != ESP_OK) CMD_FAIL_RETURN("coredump: erase failed (%s)", esp_err_to_name(e));
+        UART_LOG("coredump: erased");
+        return;
+    }
+
+    size_t addr = 0, size = 0;
+    esp_err_t err = esp_core_dump_image_get(&addr, &size);
+    if (err != ESP_OK) {
+        UART_LOG("coredump: none (%s)", esp_err_to_name(err));
+        return;
+    }
+
+    if (sub == "info") {
+        bool ok = (esp_core_dump_image_check() == ESP_OK);
+        UART_LOG("coredump: present addr=0x%08x size=%u check=%s",
+                 (unsigned) addr, (unsigned) size, ok ? "ok" : "BAD");
+        UART_LOG("coredump: 'get' to stream base64, 'erase' to clear");
+        return;
+    }
+
+    if (sub == "get") {
+        const esp_partition_t *p = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
+        if (!p) CMD_FAIL_RETURN("coredump: partition not found");
+        size_t off = (addr >= p->address) ? addr - p->address : 0;
+        UART_LOG("==COREDUMP-BEGIN size=%u==", (unsigned) size);
+        uint8_t raw[48];
+        char b64[68];
+        for (size_t done = 0; done < size;) {
+            size_t n = std::min(sizeof(raw), size - done);
+            if (esp_partition_read(p, off + done, raw, n) != ESP_OK)
+                CMD_FAIL_RETURN("coredump: read failed @%u", (unsigned) (off + done));
+            int bl = b64enc(raw, n, b64);
+            b64[bl] = 0;
+            UART_LOG("%s", b64);
+            done += n;
+        }
+        UART_LOG("==COREDUMP-END==");
+        return;
+    }
+    CMD_FAIL_RETURN("coredump: expected info|get|erase");
+}
+#endif // CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+
 static void cmdMem(cmd *) {
     UART_LOG("Total heap:  %9ld", ESP.getHeapSize());
     UART_LOG("Free heap:   %9ld", ESP.getFreeHeap());
@@ -738,6 +815,9 @@ void setupCli() {
     cli.addCommand("rt-stats", cmdRtStats);
     cli.addCommand("mem", cmdMem);
     cli.addBoundlessCmd("peek", cmdPeek); // peek <hex-addr> [len]; symbol resolution lives host-side
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    cli.addBoundlessCmd("coredump", cmdCoredump); // coredump [info|get|erase]; get streams base64
+#endif
     cli.addCommand("uptime", cmdUptime);
     cli.addBoundlessCmd("sensor", cmdSensor); // `sensor` full dump; `sensor avg` compact EWM line
 #ifdef WITH_NETW

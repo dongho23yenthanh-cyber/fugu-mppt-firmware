@@ -746,6 +746,57 @@ def interactive(con: Console, elf_path: str | None = None):
         con.on_line = None
 
 
+def pull_coredump(con, action, elf_path):
+    """`coredump info|get|erase` over the console. `get` collects the base64 stream the firmware
+    emits between ==COREDUMP-BEGIN size=N== / ==COREDUMP-END==, decodes it to coredump.bin, and
+    runs esp-coredump (the streamed bytes are the raw partition image, hence --core-format raw)."""
+    action = action or "info"
+    if action in ("info", "erase"):
+        rep = con.command(f"coredump {action}", timeout=8.0)
+        print(rep.text or "(no reply)")
+        return 0 if rep.ok else 1
+    if action != "get":
+        print(f"coredump: unknown action {action!r} (use info|get|erase)")
+        return 2
+
+    import base64, shutil, subprocess
+    print("requesting core dump (base64 stream over the console, may take a while)…")
+    rep = con.command("coredump get", timeout=180.0)
+    size, b64, capturing = None, [], False
+    for ln in rep:
+        m = re.search(r"==COREDUMP-BEGIN size=(\d+)==", ln)
+        if m:
+            size, b64, capturing = int(m.group(1)), [], True
+            continue
+        if "==COREDUMP-END==" in ln:
+            capturing = False
+            continue
+        if capturing:
+            s = ln.strip()
+            if s and re.fullmatch(r"[A-Za-z0-9+/=]+", s):  # skip any interleaved status lines
+                b64.append(s)
+    if size is None:
+        print("coredump: no dump in reply (try `--coredump info`; device may have none)")
+        print(rep.text)
+        return 1
+    data = base64.b64decode("".join(b64))
+    if len(data) != size:
+        print(f"coredump: WARNING decoded {len(data)} B, header said {size} B")
+    out = "coredump.bin"
+    with open(out, "wb") as f:
+        f.write(data)
+    print(f"coredump: wrote {len(data)} bytes to {out}")
+    elf = elf_path or "build/fugu-firmware.elf"
+    cmd = ["esp-coredump", "info_corefile", "--core-format", "raw", "-c", out, elf]
+    if shutil.which("esp-coredump"):
+        print("+ " + " ".join(cmd))
+        subprocess.run(cmd)
+    else:
+        print("esp-coredump not on PATH — in the ESP-IDF env (. ./idf-export.sh) run:")
+        print("  " + " ".join(cmd))
+    return 0
+
+
 def make_transport(args):
     if args.ble_proxy:
         host, _, port = args.ble_proxy.partition(":")
@@ -805,6 +856,10 @@ def main():
     ap.add_argument("--elf", default=None,
                     help="firmware ELF for `peek <symbol>`/`sym` resolution (default: $FUGU_ELF or "
                          "newest build*/fugu-firmware.elf)")
+    ap.add_argument("--coredump", nargs="?", const="info", metavar="info|get|erase",
+                    help="pull the saved panic core dump: `info` (default) shows presence/size, "
+                         "`get` streams it (base64), decodes to coredump.bin and runs esp-coredump, "
+                         "`erase` clears it")
     args = ap.parse_args()
 
     if len(sys.argv) == 1:  # no arguments: search every transport, don't connect
@@ -823,6 +878,8 @@ def main():
         if args.command:
             dispatch_command(con, args.command, elf_path)
             return 0
+        if args.coredump:
+            return pull_coredump(con, args.coredump, elf_path)
         if args.test:
             print("waiting for device to be ready …")
             if not con.wait_ready():

@@ -337,6 +337,10 @@ static void cmdOtaBle(cmd *c) {
 #endif
 
 #ifdef WITH_NETTOOLS
+// The lwip TCP/IP thread only exists once WiFi has come up; getaddrinfo / sockets / http post to
+// it, so calling them with the stack down faults in tcpip_send_msg_wait_sem. Gate the net commands.
+static bool nettoolsNetUp() { return WiFi.status() == WL_CONNECTED; }
+
 // resolve an IPv4 host/dotted-quad to an in_addr; false if it can't be resolved.
 static bool resolveHost4(const char *host, in_addr &out) {
     addrinfo hint{};
@@ -380,6 +384,8 @@ static void cmdCurl(cmd *c) {
     }
     if (url.length() == 0)
         CMD_FAIL_RETURN("curl: expected [-X M] [-H k:v] [-d data] <url>");
+    if (!nettoolsNetUp())
+        CMD_FAIL_RETURN("curl: network down (WiFi not connected)");
 
     esp_http_client_method_t m = HTTP_METHOD_GET;
     if (method.length()) {
@@ -473,6 +479,8 @@ static void cmdPing(cmd *c) {
     auto host = cc.getArg(0).getValue();
     if (host.length() == 0)
         CMD_FAIL_RETURN("ping: expected <host> [count]");
+    if (!nettoolsNetUp())
+        CMD_FAIL_RETURN("ping: network down (WiFi not connected)");
     uint32_t count = cc.countArgs() >= 2 ? (uint32_t) cc.getArg(1).getValue().toInt() : 4;
     if (count == 0 || count > 60) count = 4; // no infinite ping from a remote console
 
@@ -518,6 +526,8 @@ static void cmdNslookup(cmd *c) {
     auto host = Command(c).getArg(0).getValue();
     if (host.length() == 0)
         CMD_FAIL_RETURN("nslookup: expected <host>");
+    if (!nettoolsNetUp())
+        CMD_FAIL_RETURN("nslookup: network down (WiFi not connected)");
     addrinfo hint{};
     hint.ai_family = AF_INET;
     addrinfo *res = nullptr;
@@ -544,6 +554,8 @@ static void cmdTcpConnect(cmd *c) {
     long port = cc.getArg(1).getValue().toInt();
     if (host.length() == 0 || port <= 0 || port > 65535)
         CMD_FAIL_RETURN("tcpconnect: expected <host> <port>");
+    if (!nettoolsNetUp())
+        CMD_FAIL_RETURN("tcpconnect: network down (WiFi not connected)");
     in_addr a4;
     if (!resolveHost4(host.c_str(), a4))
         CMD_FAIL_RETURN("tcpconnect: cannot resolve '%s'", host.c_str());

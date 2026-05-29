@@ -68,6 +68,14 @@ def _nettools(o):
     raise Skip("needs --serial or --telnet")
 
 
+def _stdin_batch(o):
+    if o.serial:
+        return ["--serial", o.serial]
+    if net_target(o):
+        return ["--telnet", net_target(o)]
+    raise Skip("needs --serial or --telnet")
+
+
 def _mqtt_cmd(o):
     base = ["--serial", o.serial] if o.serial else (["--telnet", net_target(o)] if net_target(o) else None)
     if base is None:
@@ -140,6 +148,7 @@ def _service_recovery(o):
 # name, script, cluster, transport-note, build, timeout_s
 SPECS = [
     ("nettools",        "test_nettools.py",                    "console", "serial|telnet", _nettools, 180),
+    ("stdin-batch",     "test_stdin_batch.py",                 "console", "serial|telnet", _stdin_batch, 180),
     ("mqtt-cmd-input",  "test_mqtt_cmd_input.py",              "console", "serial|telnet + broker", _mqtt_cmd, 120),
     ("console-plan",    "../fugu_console.py",                  "console", "serial|telnet", _console_plan, 240),
     ("console-plan",    "../fugu_console.py",                  "mock",    "serial|telnet (mock fw)", lambda o: _console_plan(o, mock=True), 240),

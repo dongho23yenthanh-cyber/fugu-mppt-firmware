@@ -1,3 +1,4 @@
+#include <Arduino.h> // String
 #include "mqtt.h"
 #include "../conf.h"
 #include "../util.h"

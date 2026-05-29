@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Arduino.h> // millis()
 #include "adc.h"
 #include <stdexcept>
 //#include "math/statmath.h"

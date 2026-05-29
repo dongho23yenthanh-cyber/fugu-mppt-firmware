@@ -5,10 +5,10 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <cassert>
 
 #include <esp_log.h>
-
-#include <Arduino.h>
+#include <esp_attr.h> // IRAM_ATTR
 
 #include "adc.h"
 #include "math/statmath.h"

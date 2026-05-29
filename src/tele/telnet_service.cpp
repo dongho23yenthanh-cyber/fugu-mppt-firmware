@@ -1,5 +1,6 @@
 #include "telnet_service.h"
 
+#include <Arduino.h> // String, Serial
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <lwip/sockets.h>

@@ -1,3 +1,4 @@
+#include <Arduino.h> // micros()
 #include "rt.h"
 #include "logging.h"
 

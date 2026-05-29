@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Arduino.h> // String
+class String; // Arduino String (handleCommand); forward-declared to avoid pulling <Arduino.h>
 
 // Console command layer. setupCli() builds the SimpleCLI command table once at boot;
 // handleCommand() parses one whole input line (from UART/USB/telnet/BLE/MQTT — same string

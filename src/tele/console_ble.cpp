@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <mutex>
 
+#include <Arduino.h> // String
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>

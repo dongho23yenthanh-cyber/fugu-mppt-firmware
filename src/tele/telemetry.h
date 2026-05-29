@@ -4,7 +4,8 @@
 //#include "../store.h"
 #include <string>
 #include <variant>
-#include <Arduino.h>
+
+class String; // Arduino String (handleCommand); avoid dragging <Arduino.h> into every includer
 
 
 extern bool timeSynced;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Arduino.h> // micros(), pinMode()
 #include <SPI.h> // not sure why this is needed
 #include <Adafruit_ADS1X15.h>
 #include "adc.h"

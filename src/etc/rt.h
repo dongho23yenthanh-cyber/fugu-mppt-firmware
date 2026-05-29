@@ -2,7 +2,10 @@
 
 #include <map>
 #include <stdexcept>
-#include <Arduino.h>
+#include <esp_attr.h> // IRAM_ATTR
+#include <esp_cpu.h>  // esp_cpu_get_cycle_count
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h> // TaskHandle_t, task notifications
 
 #include <soc/interrupts.h>
 

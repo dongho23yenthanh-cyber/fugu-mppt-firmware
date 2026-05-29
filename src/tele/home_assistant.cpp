@@ -1,3 +1,4 @@
+#include <Arduino.h> // String
 #include "HAMqttDevice.h"
 #include "home_assistant.h"
 

@@ -111,7 +111,7 @@ def _stick(o):
     serial_or_skip(o)
     if not o.restart_url:
         raise Skip("needs --restart-url / $RESTART_URL (AP restart webhook)")
-    a = ["--serial", o.serial, "--restart-url", o.restart_url]
+    a = ["--mode", "stick", "--serial", o.serial, "--restart-url", o.restart_url]
     if o.ssid:
         a += ["--ssid", o.ssid]
     return a
@@ -123,7 +123,7 @@ def _roam(o):
                            ("--other-ssid", o.other_ssid)) if not v]
     if miss:
         raise Skip("needs " + ", ".join(miss))
-    return ["--serial", o.serial, "--restart-url", o.restart_url,
+    return ["--mode", "roam", "--serial", o.serial, "--restart-url", o.restart_url,
             "--ssid", o.ssid, "--other-ssid", o.other_ssid]
 
 
@@ -147,15 +147,15 @@ SPECS = [
     ("coredump",        "test_coredump.py",                    "destructive", "serial — PANICS the device", _coredump, 180),
     ("measure-coil",    "test_measure_coil.py",                "power",   "serial|telnet — real coil, needs Vin>Vout", _measure_coil, 600),
     ("wifi-off-timeout","test_wifi_off_timeout.py",            "wifi",    "serial — waits ~minutes", _wifi_off, 240),
-    ("stick-to-wifi",   "test_stick_to_wifi.py",               "wifi",    "serial + restart webhook", _stick, 360),
-    ("wifi-roam",       "test_wifi_roam_on_long_outage.py",    "wifi",    "serial + webhook + 2 SSIDs", _roam, 360),
+    ("wifi-stick",      "test_wifi_outage.py",                 "wifi",    "serial + restart webhook", _stick, 360),
+    ("wifi-roam",       "test_wifi_outage.py",                 "wifi",    "serial + webhook + 2 SSIDs", _roam, 360),
     ("wifi-svc-recovery","test_wifi_outage_service_recovery.py","wifi",   "DUT + router serial + SSID/PSK", _service_recovery, 600),
 ]
 
 # Long fuzzers — opt-in within the destructive cluster (no fixed runtime; they autodetect the port).
 FUZZ = [
-    ("fuzz-fugu",    "fuzz_fugu.py",    900),
-    ("fuzz-extreme", "fuzz_extreme.py", 900),
+    ("fuzz-sequences", "fuzz_sequences.py", 900),
+    ("fuzz-extreme",   "fuzz_extreme.py",   900),
 ]
 
 

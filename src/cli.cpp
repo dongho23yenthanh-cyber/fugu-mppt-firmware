@@ -6,10 +6,17 @@
 #endif
 #include <cmath>
 #include <cstring>
+#include <cstdio>
+#include <filesystem>
 #include <esp_timer.h>
 #include <esp_memory_utils.h>
 #include <esp_core_dump.h>
 #include <esp_partition.h>
+#include <esp_system.h>
+#include <esp_ota_ops.h>
+#include <esp_heap_caps.h>
+#include <esp_log.h>
+#include <freertos/task.h>
 #include <SimpleCLI.h>
 
 #include "logging.h"
@@ -291,7 +298,154 @@ static void cmdWifiAdd(cmd *c) {
 
 static void cmdScanI2c(cmd *) { scan_i2c(); }
 
-static void cmdLs(cmd *) { ESP_LOGE("main", "not impl"); }
+// ls/cat operate on the littlefs tree. A bare or relative arg is taken under /littlefs/.
+static std::string lfsPath(const String &arg) {
+    std::string p = arg.length() ? arg.c_str() : "/littlefs";
+    if (p.empty() || p[0] != '/') p = "/littlefs/" + p;
+    return p;
+}
+
+// ls [path]  — list a littlefs directory (default /littlefs), or stat a single file.
+static void cmdLs(cmd *c) {
+    namespace fs = std::filesystem;
+    auto path = lfsPath(Command(c).getArg(0).getValue());
+    std::error_code ec;
+    if (!fs::exists(path, ec))
+        CMD_FAIL_RETURN("ls: not found: %s", path.c_str());
+    if (!fs::is_directory(path, ec)) {
+        UART_LOG("%8lu  %s", (unsigned long) fs::file_size(path, ec), path.c_str());
+        return;
+    }
+    int n = 0;
+    for (auto &e: fs::directory_iterator(path, ec)) {
+        if (e.is_directory(ec))
+            UART_LOG("    <dir>  %s/", e.path().filename().c_str());
+        else
+            UART_LOG("%8lu  %s", (unsigned long) e.file_size(ec), e.path().filename().c_str());
+        ++n;
+    }
+    UART_LOG("ls: %d entries in %s", n, path.c_str());
+}
+
+// cat <file>  — print a littlefs text file (capped at 16 KB).
+static void cmdCat(cmd *c) {
+    auto arg = Command(c).getArg(0).getValue();
+    if (arg.length() == 0)
+        CMD_FAIL_RETURN("cat: expected <file>");
+    auto path = lfsPath(arg);
+    FILE *f = fopen(path.c_str(), "r");
+    if (!f)
+        CMD_FAIL_RETURN("cat: cannot open %s", path.c_str());
+    char line[200];
+    long total = 0;
+    while (fgets(line, sizeof(line), f)) {
+        size_t l = strlen(line);
+        while (l && (line[l - 1] == '\n' || line[l - 1] == '\r')) line[--l] = 0; // UART_LOG adds its own EOL
+        UART_LOG("%s", line);
+        if ((total += (long) l) > 16384) { UART_LOG("cat: ...truncated"); break; }
+    }
+    fclose(f);
+}
+
+// tasks  — FreeRTOS task table: state, priority, pinned core, and min-ever free stack (bytes).
+// StackType_t is uint8_t on ESP32, so the high-water mark is already in bytes.
+static const char *taskStateStr(eTaskState s) {
+    switch (s) {
+        case eRunning: return "run";
+        case eReady: return "rdy";
+        case eBlocked: return "blk";
+        case eSuspended: return "sus";
+        case eDeleted: return "del";
+        default: return "?";
+    }
+}
+static void cmdTasks(cmd *) {
+    UBaseType_t n = uxTaskGetNumberOfTasks();
+    TaskStatus_t *arr = (TaskStatus_t *) malloc(sizeof(TaskStatus_t) * (n + 4));
+    if (!arr) { ESP_LOGE("main", "tasks: oom"); return; }
+    n = uxTaskGetSystemState(arr, n + 4, nullptr);
+    UART_LOG("%-16s %-4s %3s %4s %9s", "NAME", "STAT", "PRI", "CORE", "STKFREE_B");
+    for (UBaseType_t i = 0; i < n; ++i) {
+        const TaskStatus_t &t = arr[i];
+        BaseType_t core = xTaskGetCoreID(t.xHandle);
+        const char *coreStr = (core == tskNO_AFFINITY) ? "any" : (core == 0 ? "0" : "1");
+        UART_LOG("%-16s %-4s %3u %4s %9u", t.pcTaskName, taskStateStr(t.eCurrentState),
+                 (unsigned) t.uxCurrentPriority, coreStr, (unsigned) t.usStackHighWaterMark);
+    }
+    free(arr);
+}
+
+// bootinfo  — last reset reason, running OTA slot + rollback verify state, heap headroom, uptime.
+static void cmdBootinfo(cmd *) {
+    const char *rs;
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON: rs = "POWERON"; break;
+        case ESP_RST_SW: rs = "SW"; break;
+        case ESP_RST_PANIC: rs = "PANIC"; break;
+        case ESP_RST_INT_WDT: rs = "INT_WDT"; break;
+        case ESP_RST_TASK_WDT: rs = "TASK_WDT"; break;
+        case ESP_RST_WDT: rs = "OTHER_WDT"; break;
+        case ESP_RST_BROWNOUT: rs = "BROWNOUT"; break;
+        case ESP_RST_DEEPSLEEP: rs = "DEEPSLEEP"; break;
+        case ESP_RST_USB: rs = "USB"; break;
+        case ESP_RST_JTAG: rs = "JTAG"; break;
+        default: rs = "UNKNOWN"; break;
+    }
+    UART_LOG("reset reason: %s", rs);
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    if (run) {
+        const char *ss = "n/a";
+        esp_ota_img_states_t st;
+        if (esp_ota_get_state_partition(run, &st) == ESP_OK) {
+            switch (st) {
+                case ESP_OTA_IMG_NEW: ss = "NEW"; break;
+                case ESP_OTA_IMG_PENDING_VERIFY: ss = "PENDING_VERIFY"; break;
+                case ESP_OTA_IMG_VALID: ss = "VALID"; break;
+                case ESP_OTA_IMG_INVALID: ss = "INVALID"; break;
+                case ESP_OTA_IMG_ABORTED: ss = "ABORTED"; break;
+                default: ss = "UNDEFINED"; break;
+            }
+        }
+        UART_LOG("running: %s @0x%06x (%uKB)  rollback=%s",
+                 run->label, (unsigned) run->address, (unsigned) (run->size / 1024), ss);
+    }
+    UART_LOG("heap: free=%u min-ever=%u largest=%u",
+             (unsigned) esp_get_free_heap_size(), (unsigned) esp_get_minimum_free_heap_size(),
+             (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    UART_LOG("uptime: %lu s, app %s", (uint32_t) (esp_timer_get_time() / 1000000), format_version());
+}
+
+// heap [check]  — free / min-ever / largest-block per capability; `check` runs an integrity scan.
+static void cmdHeap(cmd *c) {
+    UART_LOG("heap (bytes):  free / min-ever / largest-block");
+    struct { const char *n; uint32_t caps; } pools[] = {
+        {"INTERNAL", MALLOC_CAP_INTERNAL}, {"DMA", MALLOC_CAP_DMA}, {"SPIRAM", MALLOC_CAP_SPIRAM}};
+    for (auto &p: pools)
+        UART_LOG("  %-8s %8u %8u %8u", p.n, (unsigned) heap_caps_get_free_size(p.caps),
+                 (unsigned) heap_caps_get_minimum_free_size(p.caps),
+                 (unsigned) heap_caps_get_largest_free_block(p.caps));
+    if (Command(c).getArg(0).getValue() == "check")
+        UART_LOG("integrity: %s", heap_caps_check_integrity_all(true) ? "OK" : "CORRUPT");
+}
+
+// log <tag> <error|warn|info|debug|verbose|none>  — runtime ESP_LOG level for any tag (`*` = all).
+static void cmdLogLevel(cmd *c) {
+    Command cc(c);
+    if (cc.countArgs() < 2)
+        CMD_FAIL_RETURN("log: expected <tag> <error|warn|info|debug|verbose|none>");
+    auto tag = cc.getArg(0).getValue();
+    auto lvl = cc.getArg(1).getValue();
+    esp_log_level_t l;
+    if (lvl == "none") l = ESP_LOG_NONE;
+    else if (lvl == "error") l = ESP_LOG_ERROR;
+    else if (lvl == "warn") l = ESP_LOG_WARN;
+    else if (lvl == "info") l = ESP_LOG_INFO;
+    else if (lvl == "debug") l = ESP_LOG_DEBUG;
+    else if (lvl == "verbose") l = ESP_LOG_VERBOSE;
+    else CMD_FAIL_RETURN("log: bad level '%s'", lvl.c_str());
+    esp_log_level_set(tag.c_str(), l);
+    UART_LOG("log: %s -> %s", tag.c_str(), lvl.c_str());
+}
 
 static void cmdUptime(cmd *);
 
@@ -1124,8 +1278,13 @@ void setupCli() {
     cli.addCommand("sweep", cmdSweep);
     cli.addCommand("reset-lag", cmdResetLag);
     cli.addCommand("scan-i2c", cmdScanI2c);
-    cli.addCommand("ls", cmdLs);
+    cli.addBoundlessCmd("ls", cmdLs);   // ls [path] (littlefs)
+    cli.addBoundlessCmd("cat", cmdCat); // cat <file> (littlefs)
     cli.addCommand("rt-stats", cmdRtStats);
+    cli.addCommand("tasks", cmdTasks);
+    cli.addCommand("bootinfo", cmdBootinfo);
+    cli.addBoundlessCmd("heap", cmdHeap);    // heap [check]
+    cli.addBoundlessCmd("log", cmdLogLevel); // log <tag> <level>
     cli.addCommand("mem", cmdMem);
     cli.addBoundlessCmd("peek", cmdPeek); // peek <hex-addr> [len]; symbol resolution lives host-side
 #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH

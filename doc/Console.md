@@ -25,6 +25,11 @@ rejection message for invalid arguments / wrong context.
 | `ip` | Show the local IP address. |
 | `hostname <hostname>` | Set the device hostname (persisted in NVS, applied on next boot). |
 | `ota <url>` | Download and flash a new app image from an HTTP(S) URL. Halts the converter and ADC during the update. |
+| `curl [-X M] [-H k:v] [-d data] <url>` *(needs `CONFIG_FUGU_WITH_NETTOOLS`)* | Blocking HTTP(S) request — prints the status line and response body to the issuing console. TLS is verified against the mbedTLS certificate bundle. `-X` sets the method (GET/POST/PUT/DELETE/HEAD/PATCH); `-d` sends a request body (implies POST, defaults Content-Type to form-encoded unless a `-H Content-Type:…` is given); `-H` adds a header (up to 4, `key:value`). Flag values are single tokens — no spaces, so use compact JSON. The body is streamed and capped at 16 KB. |
+| `ping <host> [count]` *(needs `CONFIG_FUGU_WITH_NETTOOLS`)* | ICMP echo to an IPv4 host/IP (`count` 1–60, default 4). Prints per-reply lines (seq/ttl/time) and a sent/received/loss summary. |
+| `nslookup <host>` (alias `resolve`) *(needs `CONFIG_FUGU_WITH_NETTOOLS`)* | Print every IPv4 address the resolver returns for `<host>`. |
+| `tcpconnect <host> <port>` (alias `probe`) *(needs `CONFIG_FUGU_WITH_NETTOOLS`)* | Non-blocking TCP connect with a 5 s timeout; reports `open` / `refused` / `timeout` / `error` and the elapsed time. Port-level reachability check for a broker or OTA endpoint. |
+| `netstat` (alias `ifconfig`) *(needs `CONFIG_FUGU_WITH_NETTOOLS`)* | STA link + IP config snapshot: ssid/bssid/channel/rssi, ip/gateway/netmask/dns, and MAC. |
 | `restart` (aliases `reset`, `reboot`) | Reset the MCU. |
 
 # Control & Diagnostics

@@ -20,6 +20,16 @@ config FUGU_WITH_BLE
         tunings that Kconfig can't default from here live in sdkconfig.ble, layered by CMakeLists
         when this is on.
 
+config FUGU_WITH_NETTOOLS
+    bool "Network debug tools (curl / ping console commands)"
+    default n
+    depends on FUGU_WITH_NETW
+    select MBEDTLS_CERTIFICATE_BUNDLE
+    help
+        Compile the `curl <url>` (blocking HTTP(S) GET, prints the body) and `ping <host>`
+        console commands. Debug tools — they reuse the WiFi/HTTP/lwip stack already linked by
+        NETW, plus the mbedTLS certificate bundle (~50 KB flash) so HTTPS verifies.
+
 config FUGU_WITH_MCPWM
     bool "MCPWM gate driver (instead of LEDC)"
     default n

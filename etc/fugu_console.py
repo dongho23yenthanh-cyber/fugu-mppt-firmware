@@ -416,7 +416,7 @@ GROUP_ALWAYS, GROUP_MOCK, GROUP_NET = "always", "mock", "net"
 # fits most commands; the I2C bus scan is slower (more so amid the mock's ADC-timeout chatter),
 # and `ota <url>` blocks until the firmware finishes downloading and reboots (or its 10 s connect
 # timeout fires + recovery) — ~40 s for a successful flash, so 180 s gives comfortable headroom.
-TIMEOUT_OVERRIDE = {"scan-i2c": 12.0, "ota": 180.0}
+TIMEOUT_OVERRIDE = {"scan-i2c": 12.0, "ota": 180.0, "curl": 15.0, "ping": 8.0, "tcpconnect": 8.0}
 
 
 def _timeout_for(cmd: str, default: float = 4.0) -> float:
@@ -434,6 +434,15 @@ PLAN = [
     ("ip", "IP Address", GROUP_ALWAYS, False),
     ("scan-i2c", None, GROUP_ALWAYS, True),  # may report no devices on a mock
     ("svc list", "NAME", GROUP_ALWAYS, False),
+    # --- network debug tools (CONFIG_FUGU_WITH_NETTOOLS; default off -> unknown cmd -> SKIP) -----
+    # tolerate=True covers both "feature not built" and "no connectivity"; the expect-substring is
+    # still enforced when the command runs and returns OK. nslookup of a literal IP needs no DNS.
+    ("netstat", "mac=", GROUP_ALWAYS, True),
+    ("nslookup 8.8.8.8", "8.8.8.8", GROUP_ALWAYS, True),
+    ("ping 8.8.8.8 1", "sent", GROUP_ALWAYS, True),  # summary prints even at 100% loss
+    ("tcpconnect 8.8.8.8 53", None, GROUP_ALWAYS, True),  # 'open' with internet, else declined->SKIP
+    ("curl https://example.com", "HTTP", GROUP_ALWAYS, True),
+    ("curl -X POST -d hello=world https://example.com", "HTTP", GROUP_ALWAYS, True),
     # --- config: dump, then a non-destructive round-trip on a scratch file ------------------
     ("get-config board.conf", "board.conf", GROUP_ALWAYS, False),
     ("get-config converter.conf", "converter.conf", GROUP_ALWAYS, False),

@@ -107,6 +107,11 @@ if (WITH_NETW)
     component_compile_definitions("WITH_NETW=1")
 endif ()
 
+# CONFIG_FUGU_WITH_NETTOOLS (default n, depends on NETW) compiles the `curl`/`ping` console commands.
+if (CONFIG_FUGU_WITH_NETTOOLS)
+    component_compile_definitions("WITH_NETTOOLS=1")
+endif ()
+
 
 if ($ENV{FUGU_BAT_V})
     # 14.25, 28.5, 57

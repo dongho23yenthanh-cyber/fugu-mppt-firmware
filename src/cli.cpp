@@ -29,6 +29,16 @@
 #include "tele/telemetry.h"     // connect_wifi_async, add_ap
 #include "etc/ota.h"            // doOta
 #endif
+#ifdef WITH_NETTOOLS
+#include <esp_http_client.h>
+#include <esp_crt_bundle.h>
+#include <ping/ping_sock.h>
+#include <lwip/netdb.h>
+#include <lwip/ip_addr.h>
+#include <lwip/sockets.h>
+#include <fcntl.h>
+#include <errno.h>
+#endif
 #include "etc/ota_ble.h"        // otaBleBegin/End/Abort (OTA push over BLE)
 #if WITH_VCONV
 #include "sim/vconv.h"
@@ -325,6 +335,276 @@ static void cmdOtaBle(cmd *c) {
     }
 }
 #endif
+
+#ifdef WITH_NETTOOLS
+// resolve an IPv4 host/dotted-quad to an in_addr; false if it can't be resolved.
+static bool resolveHost4(const char *host, in_addr &out) {
+    addrinfo hint{};
+    hint.ai_family = AF_INET;
+    addrinfo *res = nullptr;
+    if (getaddrinfo(host, nullptr, &hint, &res) != 0 || !res)
+        return false;
+    out = ((sockaddr_in *) res->ai_addr)->sin_addr;
+    freeaddrinfo(res);
+    return true;
+}
+
+// curl [-X METHOD] [-H key:val] [-d data] <url>  — blocking HTTP(S) request, prints status + body to
+// the issuing console. TLS is verified against the mbedTLS certificate bundle. `-d` implies POST. The
+// body is streamed (not fully buffered) and capped so a large response can't OOM the network task.
+// Flag values are single whitespace-delimited tokens (use compact JSON, no spaces). Runs on core 0.
+static void cmdCurl(cmd *c) {
+    Command cc(c);
+    int n = cc.countArgs();
+    String url, method, body;
+    String hdrKey[4], hdrVal[4];
+    int nHdr = 0;
+    for (int i = 0; i < n; ++i) {
+        String a = cc.getArg(i).getValue();
+        if (a.length() == 0) continue;
+        if (a == "-X" && i + 1 < n) {
+            method = cc.getArg(++i).getValue();
+        } else if (a == "-d" && i + 1 < n) {
+            body = cc.getArg(++i).getValue();
+        } else if (a == "-H" && i + 1 < n && nHdr < 4) {
+            String hv = cc.getArg(++i).getValue();
+            int colon = hv.indexOf(':');
+            if (colon > 0) {
+                hdrKey[nHdr] = hv.substring(0, colon);
+                hdrVal[nHdr] = hv.substring(colon + 1);
+                ++nHdr;
+            }
+        } else if (a.startsWith("http")) {
+            url = a;
+        }
+    }
+    if (url.length() == 0)
+        CMD_FAIL_RETURN("curl: expected [-X M] [-H k:v] [-d data] <url>");
+
+    esp_http_client_method_t m = HTTP_METHOD_GET;
+    if (method.length()) {
+        if (method == "GET") m = HTTP_METHOD_GET;
+        else if (method == "POST") m = HTTP_METHOD_POST;
+        else if (method == "PUT") m = HTTP_METHOD_PUT;
+        else if (method == "DELETE") m = HTTP_METHOD_DELETE;
+        else if (method == "HEAD") m = HTTP_METHOD_HEAD;
+        else if (method == "PATCH") m = HTTP_METHOD_PATCH;
+        else CMD_FAIL_RETURN("curl: unknown method '%s'", method.c_str());
+    } else if (body.length()) {
+        m = HTTP_METHOD_POST; // -d implies POST, like curl
+    }
+
+    esp_http_client_config_t cfg{};
+    cfg.url = url.c_str();
+    cfg.timeout_ms = 10000;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
+    cfg.method = m;
+    esp_http_client_handle_t h = esp_http_client_init(&cfg);
+    if (!h)
+        CMD_FAIL_RETURN("curl: init failed");
+
+    bool haveCt = false;
+    for (int i = 0; i < nHdr; ++i) {
+        esp_http_client_set_header(h, hdrKey[i].c_str(), hdrVal[i].c_str());
+        if (hdrKey[i].equalsIgnoreCase("Content-Type")) haveCt = true;
+    }
+    int wlen = body.length();
+    if (wlen && !haveCt)
+        esp_http_client_set_header(h, "Content-Type", "application/x-www-form-urlencoded");
+
+    esp_err_t err = esp_http_client_open(h, wlen);
+    if (err != ESP_OK) {
+        esp_http_client_cleanup(h);
+        CMD_FAIL_RETURN("curl: open failed (%s)", esp_err_to_name(err));
+    }
+    if (wlen && esp_http_client_write(h, body.c_str(), wlen) < 0) {
+        esp_http_client_close(h);
+        esp_http_client_cleanup(h);
+        CMD_FAIL_RETURN("curl: body write failed");
+    }
+    int64_t clen = esp_http_client_fetch_headers(h);
+    UART_LOG("curl: HTTP %d, len=%ld", esp_http_client_get_status_code(h), (long) clen);
+
+    char buf[513];
+    int total = 0, nr;
+    while ((nr = esp_http_client_read(h, buf, sizeof(buf) - 1)) > 0) {
+        buf[nr] = 0;
+        UART_LOG("%s", buf);
+        total += nr;
+        if (total >= 16384) { UART_LOG("curl: ...truncated at %d bytes", total); break; }
+    }
+    esp_http_client_close(h);
+    esp_http_client_cleanup(h);
+}
+
+// ping <host> [count]  — ICMP echo to an IPv4 host/IP via the lwip ping app. Prints per-reply lines
+// and a summary; blocks the console until the session ends (or times out).
+static void pingOnSuccess(esp_ping_handle_t hdl, void *) {
+    uint8_t ttl;
+    uint16_t seqno;
+    uint32_t elapsed, recvLen;
+    ip_addr_t target;
+    esp_ping_get_profile(hdl, ESP_PING_PROF_SEQNO, &seqno, sizeof(seqno));
+    esp_ping_get_profile(hdl, ESP_PING_PROF_TTL, &ttl, sizeof(ttl));
+    esp_ping_get_profile(hdl, ESP_PING_PROF_IPADDR, &target, sizeof(target));
+    esp_ping_get_profile(hdl, ESP_PING_PROF_SIZE, &recvLen, sizeof(recvLen));
+    esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &elapsed, sizeof(elapsed));
+    UART_LOG("ping: %lu bytes from %s: seq=%u ttl=%u time=%lu ms",
+             (unsigned long) recvLen, ipaddr_ntoa(&target), (unsigned) seqno, (unsigned) ttl,
+             (unsigned long) elapsed);
+}
+static void pingOnTimeout(esp_ping_handle_t hdl, void *) {
+    uint16_t seqno;
+    esp_ping_get_profile(hdl, ESP_PING_PROF_SEQNO, &seqno, sizeof(seqno));
+    UART_LOG("ping: seq=%u timeout", (unsigned) seqno);
+}
+static void pingOnEnd(esp_ping_handle_t hdl, void *args) {
+    uint32_t sent, recv, totalMs;
+    esp_ping_get_profile(hdl, ESP_PING_PROF_REQUEST, &sent, sizeof(sent));
+    esp_ping_get_profile(hdl, ESP_PING_PROF_REPLY, &recv, sizeof(recv));
+    esp_ping_get_profile(hdl, ESP_PING_PROF_DURATION, &totalMs, sizeof(totalMs));
+    UART_LOG("ping: %lu sent, %lu received, %lu%% loss, time %lums",
+             (unsigned long) sent, (unsigned long) recv,
+             (unsigned long) (sent ? (sent - recv) * 100 / sent : 0), (unsigned long) totalMs);
+    xSemaphoreGive((SemaphoreHandle_t) args);
+}
+static void cmdPing(cmd *c) {
+    Command cc(c);
+    auto host = cc.getArg(0).getValue();
+    if (host.length() == 0)
+        CMD_FAIL_RETURN("ping: expected <host> [count]");
+    uint32_t count = cc.countArgs() >= 2 ? (uint32_t) cc.getArg(1).getValue().toInt() : 4;
+    if (count == 0 || count > 60) count = 4; // no infinite ping from a remote console
+
+    in_addr a4;
+    if (!resolveHost4(host.c_str(), a4))
+        CMD_FAIL_RETURN("ping: cannot resolve '%s'", host.c_str());
+    ip_addr_t target{};
+    inet_addr_to_ip4addr(ip_2_ip4(&target), &a4);
+
+    SemaphoreHandle_t done = xSemaphoreCreateBinary();
+    if (!done)
+        CMD_FAIL_RETURN("ping: out of memory");
+
+    esp_ping_config_t pc = ESP_PING_DEFAULT_CONFIG();
+    pc.target_addr = target;
+    pc.count = count;
+    pc.task_stack_size = 6144; // callbacks UART_LOG via vprintf_mux (300 B stack buf + telnet/mqtt/ble fan-out)
+    esp_ping_callbacks_t cbs{};
+    cbs.on_ping_success = pingOnSuccess;
+    cbs.on_ping_timeout = pingOnTimeout;
+    cbs.on_ping_end = pingOnEnd;
+    cbs.cb_args = done;
+
+    esp_ping_handle_t hdl = nullptr;
+    if (esp_ping_new_session(&pc, &cbs, &hdl) != ESP_OK || !hdl) {
+        vSemaphoreDelete(done);
+        CMD_FAIL_RETURN("ping: session create failed");
+    }
+    UART_LOG("ping %s (%s): %lu packets", host.c_str(), ipaddr_ntoa(&target), (unsigned long) count);
+    esp_ping_start(hdl);
+    // worst case: every packet waits the full timeout, plus the inter-packet intervals.
+    TickType_t wait = pdMS_TO_TICKS(count * (pc.interval_ms + pc.timeout_ms) + 2000);
+    if (xSemaphoreTake(done, wait) != pdTRUE) {
+        esp_ping_stop(hdl);
+        UART_LOG("ping: aborted (timeout waiting for session end)");
+    }
+    esp_ping_delete_session(hdl);
+    vSemaphoreDelete(done);
+}
+
+// nslookup <host>  (alias resolve)  — print every IPv4 address the resolver returns for <host>.
+static void cmdNslookup(cmd *c) {
+    auto host = Command(c).getArg(0).getValue();
+    if (host.length() == 0)
+        CMD_FAIL_RETURN("nslookup: expected <host>");
+    addrinfo hint{};
+    hint.ai_family = AF_INET;
+    addrinfo *res = nullptr;
+    int rc = getaddrinfo(host.c_str(), nullptr, &hint, &res);
+    if (rc != 0 || !res)
+        CMD_FAIL_RETURN("nslookup: '%s' not found (rc=%d)", host.c_str(), rc);
+    int n = 0;
+    for (addrinfo *p = res; p; p = p->ai_next) {
+        if (p->ai_family != AF_INET) continue;
+        auto a = ((sockaddr_in *) p->ai_addr)->sin_addr;
+        UART_LOG("nslookup: %s -> %s", host.c_str(), inet_ntoa(a));
+        ++n;
+    }
+    freeaddrinfo(res);
+    if (!n)
+        CMD_FAIL_RETURN("nslookup: no IPv4 address for '%s'", host.c_str());
+}
+
+// tcpconnect <host> <port>  (alias probe)  — non-blocking TCP connect with a 5 s timeout; reports
+// open / refused / timeout / error so a broker or OTA endpoint can be reached-tested at the port level.
+static void cmdTcpConnect(cmd *c) {
+    Command cc(c);
+    auto host = cc.getArg(0).getValue();
+    long port = cc.getArg(1).getValue().toInt();
+    if (host.length() == 0 || port <= 0 || port > 65535)
+        CMD_FAIL_RETURN("tcpconnect: expected <host> <port>");
+    in_addr a4;
+    if (!resolveHost4(host.c_str(), a4))
+        CMD_FAIL_RETURN("tcpconnect: cannot resolve '%s'", host.c_str());
+
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0)
+        CMD_FAIL_RETURN("tcpconnect: socket() failed");
+    fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t) port);
+    addr.sin_addr = a4;
+
+    auto t0 = wallClockUs();
+    const char *result;
+    int r = connect(s, (sockaddr *) &addr, sizeof(addr));
+    if (r == 0) {
+        result = "open";
+    } else if (errno == EINPROGRESS) {
+        fd_set wf;
+        FD_ZERO(&wf);
+        FD_SET(s, &wf);
+        timeval tv{};
+        tv.tv_sec = 5;
+        r = select(s + 1, nullptr, &wf, nullptr, &tv);
+        if (r > 0) {
+            int err = 0;
+            socklen_t l = sizeof(err);
+            getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &l);
+            result = err == 0 ? "open" : (err == ECONNREFUSED ? "refused" : "error");
+            if (err && err != ECONNREFUSED)
+                UART_LOG("tcpconnect: connect error %d (%s)", err, strerror(err));
+        } else {
+            result = r == 0 ? "timeout" : "select error";
+        }
+    } else {
+        result = "error";
+    }
+    float ms = (wallClockUs() - t0) * 1e-3f;
+    close(s);
+    UART_LOG("tcpconnect: %s:%ld %s (%.0f ms)", inet_ntoa(a4), port, result, ms);
+    if (strcmp(result, "open") != 0) s_cmdFailed = true;
+}
+
+// netstat  (alias ifconfig)  — STA link + IP config snapshot (ssid/bssid/rssi, ip/gw/mask/dns, mac).
+static void cmdNetstat(cmd *) {
+    UART_LOG("hostname: %s", getHostname().c_str());
+    bool up = WiFi.status() == WL_CONNECTED;
+    UART_LOG("wifi: %s", up ? "connected" : "disconnected");
+    if (up) {
+        UART_LOG("  ssid=%s bssid=%s ch=%d rssi=%d dBm",
+                 WiFi.SSID().c_str(), WiFi.BSSIDstr().c_str(), (int) WiFi.channel(), (int) WiFi.RSSI());
+        UART_LOG("  ip=%s gw=%s mask=%s",
+                 WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(),
+                 WiFi.subnetMask().toString().c_str());
+        UART_LOG("  dns=%s,%s", WiFi.dnsIP(0).toString().c_str(), WiFi.dnsIP(1).toString().c_str());
+    }
+    UART_LOG("  mac=%s", WiFi.macAddress().c_str());
+}
+#endif // WITH_NETTOOLS
 
 static void cmdRtStats(cmd *) {
     xTaskCreatePinnedToCore(print_real_time_stats_1s_task, "rtstats", 4096, NULL, 1, NULL, NON_RT_CORE /*core*/);
@@ -906,6 +1186,13 @@ void setupCli() {
     cli.addBoundlessCmd("wifi", cmdWifi); // wifi on | off [minutes]
     cli.addSingleArgCmd("wifi-add", cmdWifiAdd);
     cli.addSingleArgCmd("ota", cmdOta);
+#endif
+#ifdef WITH_NETTOOLS
+    cli.addBoundlessCmd("curl", cmdCurl);   // curl [-X M] [-H k:v] [-d data] <url>
+    cli.addBoundlessCmd("ping", cmdPing);   // ping <host> [count]
+    cli.addSingleArgCmd("nslookup,resolve", cmdNslookup);
+    cli.addBoundlessCmd("tcpconnect,probe", cmdTcpConnect); // tcpconnect <host> <port>
+    cli.addCommand("netstat,ifconfig", cmdNetstat);
 #endif
     cli.addSingleArgCmd("vset", cmdVset);
     cli.addSingleArgCmd("iset", cmdIset);

@@ -726,11 +726,15 @@ class _PromptSafePrinter:
     def __init__(self):
         self.prompt = ""
         self.active = False
+        self._istty = sys.stdout.isatty()  # redraw only makes sense on a real terminal
         self._lock = threading.Lock()
 
     def __call__(self, line: str) -> None:
         with self._lock:
-            if self.active:
+            # The \r/\x1b[K dance erases the floating prompt before the next line, but only on a
+            # TTY. Piped/captured (tee, file, ssh), those escapes are no-ops and each redraw would
+            # commit another `prompt + buffer` copy — print plainly instead.
+            if self.active and self._istty:
                 try:
                     import readline
                     sys.stdout.write("\r\x1b[K" + line + "\n" + self.prompt + readline.get_line_buffer())

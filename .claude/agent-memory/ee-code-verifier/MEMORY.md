@@ -2,3 +2,7 @@
 - [MCPWM cmp update_on_tez=1 (confirmed)](project_mcpwm_cmp_update_on_tez.md) — TEZ-buffered atomic writes; doc and code now agree; glitch-free duty-step test is the regression guard
 - [pwmRect ceiling = pwmMax−pwmCtrl−1](project_lsoff_minus_one_guard.md) — cmpLS==period silently keeps LS HIGH through the wrap → shoot-through; keep the −1
 - [PWM tests use internal GPIO-matrix loopback](project_pwm_internal_loopback.md) — io_loop_back flag + esp_rom_gpio_connect_in_signal; zero jumpers; ±30 ns tolerance swallows matrix delay
+- [SampleReadScheme dispatch + per-scheme latency traps](project_samplereadscheme_dispatch.md) — cycle/any/all; "vout last" OVP guarantee only holds for all/any, NOT cycle; INA226 hasData skips MASK_EN/CVRF clear
+- [esp32cont getSamplingRate dual-formula bug](project_esp32cont_samplingrate_dual_formula.md) — start() and getSamplingRate() compute pattern length independently; disagree off the NTC+duplicate path → 100Hz notch mistuned
+- [esp32cont read() throws in RT + no no-sample watchdog](project_esp32cont_read_throws_and_no_sample_watchdog.md) — read() can throw into RT loop; Wokwi never-samples starves silently; ISR path itself is correct
+- [fry ADC-error reboot loop (2026-05-29)](project_fry_adc_error_reboot_loop_may29.md) — internal cont-ADC (vin+ntc) DMA stalls every boot, resetPeripherals won't revive it (flat does), reboots ~15s; real root = heap/vtable corruption (HEAP_POISONING is the probe); gpio_install warning benign

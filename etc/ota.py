@@ -26,6 +26,7 @@ import argparse
 import asyncio
 import atexit
 import datetime
+import json
 import os
 import re
 import socket
@@ -85,6 +86,16 @@ def read_local_app_desc(bin_path):
         return data[off+rel:off+rel+n].split(b'\x00', 1)[0].decode('utf-8', 'replace')
     return dict(version=s(0x10, 32), project=s(0x30, 32),
                 time=s(0x50, 16), date=s(0x60, 16), idf=s(0x70, 32))
+
+
+def build_has_networking(bin_path):
+    """True/False if the build that produced bin_path has CONFIG_FUGU_WITH_NETW, None if unknown."""
+    cfg = os.path.join(os.path.dirname(bin_path), 'config', 'sdkconfig.json')
+    try:
+        with open(cfg) as f:
+            return bool(json.load(f).get('FUGU_WITH_NETW'))
+    except (OSError, ValueError):
+        return None
 
 
 RE_APP_LINE = re.compile(r'App:\s+(\S+)\s+v\S+\s+(\S+)\s+\(built (.+),\s+IDF\s+(\S+)\)')
@@ -324,11 +335,24 @@ async def main():
         print('all devices up to date')
         return True
 
+    netw = build_has_networking(FIRMWARE_BIN)
+    if netw is False:
+        print('⚠️  this build has networking DISABLED (CONFIG_FUGU_WITH_NETW=n) — '
+              'devices will lose Wi-Fi after OTA and can only be recovered by serial.')
+
     if args.dry_run:
         print('dry-run, would update:')
         for _, _, name in to_update:
             print(f'  - {name}')
         return True
+
+    if netw is False:
+        if not sys.stdin.isatty():
+            print('aborting: no-network image, refusing to OTA non-interactively')
+            return False
+        if input('proceed anyway? [y/N] ').strip().lower() not in ('y', 'yes'):
+            print('aborted')
+            return False
 
     ensure_http_server()
     time.sleep(1)

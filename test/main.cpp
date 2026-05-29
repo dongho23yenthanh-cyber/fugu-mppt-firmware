@@ -209,9 +209,6 @@ void setup() {
 
     UNITY_BEGIN();
 
-    // PWM-test iteration speedup: skip all unrelated tests. To re-enable the full
-    // suite, set FULL_TEST_SUITE before the build.
-#ifdef FULL_TEST_SUITE
     // charger.h — termination math
     RUN_TEST(test_termination_line_at_zero_current);
     RUN_TEST(test_termination_line_at_tail_current);
@@ -342,8 +339,9 @@ void setup() {
     RUN_TEST(test_attachinterrupt_after_preinstall_uses_rt_core);
     RUN_TEST(test_gpio_isr_lands_on_install_core_0);
     RUN_TEST(test_gpio_isr_lands_on_install_core_rt);
-#endif // FULL_TEST_SUITE
 
+    // PWM/MCPWM tests need the MCPWM peripheral; without it they ESP_ERROR_CHECK-abort the runner.
+#if WITH_MCPWM
     // pwm — rig self-test first; if it fails, downstream MCPWM tests are suspect
     RUN_TEST(test_pwm_rig_freq_path);
     RUN_TEST(test_pwm_rig_pulsewidth_path);
@@ -362,6 +360,7 @@ void setup() {
     RUN_TEST(test_mcpwm_ost_brake_latches);
     RUN_TEST(test_mcpwm_interleaved_phase);
     RUN_TEST(test_mcpwm_endpoint_duty_scope);
+#endif // WITH_MCPWM
 
     UNITY_END();
 }

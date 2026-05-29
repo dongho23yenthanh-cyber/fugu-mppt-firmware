@@ -78,8 +78,8 @@ What landed:
 - `analyse_period` / `analyse_pulse_width` helpers (filter ring by `chan_id`).
 - `wait_events` got an optional `diag_pin = -1` to suppress Arduino's
   "IO X is not set as GPIO" warning when the pin is muxed to a peripheral.
-- `test/main.cpp`: wrapped non-PWM RUN_TEST calls in `#ifdef FULL_TEST_SUITE`
-  so PWM iteration runs in ~0.8 s. Set `FULL_TEST_SUITE` env var to restore.
+- `test/main.cpp`: the PWM/MCPWM RUN_TESTs are gated on `#if WITH_MCPWM`, so they run only in an
+  MCPWM build; the software unit suite runs by default.
 
 Gotchas / lessons (carry forward to M4+):
 
@@ -289,8 +289,8 @@ D=0.95-fall) come through clean: no missed edges, no duty crush.
   outlier in Test 4b; cold-boot is stable. Suspect leaked CAP-timer or operator
   state across the soft reset; not pursued.
 
-Test runtime: ~3.5 s with `FULL_TEST_SUITE` undefined (PWM tests only). To
-restore the rest of the suite, define `FULL_TEST_SUITE` at build time.
+Test runtime: the PWM/MCPWM block (gated on `#if WITH_MCPWM`) runs in ~3.5 s; the software unit
+suite runs by default.
 
 Read output via the USB-to-UART bridge port (`/dev/cu.usbmodem59720648061`),
 not the device's native USB-CDC port (`/dev/cu.usbmodem11101`) — the bridge

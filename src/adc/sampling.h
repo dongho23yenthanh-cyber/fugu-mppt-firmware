@@ -446,49 +446,60 @@ public:
 
         auto hd = adc->hasData();
         rtcount("adc.update.hasData");
-        if (!adc->isGood())
-            return UpdateRet::AdcError;
-        if (!hd)
-            return UpdateRet::NoNewData;
 
         auto readMode = adc->readMode();
-        UpdateRet calibRes;
+        UpdateRet calibRes = UpdateRet::NoNewData;
 
         if (readMode == AdcReadMode::StreamedCallback) {
-            calibRes = UpdateRet::NoNewData;
-            adc->read([&](uint8_t ch, float v) {
-                auto cr = _addSensorSample(state.sensorByCh[ch], v);
-                if (cr > calibRes) calibRes = cr;
-            });
-            rtcount("adc.update.read");
-            if (!adc->isGood()) calibRes = UpdateRet::AdcError;
-        } else if (readMode == AdcReadMode::SnapshotAllChannels) {
-            calibRes = UpdateRet::NoNewData;
-            for (int i = 0; i < state.sensorByCh.size(); ++i) {
-                auto sensor = state.sensorByCh[i];
-                if (!sensor) continue;
-                adc->startReading(i);
-                rtcount("adc.update.startReading");
+            // Drain read() BEFORE the isGood() no-sample watchdog: read() is the only place the
+            // watchdog refreshes (lastDataUs_) and the only DMA drain, so gating it on isGood()
+            // self-latches a dead-ADC state that can never clear. Drain first (a live DMA
+            // self-clears), then report AdcError when still stale (a truly dead DMA -> backoff +
+            // resetPeripherals), independent of hd so the safety halt is preserved.
+            if (hd) {
+                adc->read([&](uint8_t ch, float v) {
+                    auto cr = _addSensorSample(state.sensorByCh[ch], v);
+                    if (cr > calibRes) calibRes = cr;
+                });
+                rtcount("adc.update.read");
+            }
+            if (!adc->isGood())
+                return UpdateRet::AdcError;
+            if (!hd)
+                return UpdateRet::NoNewData;
+        } else {
+            if (!adc->isGood())
+                return UpdateRet::AdcError;
+            if (!hd)
+                return UpdateRet::NoNewData;
+
+            if (readMode == AdcReadMode::SnapshotAllChannels) {
+                for (int i = 0; i < state.sensorByCh.size(); ++i) {
+                    auto sensor = state.sensorByCh[i];
+                    if (!sensor) continue;
+                    adc->startReading(i);
+                    rtcount("adc.update.startReading");
+
+                    auto x = adc->getSample();
+                    rtcount("adc.update.getSample");
+
+                    auto cr = _addSensorSample(sensor, x);
+                    if (cr > calibRes) calibRes = cr;
+                }
+            } else {
+                //using namespace std::string_literals;
+                //assert_throw(false, "cycle readMode"s + "not implemented");
+
+                auto &order = state.cycleOrder;
+                const auto sensor(state.cycleSensors[order[state.cycleSensorsPos]]);
 
                 auto x = adc->getSample();
                 rtcount("adc.update.getSample");
-
-                auto cr = _addSensorSample(sensor, x);
-                if (cr > calibRes) calibRes = cr;
+                state.cycleSensorsPos = (state.cycleSensorsPos + 1) % order.size();
+                state.adc->startReading(state.cycleSensors[order[state.cycleSensorsPos]]->params.adcCh);
+                rtcount("adc.update.startReading");
+                calibRes = _addSensorSample(sensor, x);
             }
-        } else {
-            //using namespace std::string_literals;
-            //assert_throw(false, "cycle readMode"s + "not implemented");
-
-            auto &order = state.cycleOrder;
-            const auto sensor(state.cycleSensors[order[state.cycleSensorsPos]]);
-
-            auto x = adc->getSample();
-            rtcount("adc.update.getSample");
-            state.cycleSensorsPos = (state.cycleSensorsPos + 1) % order.size();
-            state.adc->startReading(state.cycleSensors[order[state.cycleSensorsPos]]->params.adcCh);
-            rtcount("adc.update.startReading");
-            calibRes = _addSensorSample(sensor, x);
         }
 
         if (calibRes != UpdateRet::NoNewData)

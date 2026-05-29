@@ -34,3 +34,13 @@ write a config tool
   any other filter recommendation (kalman, multi-pass ewm ..) for the digital control loop? (Vout is the critical control variable)
 * when the user connects to the console, i want the charger to print the last 20 warnings and errors
 * detect high impedance battery connection
+
+
+
+# etc
+- review that part of the code
+- look for heavy imports, that can be avoided by moving code from headers into .cpp files
+- look for storage specifier optimiuatio
+
+# routine
+> test? docs? commits?

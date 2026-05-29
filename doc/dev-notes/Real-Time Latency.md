@@ -75,6 +75,17 @@ averages the ADC samples.
 Additionally, in this adc averaging loop we can implement a fast shutdown path to further reduce the response time
 to OV or OC transients (load disconnect or short-circuit).
 
+**Landmine — a no-sample watchdog must not gate the read() that feeds it.** `ADC_ESP32_Cont` has a
+no-sample watchdog (`isGood()` returns false when the DMA delivered nothing for >1 s) so a stalled
+internal ADC halts the converter instead of running MPPT on a stale Vin. But `read()` is the *only*
+place that drains the DMA ring **and** refreshes the watchdog's `lastDataUs_`. An early version of
+`ADC_Sampler::_updateAdc` checked `isGood()` *before* `read()` and returned `AdcError` on a stale
+flag — so a single transient >1 s gap (e.g. a WiFi-reconnect storm starving the RT loop) latched the
+ADC dead forever: the gate blocked the only call that could clear it, and `resetPeripherals` couldn't
+reliably break out. Fix: for the `StreamedCallback` backend, **drain `read()` first** (a live DMA
+self-clears), then report `AdcError` from the watchdog afterwards. General rule: a liveness watchdog
+must never sit in front of the operation that proves liveness.
+
 ## Set explicit core affinity
 
 ```

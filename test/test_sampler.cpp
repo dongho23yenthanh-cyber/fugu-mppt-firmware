@@ -219,3 +219,61 @@ void test_cycle_no_interleave_two_channels() {
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 100.f, sampler.effectiveSampleRate((PhysicalSensor *) vout));
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 100.f, sampler.effectiveSampleRate((PhysicalSensor *) c0));
 }
+
+namespace {
+// StreamedCallback mock mirroring ADC_ESP32_Cont's no-sample watchdog: read() is the ONLY place
+// that delivers samples and (here, like lastDataUs_) clears `good`. Lets us regression-test that
+// _updateAdc drains read() even while isGood() is false.
+class StreamedMockADC : public AsyncADC<float> {
+public:
+    bool good = true;
+    bool dataPending = false;
+    float nextValue = 0;
+    int readCalls = 0;
+
+    [[nodiscard]] AdcReadMode readMode() const override { return AdcReadMode::StreamedCallback; }
+    bool init(const ConfFile &) override { return true; }
+    void deinit() override {}
+    void startReading(uint8_t) override {}
+    float getSample() override { return 0; }
+    void setMaxExpectedVoltage(uint8_t, float) override {}
+    float getInputImpedance(uint8_t) override { return 1e6f; }
+    float getSamplingRate(uint8_t) override { return 100.0f; }
+    bool hasData() override { return dataPending; }
+    bool isGood() override { return good; }
+
+    uint32_t read(SampleCallback &&cb) override {
+        ++readCalls;
+        if (!dataPending) return 0;
+        cb(0, nextValue);
+        dataPending = false;
+        good = true; // delivering data clears the no-sample watchdog (mirrors lastDataUs_ refresh)
+        return 1;
+    }
+};
+}
+
+// Regression for the 81c9c10 deadlock: a tripped no-sample watchdog (isGood()==false) must NOT gate
+// read() for a StreamedCallback ADC. read() is the only thing that drains the DMA and clears the
+// watchdog, so gating it self-latches a dead ADC forever. _updateAdc must drain read() first.
+void test_streamed_watchdog_does_not_deadlock_read() {
+    StreamedMockADC adc;
+    ADC_Sampler sampler{};
+    sampler.ignoreCalibrationConstraints = true;
+    auto s = sampler.addSensor(&adc, mkp(0, "vin"), 10.f, 1);
+    sampler.begin();
+
+    // Watchdog has tripped (stale) but the DMA has a fresh sample queued.
+    adc.good = false;
+    adc.dataPending = true;
+    adc.nextValue = 42.0f;
+
+    sampler.update();
+
+    // Fixed: read() ran despite isGood()==false, delivered the sample, and the ADC recovered.
+    // Pre-fix: the isGood() gate returned AdcError before read(), so good stayed false forever.
+    TEST_ASSERT_GREATER_OR_EQUAL_INT(1, adc.readCalls);
+    TEST_ASSERT_TRUE(adc.good);
+    TEST_ASSERT_EQUAL_UINT32(1, s->numSamples);
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 42.0f, s->last);
+}

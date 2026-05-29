@@ -3,7 +3,8 @@
 
 Talks the device's string command protocol (the same one served on UART/USB-CDC/telnet/MQTT/BLE,
 see `doc/Console.md`) over any transport. Modes: one command or several (`-c`, repeatable; or
-`--stdin` to read newline-separated commands — both run over a single connection), the test PLAN (`--test`,
+`--stdin` to read newline-separated commands — both run over a single connection; stdin batch mode
+is auto-selected when no mode flag is given and stdin is piped), the test PLAN (`--test`,
 walks every console command in a meaningful order — read-only diagnostics, config round-trips and
 service ops, then the converter/PWM commands that move power — and reports PASS/FAIL/SKIP), or —
 given a transport but no mode flag — an interactive REPL (the default). With *no arguments at all*
@@ -867,7 +868,8 @@ def main():
                          "commands over one connection")
     ap.add_argument("--stdin", action="store_true",
                     help="read newline-separated commands from stdin and run them over one "
-                         "connection (blank lines and # comments skipped); exits on EOF")
+                         "connection (blank lines and # comments skipped); exits on EOF. "
+                         "Auto-enabled when no mode flag is given and stdin is not a terminal")
     ap.add_argument("--test", action="store_true",
                     help="run the PASS/FAIL/SKIP command PLAN instead of the interactive REPL")
     ap.add_argument("--elf", default=None,
@@ -893,11 +895,15 @@ def main():
     elf_path = peek_symbols.find_elf(args.elf)
     try:
         commands = list(args.command or [])
-        if args.stdin:
+        # No mode flag + stdin isn't a terminal (piped/heredoc, e.g. agent use) → batch from stdin
+        # rather than the REPL, which would just hit EOF.
+        auto_batch = (not commands and not args.stdin and not args.test and not args.coredump
+                      and not sys.stdin.isatty())
+        if args.stdin or auto_batch:
             commands += [ln for ln in (raw.strip() for raw in sys.stdin)
                          if ln and not ln.startswith("#")]
-        if commands or args.stdin:
-            delimit = args.stdin or len(commands) > 1  # tag each reply when running a sequence
+        if commands or args.stdin or auto_batch:
+            delimit = args.stdin or auto_batch or len(commands) > 1  # tag each reply in a sequence
             for cmd in commands:
                 if delimit:
                     print(f"=== {cmd} ===")

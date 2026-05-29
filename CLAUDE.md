@@ -177,7 +177,8 @@ Host-side console client: `etc/fugu_console.py` drives this protocol from a PC o
 TCP/telnet (`--ip`), BLE/NUS (`--ble`), BLE via an ESPHome bluetooth_proxy (`--ble-proxy <host>`,
 plaintext API/no noise — by `--name` or `--address`), or MQTT (`--mqtt`)** — `-c "<cmd>"` runs one
 command (repeat `-c` for several over one connection), `--stdin` runs newline-separated commands
-from stdin over one connection (best for scripted/agent use — one connect, replies tagged `=== cmd ===`),
+from stdin over one connection (best for scripted/agent use — one connect, replies tagged `=== cmd ===`;
+auto-selected when no mode flag is given and stdin is piped, so a heredoc just works),
 `--test` is a PASS/FAIL/SKIP exerciser over a fixed command PLAN (`--mock` adds the PWM/charger group,
 `--include-network` the NVS/Wi-Fi group), and the default (a transport but no mode flag) is an
 interactive REPL. With no args at all it scans every transport for devices. Transport +

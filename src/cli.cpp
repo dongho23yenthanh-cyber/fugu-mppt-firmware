@@ -409,6 +409,27 @@ static void cmdPeek(cmd *c) {
 }
 
 #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+// crash <null|abort|stack> — deliberately panic to exercise the coredump path. Requires an explicit
+// subtype (the console is reachable over MQTT, so no bare trigger). Never returns.
+static volatile int s_crashNever = 1 << 30; // volatile so the compiler can't prove infinite recursion
+static void crashRecurse(volatile int x) {
+    volatile char eat[160];
+    eat[0] = (char) x;
+    if (x > s_crashNever) return;           // never true in practice; stack overflows long before
+    crashRecurse(x + (int) eat[0] + 1);
+}
+static void cmdCrash(cmd *c) {
+    auto t = Command(c).getArg(0).getValue();
+    if (t != "null" && t != "abort" && t != "stack")
+        CMD_FAIL_RETURN("crash: expected null|abort|stack (deliberate panic, writes a coredump)");
+    UART_LOG("crash: inducing '%s' panic NOW", t.c_str());
+    delay(80); // let the line flush over UART/telnet/MQTT/BLE before we die
+    if (t == "abort") abort();
+    if (t == "stack") crashRecurse(1);
+    volatile uint32_t *p = (volatile uint32_t *) (uintptr_t) (esp_timer_get_time() & 0); // null, opaque to -Wnull
+    *p = 0xDEAD;
+}
+
 // coredump [info|get|erase] — inspect/extract the panic core dump saved to the `coredump` flash
 // partition. `get` streams the raw partition image as base64 over the console (mirrors to MQTT/telnet),
 // so a backtrace can be pulled from a converter that has no serial. Decode host-side:
@@ -817,6 +838,7 @@ void setupCli() {
     cli.addBoundlessCmd("peek", cmdPeek); // peek <hex-addr> [len]; symbol resolution lives host-side
 #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
     cli.addBoundlessCmd("coredump", cmdCoredump); // coredump [info|get|erase]; get streams base64
+    cli.addBoundlessCmd("crash", cmdCrash); // crash <null|abort|stack>: deliberate panic, writes coredump
 #endif
     cli.addCommand("uptime", cmdUptime);
     cli.addBoundlessCmd("sensor", cmdSensor); // `sensor` full dump; `sensor avg` compact EWM line

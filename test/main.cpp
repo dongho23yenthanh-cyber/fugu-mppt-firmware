@@ -49,6 +49,17 @@ void test_LinearTransform();
 // the RUN_TEST below until that is re-enabled.
 // void test_ADCSampler();
 
+// adc/ina226_conv_time.h + adc/adc.h (AsyncADC contract via ADC_Dummy)
+void test_ina226_convtime_exact_step();
+void test_ina226_convtime_rounds_up_between_steps();
+void test_ina226_convtime_clamps_low();
+void test_ina226_convtime_clamps_high();
+void test_ina226_alert_timeout_floor_and_headroom();
+void test_ina226_sample_rate();
+void test_asyncadc_channel_select_and_sequence();
+void test_asyncadc_max_expected_voltage_roundtrip();
+void test_asyncadc_scheme_is_all();
+
 void test_float16();
 
 // charger.h
@@ -282,6 +293,18 @@ void setup() {
 
     RUN_TEST(test_LinearTransform);
     // RUN_TEST(test_ADCSampler); // body is #if 0'd in test_sampler.cpp
+
+    // adc/ina226_conv_time.h
+    RUN_TEST(test_ina226_convtime_exact_step);
+    RUN_TEST(test_ina226_convtime_rounds_up_between_steps);
+    RUN_TEST(test_ina226_convtime_clamps_low);
+    RUN_TEST(test_ina226_convtime_clamps_high);
+    RUN_TEST(test_ina226_alert_timeout_floor_and_headroom);
+    RUN_TEST(test_ina226_sample_rate);
+    // adc/adc.h — AsyncADC contract
+    RUN_TEST(test_asyncadc_channel_select_and_sequence);
+    RUN_TEST(test_asyncadc_max_expected_voltage_roundtrip);
+    RUN_TEST(test_asyncadc_scheme_is_all);
 #endif // FULL_TEST_SUITE
 
     // pwm — rig self-test first; if it fails, downstream MCPWM tests are suspect

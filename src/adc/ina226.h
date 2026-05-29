@@ -6,6 +6,7 @@
 #include "i2c.h"
 #include "conf.h"
 #include "etc/rt.h"
+#include "ina226_conv_time.h"
 
 class ADC_INA226;
 
@@ -22,6 +23,10 @@ class ADC_INA226 : public AsyncADC<float> {
     TaskNotification taskNotification{};
     uint8_t readChannel = 0;
     uint8_t alertPin;
+
+    INA226_CONV_TIME convSetting_ = CONV_TIME_1100;
+    uint16_t convUs_ = 1100;
+    uint32_t alertTimeoutMs_ = 4;
 
 public:
 
@@ -68,6 +73,14 @@ public:
         ina226.setResistorRange(resistor, range);
         //ESP_LOGI("ina226", "ina226.calVal=%d", ina226.calVal);
 
+        long convReqUs = boardConf.getLong("ina22x_conv_time_us", 1100);
+        auto ct = ina226ConvTimeAtLeast(convReqUs);
+        convSetting_ = ct.setting;
+        convUs_ = ct.us;
+        alertTimeoutMs_ = ina226AlertTimeoutMs(convUs_);
+        ESP_LOGI("ina22x", "conv time %u us (req %ld), ~%.0f SPS, alert timeout %lu ms",
+                 convUs_, convReqUs, ina226SampleRate(convUs_), alertTimeoutMs_);
+
         if (!resetPeripherals())
             return false;
 
@@ -79,7 +92,7 @@ public:
     }
 
     float getSamplingRate(uint8_t channel) override {
-        return 451.f;
+        return ina226SampleRate(convUs_);
     }
 
     bool resetPeripherals() override {
@@ -158,10 +171,7 @@ public:
         //ina226.setAverage(AVERAGE_64);
         //ina226.setConversionTime(CONV_TIME_1100, CONV_TIME_140);
         ina226.setAverage(AVERAGE_1);
-        ina226.setConversionTime(CONV_TIME_1100, CONV_TIME_1100);
-        // TODO adjust hasData() timeout !
-        //ina226.setConversionTime(CONV_TIME_588, CONV_TIME_588);
-
+        ina226.setConversionTime(convSetting_, convSetting_); // ina22x_conv_time_us (hasData timeout derived)
 
         ina226.setMeasureMode(CONTINUOUS);
         ina226.enableConvReadyAlert();
@@ -362,12 +372,25 @@ public:
     }
 
     bool hasData() override {
-        static uint32_t numTimeouts = 0;
-        if (!new_data && !taskNotification.wait(3)) {
+        static uint32_t numTimeouts = 0, numRecovered = 0;
+
+        if (!new_data && !taskNotification.wait(alertTimeoutMs_)) {
+            // Missed the ALERT edge. The GPIO ISR is deliberately non-IRAM, so it's masked while
+            // the flash cache is off (config/coulomb persist, OTA); a dropped edge would otherwise
+            // stall the RT sampler until the loop-latency watchdog shuts the converter down. Poll
+            // the chip instead: reading MASK_EN reports CVRF *and* clears+re-arms the alert, so a
+            // missed edge degrades to a late sample rather than a starvation event.
             ++numTimeouts;
-            if (numTimeouts % 20000 == 0) {
-                ESP_LOGE("ina22x", "%lu timeout!", numTimeouts);
+            uint16_t me = ina226.readRegister(INA226_WE::INA226_MASK_EN_REG, 2);
+            overflow = (me >> 2) & 0x0001;
+            if ((me >> 3) & 0x0001) {
+                if (++numRecovered % 20000 == 0)
+                    ESP_LOGW("ina22x", "%lu alert edges recovered by poll", numRecovered);
+                return true; // getSample() reads the data registers
             }
+            if (numTimeouts % 20000 == 0)
+                ESP_LOGE("ina22x", "%lu timeout!", numTimeouts);
+            return false;
         }
 
         // we might get a task notification from other ADCs
@@ -377,29 +400,21 @@ public:
         new_data = false;
 
         uint16_t value = ina226.readRegister(INA226_WE::INA226_MASK_EN_REG, 2);
-        overflow = (value >> 2) & 0x0001; // MATH overflow, current and power data can be invalid
+        overflow = (value >> 2) & 0x0001; // MATH overflow, only current/power data invalid (Vbus ok)
         bool convAlert = (value >> 3) & 0x0001;
         bool limitAlert = (value >> 4) & 0x0001;
 
-        //ina226.readAndClearFlags();
-        if (overflow) {
-            ESP_LOGW("ina22x", "Overflow!");
-        }
         if (limitAlert) {
             ESP_LOGW("ina22x", "Limit Alert!");
         }
 
-        //if (convAlert) {
-        // the MASK_EN_REG register clears when reading
-        //value |= 0x0400; // enableConvReadyAlert
-        //ina226.writeRegister(INA226_WE::INA226_MASK_EN_REG, value);
-        //}
-
         return convAlert;
     }
 
+    // overflow is a MATH (current/power) over-range: Vbus stays valid and the saturated current
+    // is passed through to the loop's own over-current protection, so it must not fault the ADC.
     bool isGood() override {
-        return !overflow;
+        return true;
     }
 
     float getSample() override {
@@ -422,11 +437,15 @@ public:
                 }
                 if (scope) scope->addSample12(this, readChannel, std::abs(raw) / 3 /*abs(i16)->12bit*/);
                 auto amp = ((float) raw / ina226.currentDivider_mA / 1000.f);
-                if (unlikely(overflow)) ESP_LOGW("ina22x", "Overflow current = %.2fA", amp);
+                if (unlikely(overflow)) {
+                    static uint32_t n = 0;
+                    if (n++ % 1000 == 0) ESP_LOGW("ina22x", "Overflow current = %.2fA", amp);
+                }
                 return amp;
             }
             default:
                 assert(false);
+                return NAN;
         }
     }
 

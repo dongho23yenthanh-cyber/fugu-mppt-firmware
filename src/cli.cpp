@@ -942,6 +942,9 @@ static void cmdCoredump(cmd *c) {
             b64[bl] = 0;
             UART_LOG("%s", b64);
             done += n;
+#ifdef WITH_BLE
+            bleConsoleAwaitTxDrain(2048, 4000); // pace BLE TX FIFO (console_ble.cpp absent when BLE off)
+#endif
         }
         UART_LOG("==COREDUMP-END==");
         return;

@@ -24,6 +24,10 @@ QueueHandle_t uart_queue;
 
 bool handleCommand(const String &inp);
 
+void (*consoleFlushHook)() = nullptr;
+
+void consoleFlush() { if (consoleFlushHook) consoleFlushHook(); }
+
 static constexpr auto uartPortNum = UART_NUM_0;
 
 

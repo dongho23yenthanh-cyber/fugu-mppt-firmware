@@ -5,6 +5,11 @@ Mirrors the trigger/poll structure of ota.py, but the host *pushes* the image ov
 instead of the device pulling it over HTTP. The device must run a WITH_BLE build with the `ble`
 service enabled.
 
+The link is either a direct bleak connection (default) or — with `--ble-proxy HOST` — an ESPHome
+`bluetooth_proxy` (active connections), which lets you OTA a device that's only in range of the
+proxy, not the host. The proxy path talks the ESPHome native API (plaintext, no noise PSK) and
+reuses the same NUS RX/TX + OTA FW characteristics over the proxied GATT connection.
+
 Protocol (device side in src/etc/ota_ble.cpp):
   host -> RX  : "otab begin <size> <sha256hex>\n"   arm + erase passive partition
   dev  -> TX  : "OTAB READY ..."                    erased, ready to receive
@@ -16,10 +21,14 @@ Protocol (device side in src/etc/ota_ble.cpp):
 
 Usage:
     python -m etc.ota_ble [-f|--force] [build/fugu-firmware.bin] [device-name-or-address]
+    python -m etc.ota_ble --ble-proxy 192.168.1.231 --name fry            # via ESPHome proxy (by name)
+    python -m etc.ota_ble --ble-proxy 192.168.1.231 --address AA:BB:..    # via ESPHome proxy (by MAC)
 
 Skips the push if the device already reports the image's version (probed via `uptime` over the
-BLE console); pass --force to push regardless. Requires: pip install bleak
+BLE console); pass --force to push regardless. Requires: pip install bleak (and aioesphomeapi for
+--ble-proxy).
 """
+import argparse
 import asyncio
 import hashlib
 import os
@@ -27,12 +36,11 @@ import re
 import struct
 import sys
 
-from bleak import BleakClient, BleakScanner
-
 NUS_SVC = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"  # write: console commands
 TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # notify: status/log mirror
 FW_UUID = "6e400004-b5a3-f393-e0a9-e50e24dcca9e"  # write-no-response: firmware bytes
+ESPHOME_API_PORT = 6053
 
 APP_DESC_MAGIC = 0xABCD5432
 RE_APP_LINE = re.compile(r'App:\s+(\S+)\s+v\S+\s+(\S+)\s+\(built (.+),\s+IDF\s+(\S+)\)')
@@ -70,41 +78,257 @@ def progress_bar(done, total, label, width=30):
         sys.stdout.flush()
 
 
-async def find_device(name_or_addr):
-    if name_or_addr and re.fullmatch(r"[0-9A-Fa-f:\-]{11,}", name_or_addr):
-        dev = await BleakScanner.find_device_by_address(name_or_addr, timeout=15)
-    elif name_or_addr:
-        dev = await BleakScanner.find_device_by_name(name_or_addr, timeout=15)
-    else:
-        # No name given: pick the first peripheral advertising the NUS service.
-        dev = await BleakScanner.find_device_by_filter(
-            lambda d, ad: NUS_SVC in (s.lower() for s in (ad.service_uuids or [])), timeout=15)
-    return dev
+class BleakLink:
+    """Direct bleak GATT link to the device's NUS + OTA FW characteristics."""
+
+    def __init__(self, name_or_addr):
+        self.target = name_or_addr
+        self.mtu = 23
+        self.disconnected = asyncio.Event()
+        self._cli = None
+        self._cb = None
+
+    def set_notify(self, cb):
+        self._cb = cb
+
+    @staticmethod
+    async def _find(name_or_addr):
+        from bleak import BleakScanner
+        if name_or_addr and re.fullmatch(r"[0-9A-Fa-f:\-]{11,}", name_or_addr):
+            return await BleakScanner.find_device_by_address(name_or_addr, timeout=15)
+        if name_or_addr:
+            return await BleakScanner.find_device_by_name(name_or_addr, timeout=15)
+        # No name given: restrict to fugu peripherals (firmware always advertises a `fugu-` name) so we
+        # don't grab some other NUS device. Refuse to guess when several are in range — one may be a live
+        # converter — and make the user disambiguate with a name/address.
+        devs = await BleakScanner.discover(timeout=15, return_adv=True)
+        fugu = [d for d, ad in devs.values()
+                if NUS_SVC in (s.lower() for s in (ad.service_uuids or []))
+                and (d.name or "").startswith("fugu-")]
+        if len(fugu) > 1:
+            names = ", ".join(f"{d.name} [{d.address}]" for d in fugu)
+            raise RuntimeError(f"multiple fugu devices in range — pass a name to pick one: {names}")
+        return fugu[0] if fugu else None
+
+    async def open(self):
+        from bleak import BleakClient
+        dev = await self._find(self.target)
+        if not dev:
+            raise RuntimeError("no fugu BLE device found (advertising? ble service enabled?)")
+        self.target = dev.address  # pin to this exact device so verify() re-finds it after reboot
+        print(f"connecting to {dev.name or dev.address} ...")
+        self._cli = BleakClient(dev, disconnected_callback=lambda _: self.disconnected.set())
+        await self._cli.connect()
+        await self._cli.start_notify(TX_UUID, lambda _, p: self._cb(bytes(p)))
+        self.mtu = self._cli.mtu_size
+
+    async def write_cmd(self, data):
+        await self._cli.write_gatt_char(RX_UUID, data, response=True)
+
+    async def write_fw(self, data):
+        await self._cli.write_gatt_char(FW_UUID, data, response=False)
+
+    async def release(self):
+        if self._cli and self._cli.is_connected:
+            try:
+                await self._cli.disconnect()
+            except Exception:
+                pass
+
+    async def verify(self):
+        for _ in range(20):
+            await asyncio.sleep(2)
+            if await self._find(self.target):
+                return True
+        return False
+
+    async def aclose(self):
+        await self.release()
 
 
-async def push(bin_path, name_or_addr, force=False):
+class ProxyLink:
+    """NUS + OTA FW link reached through an ESPHome `bluetooth_proxy` (active connections).
+
+    Talks the ESPHome native API (aioesphomeapi, plaintext) to a proxy at <host:port>, opens an
+    active GATT connection to the target peripheral by MAC (`address`) or by scanning the proxy's
+    advertisements for `name`/NUS, and exposes the same write_cmd/write_fw/notify surface as
+    BleakLink over the proxied connection.
+    """
+
+    def __init__(self, host, port, password, address, name, address_type=0):
+        self.host = host
+        self.port = port
+        self.password = password or ""
+        self.address = address
+        self.name = name
+        self.address_type = address_type
+        self.mtu = 23
+        self.disconnected = asyncio.Event()
+        self._api = None
+        self._addr = None
+        self._cb = None
+        self._stop_notify = None
+        self._closing = False
+        self._rx = self._tx = self._fw = None
+
+    def set_notify(self, cb):
+        self._cb = cb
+
+    @staticmethod
+    def _mac_to_int(mac):
+        return int(str(mac).replace(":", "").replace("-", ""), 16)
+
+    @staticmethod
+    def _parse_adv(data):
+        """Parse BLE AD structures → (local_name, [128-bit-uuid-str, …]).
+
+        Modern ESPHome proxies forward raw advertisement bytes; pull out the local name (AD types
+        0x08/0x09) and the 128-bit service-UUID lists (0x06/0x07) so name/NUS matching still works.
+        """
+        name, uuids = "", []
+        i, n = 0, len(data)
+        while i + 1 < n:
+            ln = data[i]
+            if ln == 0 or i + 1 + ln > n:
+                break
+            typ, val = data[i + 1], data[i + 2:i + 1 + ln]
+            if typ in (0x08, 0x09):
+                name = val.decode("utf-8", "replace")
+            elif typ in (0x06, 0x07):
+                for off in range(0, len(val) - 15, 16):
+                    h = val[off:off + 16][::-1].hex()
+                    uuids.append(f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}")
+            i += 1 + ln
+        return name, uuids
+
+    async def _scan(self, timeout=15.0):
+        """Scan the proxy's raw advertisements; return (address, address_type, name)."""
+        want = (self.name or "").lower()
+        fut = asyncio.get_running_loop().create_future()
+
+        def on_raw(resp):
+            if fut.done():
+                return
+            for a in resp.advertisements:
+                name, uuids = self._parse_adv(bytes(a.data))
+                ok = (want in name.lower()) if want else (NUS_SVC in uuids)
+                if ok:
+                    fut.set_result((a.address, a.address_type, name))
+                    return
+
+        unsub = self._api.subscribe_bluetooth_le_raw_advertisements(on_raw)
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        finally:
+            unsub()
+
+    async def open(self):
+        from aioesphomeapi import APIClient, BluetoothProxyFeature
+        self._api = APIClient(self.host, self.port, self.password or None)
+        await self._api.connect(login=True)
+        info = await self._api.device_info()
+        flags = info.bluetooth_proxy_feature_flags_compat(self._api.api_version)
+        if not flags & BluetoothProxyFeature.ACTIVE_CONNECTIONS:
+            raise RuntimeError(
+                f"{self.host} is a passive bluetooth_proxy — needs `bluetooth_proxy: active: true`")
+        if self.address:
+            self._addr, addr_type = self._mac_to_int(self.address), self.address_type
+        else:
+            self._addr, addr_type, dev_name = await self._scan()
+            print(f"  proxy {self.host} saw {dev_name}")
+        await self._bringup(flags, addr_type)
+
+    async def _bringup(self, flags, addr_type):
+        # bluetooth_device_connect resolves on the first connection response (success OR failure),
+        # so capture the outcome+MTU via the state callback and re-raise a failure ourselves.
+        state = asyncio.get_running_loop().create_future()
+
+        def on_state(connected, mtu, error):
+            self.mtu = mtu or self.mtu
+            if not state.done():
+                if connected:
+                    state.set_result(True)
+                else:
+                    state.set_exception(RuntimeError(f"BLE connect rejected (gatt error {error})"))
+            elif not connected and not self._closing:
+                self.disconnected.set()
+
+        await self._api.bluetooth_device_connect(
+            self._addr, on_state, timeout=20, feature_flags=flags,
+            has_cache=False, address_type=addr_type)
+        await state
+
+        svcs = await self._api.bluetooth_gatt_get_services(self._addr)
+        for s in svcs.services:
+            for c in s.characteristics:
+                u = c.uuid.lower()
+                if u == RX_UUID:
+                    self._rx = c.handle
+                elif u == TX_UUID:
+                    self._tx = c.handle
+                elif u == FW_UUID:
+                    self._fw = c.handle
+        if None in (self._rx, self._tx, self._fw):
+            raise RuntimeError("peripheral missing NUS RX/TX or OTA FW characteristic")
+        self._stop_notify, _ = await self._api.bluetooth_gatt_start_notify(
+            self._addr, self._tx, lambda h, d: self._cb(bytes(d)))
+
+    async def write_cmd(self, data):
+        await self._api.bluetooth_gatt_write(self._addr, self._rx, data, True)
+
+    async def write_fw(self, data):
+        await self._api.bluetooth_gatt_write(self._addr, self._fw, data, False)
+
+    async def release(self):
+        # Drop the peripheral GATT link (it's about to reboot) but keep the API up for verify().
+        self._closing = True
+        for coro in (self._stop_notify() if self._stop_notify else None,
+                     self._api.bluetooth_device_disconnect(self._addr)
+                     if (self._api and self._addr is not None) else None):
+            if coro is None:
+                continue
+            try:
+                await coro
+            except Exception:
+                pass
+        self._stop_notify = None
+
+    async def verify(self):
+        if not self._api:
+            return False
+        self._closing = True
+        try:
+            await self._scan(timeout=40)
+            return True
+        except Exception:
+            return False
+
+    async def aclose(self):
+        self._closing = True
+        if self._api:
+            try:
+                await self._api.disconnect()
+            except Exception:
+                pass
+            self._api = None
+
+
+async def push(bin_path, link, force=False):
     data = open(bin_path, "rb").read()
     sha = hashlib.sha256(data).hexdigest()
     local_ver = read_local_app_desc(bin_path)
     print(f"image {bin_path}: {len(data)} bytes, sha256={sha}, version={local_ver}")
-
-    dev = await find_device(name_or_addr)
-    if not dev:
-        print("device not found (advertising? ble service enabled?)")
-        return False
-    print(f"connecting to {dev.name or dev.address} ...")
 
     granted = 0          # cumulative byte offset the device permits us to send up to
     credit_ev = asyncio.Event()
     done_ev = asyncio.Event()    # OK or FAIL received
     full_ev = asyncio.Event()    # device confirmed it has flushed the whole image (PROG == size)
     ready_ev = asyncio.Event()
-    disc_ev = asyncio.Event()    # link dropped (device rebooting after a successful end)
     result = {"ok": False, "fail": False}
     rxbuf = ""
     rx_lines = []                # every console line received (for the version probe)
 
-    def on_tx(_, payload: bytearray):
+    def on_tx(payload):
         nonlocal granted, rxbuf
         rxbuf += payload.decode("utf-8", "replace")
         while "\n" in rxbuf:
@@ -127,16 +351,23 @@ async def push(bin_path, name_or_addr, force=False):
             elif "OTAB FAIL" in line:
                 print("  <", line.strip()); result["fail"] = True; done_ev.set()
 
-    async with BleakClient(dev, disconnected_callback=lambda _: disc_ev.set()) as cli:
-        await cli.start_notify(TX_UUID, on_tx)
-        chunk = max(cli.mtu_size - 3, 20)
-        print(f"connected, mtu={cli.mtu_size}, chunk={chunk}")
+    link.set_notify(on_tx)
+    try:
+        await link.open()
+    except Exception as e:
+        print(f"link setup failed: {e}")
+        await link.aclose()
+        return False
 
-        await cli.write_gatt_char(RX_UUID, b"ping\n", response=True)
+    chunk = max(link.mtu - 3, 20)
+    print(f"connected, mtu={link.mtu}, chunk={chunk}")
+
+    try:
+        await link.write_cmd(b"ping\n")
 
         # Skip the push if the device already runs this exact version (mirrors ota.py).
         rx_lines.clear()
-        await cli.write_gatt_char(RX_UUID, b"uptime\n", response=True)
+        await link.write_cmd(b"uptime\n")
         await asyncio.sleep(2)
         dev_ver = parse_device_version(rx_lines)
         print(f"  device version: {dev_ver or '?'}")
@@ -144,8 +375,7 @@ async def push(bin_path, name_or_addr, force=False):
             print(f"  ☑️ skip: already at {local_ver} (use --force to push anyway)")
             return True
 
-        await cli.write_gatt_char(
-            RX_UUID, f"otab begin {len(data)} {sha}\n".encode(), response=True)
+        await link.write_cmd(f"otab begin {len(data)} {sha}\n".encode())
         try:
             await asyncio.wait_for(ready_ev.wait(), timeout=30)  # waits out the partition erase
         except asyncio.TimeoutError:
@@ -161,7 +391,7 @@ async def push(bin_path, name_or_addr, force=False):
                     print("timeout waiting for credit"); return False
                 continue
             n = min(chunk, granted - sent, len(data) - sent)
-            await cli.write_gatt_char(FW_UUID, data[sent:sent + n], response=False)
+            await link.write_fw(data[sent:sent + n])
             sent += n
             progress_bar(sent, len(data), "upload")
 
@@ -172,40 +402,58 @@ async def push(bin_path, name_or_addr, force=False):
         except asyncio.TimeoutError:
             print("timeout waiting for full flush"); return False
 
-        await cli.write_gatt_char(RX_UUID, b"otab end\n", response=True)
+        await link.write_cmd(b"otab end\n")
         # On success the device reboots right after queuing OTAB OK, so the notify usually never drains:
         # accept either an explicit OK or the link dropping (reboot) as success; only OTAB FAIL fails.
         await asyncio.wait([asyncio.create_task(done_ev.wait()),
-                            asyncio.create_task(disc_ev.wait())],
+                            asyncio.create_task(link.disconnected.wait())],
                            timeout=35, return_when=asyncio.FIRST_COMPLETED)
         if result["fail"]:
             return False
-        if not (result["ok"] or disc_ev.is_set()):
+        if not (result["ok"] or link.disconnected.is_set()):
             print("timeout waiting for OK/disconnect"); return False
 
-    # Verify the device came back up (mirrors ota.py's reconnect probe).
-    print("waiting for device to come back online ...")
-    for _ in range(20):
-        await asyncio.sleep(2)
-        d = await find_device(name_or_addr)
-        if d:
+        # Verify the device came back up (mirrors ota.py's reconnect probe).
+        await link.release()
+        print("waiting for device to come back online ...")
+        if await link.verify():
             print("device is advertising again — OTA successful")
             return True
-    print("device did not reappear")
-    return False
+        print("device did not reappear")
+        return False
+    finally:
+        await link.aclose()
+
+
+def make_link(args):
+    if args.ble_proxy:
+        host, _, port = args.ble_proxy.partition(":")
+        port = int(port) if port else ESPHOME_API_PORT
+        target = args.address or f"name~{(args.name or 'fugu')!r}"
+        print(f"OTA via ESPHome bluetooth_proxy {host}:{port} → BLE NUS ({target})")
+        return ProxyLink(host, port, args.proxy_password, args.address, args.name or "fugu")
+    return BleakLink(args.address or args.name)
 
 
 def main():
-    argv = sys.argv[1:]
-    force = False
-    for f in ("-f", "--force"):
-        if f in argv:
-            argv.remove(f); force = True
-    bin_path = argv[0] if len(argv) > 0 else "build/fugu-firmware.bin"
-    name = argv[1] if len(argv) > 1 else os.environ.get("BLE_NAME")
-    if not os.path.exists(bin_path):
-        print(f"no such file: {bin_path}"); return 1
-    ok = asyncio.run(push(bin_path, name, force=force))
+    ap = argparse.ArgumentParser(description="Push firmware to a Fugu device over BLE")
+    ap.add_argument("bin", nargs="?", default="build/fugu-firmware.bin",
+                    help="firmware image (default build/fugu-firmware.bin)")
+    ap.add_argument("name", nargs="?", default=os.environ.get("BLE_NAME"),
+                    help="device name (or BLE address) filter (default $BLE_NAME)")
+    ap.add_argument("-f", "--force", action="store_true",
+                    help="push even if the device already reports this version")
+    ap.add_argument("--ble-proxy", metavar="HOST[:PORT]",
+                    help="reach the device through an ESPHome bluetooth_proxy at this host "
+                         "(plaintext API, no noise); scans by name unless --address is given")
+    ap.add_argument("--address", help="target BLE address/MAC (direct or via --ble-proxy)")
+    ap.add_argument("--proxy-password", default=os.environ.get("ESPHOME_API_PASSWORD", ""),
+                    help="ESPHome API password for --ble-proxy (default: $ESPHOME_API_PASSWORD)")
+    args = ap.parse_args()
+
+    if not os.path.exists(args.bin):
+        print(f"no such file: {args.bin}"); return 1
+    ok = asyncio.run(push(args.bin, make_link(args), force=args.force))
     print("OTA over BLE:", "✅ success (device rebooting)" if ok else "❌ failed")
     return 0 if ok else 1
 

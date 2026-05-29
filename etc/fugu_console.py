@@ -102,10 +102,19 @@ def autodetect_port() -> str:
 
 
 def scan_serial():
+    """Glob the serial ports, then probe each for its hostname (`hn`) concurrently.
+
+    Returns a list of (port, hostname|None); None means the port is busy or didn't answer.
+    """
+    from concurrent.futures import ThreadPoolExecutor
     ports = []
     for pat in _PORT_GLOBS:
         ports.extend(sorted(glob.glob(pat)))
-    return ports
+    if not ports:
+        return []
+    with ThreadPoolExecutor(max_workers=len(ports)) as ex:
+        names = ex.map(probe_serial_hostname, ports)
+    return list(zip(ports, names))
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -114,12 +123,25 @@ _HOSTNAME_RE = re.compile(r"Hostname:\s*(\S+)")  # reply of the bare `hostname` 
 
 
 def query_hostname(con: Console) -> str | None:
-    """Ask the device for its hostname (the bare `hostname` command), or None on failure."""
-    for ln in con.command("hostname", timeout=2.0):
+    """Ask the device for its hostname (the `hn` command), or None on failure."""
+    for ln in con.command("hn", timeout=2.0):
         m = _HOSTNAME_RE.search(ln)
         if m:
             return m.group(1)
     return None
+
+
+def probe_serial_hostname(port, baud=115200, timeout=2.0) -> str | None:
+    """Briefly open a serial port, run `hn`, and return the device hostname (or None if the
+    port is busy / not a Fugu / unresponsive within `timeout`)."""
+    try:
+        con = Console(SerialTransport(port, baud=baud, timeout=0.2))
+    except Exception:
+        return None
+    try:
+        return query_hostname(con)
+    finally:
+        con.close()
 
 
 def nat_endpoints():
@@ -315,8 +337,9 @@ def scan_ble_proxy(timeout=8.0):
 
 def _print_serial(ports):
     print("\nserial:")
-    for p in ports:
-        print(f"  {p:<32} →  -p {p}")
+    for p, name in ports:
+        label = name or "(no reply / busy)"
+        print(f"  {label:<24} {p:<32} →  -p {p}")
     if not ports:
         print("  (none)")
 

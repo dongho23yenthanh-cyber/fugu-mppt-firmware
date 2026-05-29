@@ -115,6 +115,10 @@ def _wifi_off(o):
     return ["--serial", serial_or_skip(o)] + (["--ssid", o.ssid] if o.ssid else [])
 
 
+def _wifi_reconnect(o):
+    return ["--serial", serial_or_skip(o)]
+
+
 def _stick(o):
     serial_or_skip(o)
     if not o.restart_url:
@@ -156,6 +160,7 @@ SPECS = [
     ("coredump",        "test_coredump.py",                    "destructive", "serial — PANICS the device", _coredump, 180),
     ("measure-coil",    "test_measure_coil.py",                "power",   "serial|telnet — real coil, needs Vin>Vout", _measure_coil, 600),
     ("wifi-off-timeout","test_wifi_off_timeout.py",            "wifi",    "serial — waits ~minutes", _wifi_off, 240),
+    ("wifi-reconnect",  "test_wifi_reconnect_storm.py",        "wifi",    "serial — off/on storm, no rig", _wifi_reconnect, 180),
     ("wifi-stick",      "test_wifi_outage.py",                 "wifi",    "serial + restart webhook", _stick, 360),
     ("wifi-roam",       "test_wifi_outage.py",                 "wifi",    "serial + webhook + 2 SSIDs", _roam, 360),
     ("wifi-svc-recovery","test_wifi_outage_service_recovery.py","wifi",   "DUT + router serial + SSID/PSK", _service_recovery, 600),

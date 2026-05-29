@@ -28,7 +28,8 @@ automated runs.
   - **CC mode** = fixed sink current (defines the operating point / charge current).
   - A **bidirectional source-sink** is required for reverse-current and battery-interrupt tests.
 - **Control / observation** — drive everything from `etc/fugu_console.py`
-  (`-p <serial>` / `--ip <host>` / `--ble`), one command per step with `-c "<cmd>"`, or REPL `-i`.
+  (`-p <serial>` / `--ip <host>` / `--ble`), one command per step with `-c "<cmd>"` (repeatable),
+  a batch of commands piped to `--stdin`, or the interactive REPL (the default with no mode flag).
   Telemetry goes to InfluxDB; the per-sample `scope` TCP stream is useful for transient capture.
 - **Config** — use a bench config (`config/lab/fbuck_lab_bench`, `config/lab/dry_int`) so limits and
   sensors match the rig. Note `reverse_current_paranoia` differs between configs and changes several

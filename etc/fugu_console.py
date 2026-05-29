@@ -610,6 +610,23 @@ def _handle_peek_struct(con: Console, args: str, elf_path: str | None) -> None:
     print(peek_symbols.format_struct_dump(elf_path, target, image, addr, max_depth=depth))
 
 
+def resolve_command_mode(explicit_cmds, use_stdin, want_test, want_coredump, stdin_is_tty):
+    """Decide how a non-discovery run dispatches commands. Pure (no I/O) so it's unit-testable.
+
+    Returns (read_stdin, active, delimit):
+      active     — run a command sequence and exit; False falls through to --coredump/--test/REPL.
+      read_stdin — append newline-separated stdin lines to the command list.
+      delimit    — tag each reply with `=== cmd ===` (when running more than a lone `-c`).
+    With no mode flag and stdin not a terminal (piped/heredoc), batch from stdin instead of the REPL.
+    """
+    auto_batch = (not explicit_cmds and not use_stdin and not want_test
+                  and not want_coredump and not stdin_is_tty)
+    read_stdin = use_stdin or auto_batch
+    active = bool(explicit_cmds) or read_stdin
+    delimit = use_stdin or auto_batch or len(explicit_cmds) > 1
+    return read_stdin, active, delimit
+
+
 def dispatch_command(con: Console, cmd: str, elf_path: str | None) -> None:
     """Send `cmd` to the device, intercepting host-side verbs first.
 
@@ -895,15 +912,12 @@ def main():
     elf_path = peek_symbols.find_elf(args.elf)
     try:
         commands = list(args.command or [])
-        # No mode flag + stdin isn't a terminal (piped/heredoc, e.g. agent use) → batch from stdin
-        # rather than the REPL, which would just hit EOF.
-        auto_batch = (not commands and not args.stdin and not args.test and not args.coredump
-                      and not sys.stdin.isatty())
-        if args.stdin or auto_batch:
+        read_stdin, active, delimit = resolve_command_mode(
+            commands, args.stdin, args.test, bool(args.coredump), sys.stdin.isatty())
+        if read_stdin:
             commands += [ln for ln in (raw.strip() for raw in sys.stdin)
                          if ln and not ln.startswith("#")]
-        if commands or args.stdin or auto_batch:
-            delimit = args.stdin or auto_batch or len(commands) > 1  # tag each reply in a sequence
+        if active:
             for cmd in commands:
                 if delimit:
                     print(f"=== {cmd} ===")

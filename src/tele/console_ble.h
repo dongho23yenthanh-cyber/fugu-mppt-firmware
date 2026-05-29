@@ -19,3 +19,9 @@ void bleConsoleEnd();
 void bleConsoleLoop(unsigned long nowMs); // drives the RX queue through loopConsole(); call on core 0
 
 bool bleConsoleConnected();
+
+// Pump the TX FIFO until its backlog drops below `lowWater` bytes (or `timeoutMs` elapses / the client
+// disconnects), yielding so NimBLE can transmit and free mbufs. A long command that emits more than
+// TX_BUF_CAP bytes in one go (e.g. `coredump get`) must call this between writes, else the FIFO
+// overflows and the tail is silently dropped. No-op without a connected BLE client (or -DWITH_BLE).
+void bleConsoleAwaitTxDrain(unsigned lowWater, unsigned timeoutMs);

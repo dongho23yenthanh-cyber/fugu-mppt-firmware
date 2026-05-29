@@ -13,6 +13,7 @@
 #include <os/os_mbuf.h> // os_msys_num_free(): peek NimBLE's free mbuf pool before notifying
 
 #include "console.h"   // loopConsole
+#include "util.h"      // wallClockMs
 #include "logging.h"   // addLogCallback / removeLogCallback, ESP_LOG*
 #include "etc/readerwriterqueue.h"
 #include "etc/ota_ble.h" // OTA-over-BLE firmware push (FW characteristic data sink)
@@ -269,12 +270,29 @@ void bleConsoleEnd() {
 
 void bleConsoleLoop(unsigned long nowMs) {
     if (!bleStarted) return;
+    // Let a blocking command (e.g. `ota <url>`) push pending output while it runs — otherwise its
+    // progress/result sits in txBuf until it returns, and on a successful OTA the reboot eats it.
+    consoleFlushHook = []() { bleTxDrain(wallClockMs()); };
     loopConsole(bleRead, bleWrite, nowMs);
+    consoleFlushHook = nullptr;
     bleTxDrain(nowMs); // flush queued console/log output, paced by NimBLE buffer availability
     otaBleTick(nowMs); // drain any staged OTA firmware bytes to flash (no-op when not updating)
 }
 
 bool bleConsoleConnected() { return deviceConnected; }
+
+void bleConsoleAwaitTxDrain(unsigned lowWater, unsigned timeoutMs) {
+    if (!bleStarted || !deviceConnected) return;
+    unsigned long start = wallClockMs();
+    for (;;) {
+        size_t backlog;
+        { std::lock_guard<std::recursive_mutex> lk(txMutex); backlog = txBuf.size() - txHead; }
+        if (backlog <= lowWater || !deviceConnected) return;
+        if (wallClockMs() - start > timeoutMs) return; // client stalled; proceed rather than hang
+        bleTxDrain(wallClockMs());
+        vTaskDelay(1); // let the NimBLE host transmit and refill the mbuf pool
+    }
+}
 
 #else // !WITH_BLE — no-op stubs so callers (and the service wrapper) link without the BLE stack
 
@@ -285,5 +303,7 @@ void bleConsoleEnd() {}
 void bleConsoleLoop(unsigned long) {}
 
 bool bleConsoleConnected() { return false; }
+
+void bleConsoleAwaitTxDrain(unsigned, unsigned) {}
 
 #endif

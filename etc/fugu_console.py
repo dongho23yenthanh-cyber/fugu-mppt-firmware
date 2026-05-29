@@ -721,11 +721,17 @@ class _PromptSafePrinter:
     calls (during `con.command()` — no prompt on screen). The `active` flag gates the redraw so
     we only do the carriage-return / erase / reprint dance when there's actually a prompt to
     preserve.
+
+    `last_command` defeats a libedit quirk (macOS Python's readline): `get_line_buffer()` keeps
+    returning the previously *accepted* line while idle at the next prompt, so every status line
+    would redraw `prompt + "<last cmd>"` until the user starts typing. We blank the buffer while
+    it still equals that command — the user hasn't typed anything new yet.
     """
 
     def __init__(self):
         self.prompt = ""
         self.active = False
+        self.last_command = ""
         self._istty = sys.stdout.isatty()  # redraw only makes sense on a real terminal
         self._lock = threading.Lock()
 
@@ -737,7 +743,10 @@ class _PromptSafePrinter:
             if self.active and self._istty:
                 try:
                     import readline
-                    sys.stdout.write("\r\x1b[K" + line + "\n" + self.prompt + readline.get_line_buffer())
+                    buf = readline.get_line_buffer()
+                    if buf == self.last_command:  # stale leftover, not fresh typing
+                        buf = ""
+                    sys.stdout.write("\r\x1b[K" + line + "\n" + self.prompt + buf)
                     sys.stdout.flush()
                     return
                 except ImportError:
@@ -760,12 +769,14 @@ def interactive(con: Console, elf_path: str | None = None):
         while True:
             redisp.active = True
             try:
-                cmd = input(prompt).strip()
+                raw = input(prompt)
             except (EOFError, KeyboardInterrupt):
                 print()
                 return
             finally:
                 redisp.active = False
+            redisp.last_command = raw  # libedit keeps reporting this until the next line is typed
+            cmd = raw.strip()
             if not cmd:
                 continue
             head = cmd.split(None, 1)

@@ -767,6 +767,9 @@ void loopLF(const unsigned long &nowUs) {
     lfWatchdog(nowUs, dt, sps, nSamples);
     lfControl();
     lfMarkOtaValid();
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
+    coredumpStampIfNew();
+#endif
 
     // converter.init() logs L0/rect_offset during setup(), before the MQTT/telnet log sinks exist,
     // so it only reaches the boot serial console. Re-emit it once the MQTT sink is up so the config

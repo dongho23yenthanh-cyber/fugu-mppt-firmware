@@ -146,6 +146,19 @@ def main():
     print("  post-crash:", info)
     check(any("present" in l and "check=ok" in l for l in info), "dump present with check=ok")
 
+    # crash-time stamp: the field is always printed; it is only filled once the clock is SNTP-synced
+    # (so a no-network bench unit legitimately shows crashed=0). If filled, it must be recent.
+    mts = re.search(r"crashed=(\d+)", " ".join(info))
+    check(mts is not None, "`coredump info` reports a crashed= field")
+    if mts:
+        ts = int(mts.group(1))
+        if ts == 0:
+            print("  crashed=0 (clock not synced — expected without network)")
+        else:
+            age = time.time() - ts
+            print(f"  crashed={ts} ({age:.0f}s ago)")
+            check(0 <= age < 1800, f"crash timestamp is recent ({age:.0f}s ago)")
+
     ln, ok = command(s, "coredump get", wait=40.0)
     size = None
     b64, cap = [], False

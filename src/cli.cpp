@@ -13,6 +13,8 @@
 #include <esp_core_dump.h>
 #include <esp_partition.h>
 #include <esp_system.h>
+#include <nvs.h>
+#include <ctime>
 #include <esp_ota_ops.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
@@ -903,6 +905,55 @@ static int b64enc(const uint8_t *in, size_t n, char *out) {
     }
     return o;
 }
+// Trailing 4-byte checksum of the stored dump — unique per crash, used to detect a fresh dump.
+static uint32_t coredumpSignature(size_t addr, size_t size) {
+    const esp_partition_t *p = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, nullptr);
+    if (!p || size < 4) return 0;
+    size_t off = (addr >= p->address) ? addr - p->address : 0;
+    uint32_t sig = 0;
+    esp_partition_read(p, off + size - 4, &sig, sizeof(sig));
+    return sig;
+}
+
+// ESP coredumps carry no wall-clock. The panic reboots the device, so the first time-synced boot
+// afterwards approximates the crash time. Keyed by the dump's checksum so a *new* crash re-stamps
+// but reboots that keep the same dump don't. Cheap and idempotent — call from loopLF every tick.
+void coredumpStampIfNew() {
+    static bool done = false;
+    if (done) return;
+    time_t now = time(nullptr);
+    if (now < 1735689600) return; // before 2025 → clock not SNTP-synced yet, retry next tick
+
+    size_t addr = 0, size = 0;
+    uint32_t sig = (esp_core_dump_image_get(&addr, &size) == ESP_OK)
+                       ? coredumpSignature(addr, size) : 0;
+    nvs_handle_t h;
+    if (nvs_open("coredump", NVS_READWRITE, &h) != ESP_OK) { done = true; return; }
+    uint32_t storedSig = 0;
+    nvs_get_u32(h, "sig", &storedSig);
+    if (sig == 0) {
+        if (storedSig) { nvs_erase_key(h, "sig"); nvs_erase_key(h, "ts"); nvs_commit(h); }
+    } else if (sig != storedSig) {
+        nvs_set_u32(h, "sig", sig);
+        nvs_set_u32(h, "ts", (uint32_t) now);
+        nvs_commit(h);
+        ESP_LOGW("main", "coredump: new dump, stamped crash ~%lu", (unsigned long) now);
+    }
+    nvs_close(h);
+    done = true;
+}
+
+static uint32_t coredumpStoredTs() {
+    nvs_handle_t h;
+    uint32_t ts = 0;
+    if (nvs_open("coredump", NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u32(h, "ts", &ts);
+        nvs_close(h);
+    }
+    return ts;
+}
+
 static void cmdCoredump(cmd *c) {
     Command cc(c);
     std::string sub = cc.countArgs() >= 1 ? cc.getArg(0).getValue().c_str() : "info";
@@ -910,6 +961,10 @@ static void cmdCoredump(cmd *c) {
     if (sub == "erase") {
         esp_err_t e = esp_core_dump_image_erase();
         if (e != ESP_OK) CMD_FAIL_RETURN("coredump: erase failed (%s)", esp_err_to_name(e));
+        nvs_handle_t h;
+        if (nvs_open("coredump", NVS_READWRITE, &h) == ESP_OK) {
+            nvs_erase_key(h, "sig"); nvs_erase_key(h, "ts"); nvs_commit(h); nvs_close(h);
+        }
         UART_LOG("coredump: erased");
         return;
     }
@@ -923,8 +978,10 @@ static void cmdCoredump(cmd *c) {
 
     if (sub == "info") {
         bool ok = (esp_core_dump_image_check() == ESP_OK);
-        UART_LOG("coredump: present addr=0x%08x size=%u check=%s",
-                 (unsigned) addr, (unsigned) size, ok ? "ok" : "BAD");
+        // crashed = epoch of first synced boot after the dump appeared (0 = unknown/not yet stamped)
+        UART_LOG("coredump: present addr=0x%08x size=%u check=%s crashed=%lu",
+                 (unsigned) addr, (unsigned) size, ok ? "ok" : "BAD",
+                 (unsigned long) coredumpStoredTs());
         UART_LOG("coredump: 'get' to stream base64, 'erase' to clear");
         return;
     }

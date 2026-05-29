@@ -33,6 +33,17 @@ TX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"  # notify: status/log mirror
 FW_UUID = "6e400004-b5a3-f393-e0a9-e50e24dcca9e"  # write-no-response: firmware bytes
 
 
+def progress_bar(done, total, label, width=30):
+    frac = done / total if total else 0
+    filled = int(frac * width)
+    bar = "#" * filled + "-" * (width - filled)
+    sys.stdout.write(f"\r  {label} [{bar}] {frac * 100:5.1f}% {done}/{total}")
+    sys.stdout.flush()
+    if done >= total:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+
 async def find_device(name_or_addr):
     if name_or_addr and re.fullmatch(r"[0-9A-Fa-f:\-]{11,}", name_or_addr):
         dev = await BleakScanner.find_device_by_address(name_or_addr, timeout=15)
@@ -75,7 +86,11 @@ async def push(bin_path, name_or_addr):
             elif "OTAB CRED" in line:
                 granted = int(line.split()[-1]); credit_ev.set()
             elif "OTAB PROG" in line:
-                print("  <", line.strip())
+                try:
+                    w = int(line.split()[-1].split("/")[0])
+                    progress_bar(w, len(data), "flush ")
+                except ValueError:
+                    print("  <", line.strip())
                 if line.split()[-1] == f"{len(data)}/{len(data)}":
                     full_ev.set()
             elif "OTAB OK" in line:
@@ -108,6 +123,7 @@ async def push(bin_path, name_or_addr):
             n = min(chunk, granted - sent, len(data) - sent)
             await cli.write_gatt_char(FW_UUID, data[sent:sent + n], response=False)
             sent += n
+            progress_bar(sent, len(data), "upload")
 
         # Wait until the device has flushed the whole image to flash before finalizing — otherwise the
         # last write-no-response packets may still be in flight when `end` runs (device sees it short).

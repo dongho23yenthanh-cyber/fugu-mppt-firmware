@@ -439,11 +439,22 @@ async def push(bin_path, link, force=False, assume_yes=False):
         sent = 0
         while sent < len(data):
             if sent >= granted:
-                credit_ev.clear()
-                try:
-                    await asyncio.wait_for(credit_ev.wait(), timeout=20)
-                except asyncio.TimeoutError:
-                    print("timeout waiting for credit"); return False
+                # Wait for more credit. A weak link can drop a CRED notify, but the device keeps
+                # flushing and re-grants on the next step — so retry a few short windows (bailing fast
+                # if the link actually dropped) instead of hard-failing on the first 20 s gap.
+                stalled = 0
+                while sent >= granted:
+                    if link.disconnected.is_set():
+                        print(f"\nlink dropped at {sent}/{len(data)}"); return False
+                    credit_ev.clear()
+                    try:
+                        await asyncio.wait_for(credit_ev.wait(), timeout=20)
+                    except asyncio.TimeoutError:
+                        stalled += 1
+                        if stalled >= 3:
+                            print(f"\ntimeout waiting for credit (stuck at {sent}/{len(data)})")
+                            return False
+                        print(f"\n  …credit stalled at {sent}/{len(data)}, retrying ({stalled}/3)")
                 continue
             n = min(chunk, granted - sent, len(data) - sent)
             await link.write_fw(data[sent:sent + n])

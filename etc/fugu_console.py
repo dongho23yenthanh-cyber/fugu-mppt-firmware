@@ -438,6 +438,15 @@ PLAN = [
     ("ip", "IP Address", GROUP_ALWAYS, False),
     ("scan-i2c", None, GROUP_ALWAYS, True),  # may report no devices on a mock
     ("svc list", "NAME", GROUP_ALWAYS, False),
+    # --- MCU/ESP32 debug surface (unconditional commands) -----------------------------------
+    ("tasks", "STKFREE", GROUP_ALWAYS, False),       # FreeRTOS table; header has STKFREE_B
+    ("bootinfo", "reset reason", GROUP_ALWAYS, False),
+    ("heap", "INTERNAL", GROUP_ALWAYS, False),
+    ("heap check", "integrity", GROUP_ALWAYS, False),
+    ("log wifi info", None, GROUP_ALWAYS, False),    # set a tag's log level (reversible, harmless)
+    ("ls", "entries", GROUP_ALWAYS, False),          # lists /littlefs -> "ls: N entries in ..."
+    ("ls conf", "entries", GROUP_ALWAYS, False),
+    ("cat conf/board.conf", None, GROUP_ALWAYS, True),  # file presence depends on the board config
     # --- network debug tools (CONFIG_FUGU_WITH_NETTOOLS; default off -> unknown cmd -> SKIP) -----
     # tolerate=True covers both "feature not built" and "no connectivity"; the expect-substring is
     # still enforced when the command runs and returns OK. nslookup of a literal IP needs no DNS.

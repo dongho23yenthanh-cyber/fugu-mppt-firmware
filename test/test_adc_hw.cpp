@@ -115,8 +115,10 @@ void test_ina226_alert_interrupt() {
     bool ok = false;
     uint16_t mfr = inaRead(INA_REG_MFR_ID, ok);
     ESP_LOGI(TAG, "[ina226] MFR_ID=0x%04X ok=%d", mfr, ok);
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(0x5449, mfr, "MFR_ID mismatch — device at 0x40 is not a TI INA226");
     uint16_t die = inaRead(INA_REG_DIE_ID, ok);
     ESP_LOGI(TAG, "[ina226] DIE_ID=0x%04X ok=%d", die, ok);
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(0x2260, die, "DIE_ID mismatch — not an INA226");
 
     ESP_LOGI(TAG, "[ina226] write CONFIG=continuous");
     TEST_ASSERT_TRUE_MESSAGE(inaWrite(INA_REG_CONFIG, INA_CONFIG_CONT), "I2C write of CONFIG failed");

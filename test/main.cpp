@@ -43,6 +43,12 @@ extern "C" void *esp_netif_create_default_wifi_ap(void) { return nullptr; }
 void test_internal_adc_continuous_samples();
 void test_ina226_alert_interrupt();
 
+// test_adc_min.cpp — GPIO-ISR core-affinity (the invariant pinGpioIsrToRtCore() relies on).
+// On-target, self-triggers TEST_ISR_GPIO; bench-only (default pin 21 is fry's HS gate).
+void test_attachinterrupt_after_preinstall_uses_rt_core();
+void test_gpio_isr_lands_on_install_core_0();
+void test_gpio_isr_lands_on_install_core_rt();
+
 void test_meter();
 
 void test_meter_storage();
@@ -330,6 +336,12 @@ void setup() {
     RUN_TEST(test_asyncadc_channel_select_and_sequence);
     RUN_TEST(test_asyncadc_max_expected_voltage_roundtrip);
     RUN_TEST(test_asyncadc_scheme_is_all);
+
+    // test_adc_min.cpp — GPIO-ISR core affinity. attachInterrupt test FIRST (it must be the run's
+    // first attachInterrupt() — arduino-esp32 caches its lazy-install state).
+    RUN_TEST(test_attachinterrupt_after_preinstall_uses_rt_core);
+    RUN_TEST(test_gpio_isr_lands_on_install_core_0);
+    RUN_TEST(test_gpio_isr_lands_on_install_core_rt);
 #endif // FULL_TEST_SUITE
 
     // pwm — rig self-test first; if it fails, downstream MCPWM tests are suspect

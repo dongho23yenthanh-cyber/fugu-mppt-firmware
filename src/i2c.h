@@ -2,7 +2,7 @@
 
 #include <Wire.h>
 
-bool i2c_test_address(uint8_t addr) {
+inline bool i2c_test_address(uint8_t addr) {
     Wire.beginTransmission(addr);
     return Wire.endTransmission() == 0;
 }

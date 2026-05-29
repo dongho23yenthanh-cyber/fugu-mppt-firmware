@@ -44,7 +44,7 @@ private:
     ChAvgBuf avgBuf[adc_channel_t::ADC_CHANNEL_9 + 1]{};
 
 public:
-    [[nodiscard]] SampleReadScheme scheme() const override { return SampleReadScheme::any; };
+    [[nodiscard]] AdcReadMode readMode() const override { return AdcReadMode::StreamedCallback; };
 
     explicit ADC_ESP32_Cont(const ConfFile &sensConf) {
         avgNum = sensConf.getLong("esp32adc1_avg");

@@ -2,10 +2,16 @@
 
 #include "store.h" // ConfFile
 
-enum class SampleReadScheme : uint8_t {
-    cycle = 0, // cycle around channels
-    any, // using callback
-    all, // ina226: on alert, read *all* channels
+// How the sampler must pull samples from an ADC backend.
+enum class AdcReadMode : uint8_t {
+    // Muxed ADC: one channel converted per poll, sampler advances the mux round-robin.
+    // Backend implements startReading()/hasData()/getSample().
+    MuxedRoundRobin = 0,
+    // Continuous DMA: backend pushes samples for any channel via read(cb).
+    StreamedCallback,
+    // Latched regs (e.g. INA226): one conversion-ready event yields every channel.
+    // Sampler reads all channels each poll via startReading()/getSample().
+    SnapshotAllChannels,
 };
 
 template<class T>
@@ -15,7 +21,7 @@ public:
      * Tells the user how to read samples from this ADC
      * @return
      */
-    [[nodiscard]] virtual SampleReadScheme scheme() const = 0;
+    [[nodiscard]] virtual AdcReadMode readMode() const = 0;
 
     /**
      * Initializes ADC hardware
@@ -43,7 +49,7 @@ public:
     };
 
     /**
-     * select the channel to read (scheme cycle and all)
+     * select the channel to read (MuxedRoundRobin and SnapshotAllChannels)
      * @param channel
      */
     virtual void startReading(uint8_t channel) = 0;
@@ -62,13 +68,13 @@ public:
 
 
     /**
-     * read a single sample value (scheme cycle and all)
+     * read a single sample value (MuxedRoundRobin and SnapshotAllChannels)
      * @return
      */
     virtual T getSample() = 0;
 
     /**
-     * read any amount of samples from any channel (scheme any)
+     * read any amount of samples from any channel (StreamedCallback)
      * @param newSampleCallback
      * @return
      */

@@ -22,8 +22,8 @@ private:
     adc_atten_t attenuation[adc1_channel_t::ADC1_CHANNEL_MAX]{};
 
 public:
-    [[nodiscard]] SampleReadScheme scheme() const override {
-        return SampleReadScheme::cycle;
+    [[nodiscard]] AdcReadMode readMode() const override {
+        return AdcReadMode::MuxedRoundRobin;
     }
 
     bool init(const ConfFile &boardConf) override {

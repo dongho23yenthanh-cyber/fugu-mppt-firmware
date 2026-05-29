@@ -24,6 +24,7 @@ class ADC_ADS : public AsyncADC<float> {
     std::array<adsGain_t, 4> gainsByChannel{GAIN_ONE, GAIN_ONE, GAIN_ONE, GAIN_ONE};
 
     uint8_t readingChannel = 255;
+    uint8_t usedChannelsMask = 0; // bit set per cycled channel, for sampling-rate division
     volatile bool newData = false;
     bool _isADS1115_16bit = false;
 
@@ -39,8 +40,8 @@ public:
         }
     }
 
-    [[nodiscard]] SampleReadScheme scheme() const override {
-        return SampleReadScheme::cycle; // cycle
+    [[nodiscard]] AdcReadMode readMode() const override {
+        return AdcReadMode::MuxedRoundRobin;
     }
 
     /*
@@ -82,7 +83,8 @@ public:
     }
 
     float getSamplingRate(uint8_t ch) override {
-        int usedChannels = 3; // TODO
+        int usedChannels = __builtin_popcount(usedChannelsMask);
+        if (usedChannels < 1) usedChannels = 1;
         if (_isADS1115_16bit) {
             assert(ads.getDataRate()==RATE_ADS1115_128SPS);
             return 128.f / (float) usedChannels;
@@ -106,6 +108,7 @@ public:
         else if (voltage > 0.512f) g = GAIN_FOUR;
         else if (voltage > 0.256f) g = GAIN_EIGHT;
         else g = GAIN_SIXTEEN;
+        usedChannelsMask |= (uint8_t) (1u << ch);
         setChannelGain(ch, g);
     }
 

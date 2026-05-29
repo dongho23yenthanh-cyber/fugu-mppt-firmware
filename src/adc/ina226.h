@@ -29,9 +29,9 @@ public:
     static constexpr auto INA22x_MANUFACTURER_ID_CMD = 0x3E;
     static constexpr auto INA22x_DEVICE_ID_CMD = 0x3F;
 
-    [[nodiscard]] SampleReadScheme scheme() const override {
+    [[nodiscard]] AdcReadMode readMode() const override {
         //
-        return SampleReadScheme::all;
+        return AdcReadMode::SnapshotAllChannels;
     }
 
 

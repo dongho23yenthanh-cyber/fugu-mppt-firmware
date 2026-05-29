@@ -198,7 +198,7 @@ private:
     struct AdcState {
         AsyncADC<float> *adc{nullptr};
         std::array<Sensor *, 8> sensorByCh{};
-        std::vector<Sensor *> cycleSensors{}; // only used if scheme==cycle
+        std::vector<Sensor *> cycleSensors{}; // only used if readMode==MuxedRoundRobin
         uint8_t cycleSensorsPos = 0;
     };
 
@@ -239,7 +239,7 @@ public:
 
         auto &sensorByCh(getAdcState(adc).sensorByCh);
 
-        if (adc->scheme() == SampleReadScheme::any)
+        if (adc->readMode() == AdcReadMode::StreamedCallback)
             assert_throw(sensorByCh[params.adcCh] == nullptr, "duplicate sensor adc channel");
 
         auto sensorPtr = new PhysicalSensor{adc, params, ewmSpan};
@@ -252,7 +252,7 @@ public:
         realSensors.push_back(sensorPtr);
         if (!sensorByCh[sensorPtr->params.adcCh])
             sensorByCh[sensorPtr->params.adcCh] = sensorPtr;
-        if (adc->scheme() == SampleReadScheme::cycle)
+        if (adc->readMode() == AdcReadMode::MuxedRoundRobin)
             getAdcState(adc).cycleSensors.push_back(sensorPtr);
 
         return sensorPtr;
@@ -280,9 +280,9 @@ public:
 
         for (auto &s: adcStates) {
             s.adc->start();
-            if (s.adc->scheme() != SampleReadScheme::any)
+            if (s.adc->readMode() != AdcReadMode::StreamedCallback)
                 _readNext(s);
-            else if (s.adc->scheme() == SampleReadScheme::cycle) {
+            else if (s.adc->readMode() == AdcReadMode::MuxedRoundRobin) {
                 assert_throw(!s.cycleSensors.empty(), "no sensors to cycle");
                 s.cycleSensorsPos = 0;
                 s.adc->startReading(s.cycleSensors[0]->params.adcCh);
@@ -418,17 +418,17 @@ public:
         if (!hd)
             return UpdateRet::NoNewData;
 
-        auto scheme = adc->scheme();
+        auto readMode = adc->readMode();
         UpdateRet calibRes;
 
-        if (scheme == SampleReadScheme::any) {
+        if (readMode == AdcReadMode::StreamedCallback) {
             calibRes = UpdateRet::NoNewData;
             adc->read([&](uint8_t ch, float v) {
                 auto cr = _addSensorSample(state.sensorByCh[ch], v);
                 if (cr > calibRes) calibRes = cr;
             });
             rtcount("adc.update.read");
-        } else if (scheme == SampleReadScheme::all) {
+        } else if (readMode == AdcReadMode::SnapshotAllChannels) {
             calibRes = UpdateRet::NoNewData;
             for (int i = 0; i < state.sensorByCh.size(); ++i) {
                 auto sensor = state.sensorByCh[i];
@@ -444,7 +444,7 @@ public:
             }
         } else {
             //using namespace std::string_literals;
-            //assert_throw(false, "cycle scheme"s + "not implemented");
+            //assert_throw(false, "cycle readMode"s + "not implemented");
 
             const auto sensor(state.cycleSensors[state.cycleSensorsPos]);
 

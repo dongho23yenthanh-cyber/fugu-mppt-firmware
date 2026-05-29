@@ -14,7 +14,7 @@
 // VirtualSensor (computed from the other side + power_conversion_eff).
 //
 // On every periodic timer tick we step the plant by (1/adc_freq) seconds and
-// notify the consumer task. Channels are read with scheme=all, mirroring
+// notify the consumer task. Channels are read with readMode=SnapshotAllChannels, mirroring
 // ADC_Fake. Optional per-channel zero-mean Gaussian noise is added in
 // getSample (Box-Muller on xorshift32).
 class ADC_VConv;
@@ -23,8 +23,8 @@ static bool adc_vconv_periodic_timer_callback(void *arg);
 
 class ADC_VConv : public AsyncADC<float> {
 public:
-    [[nodiscard]] SampleReadScheme scheme() const override {
-        return SampleReadScheme::all;
+    [[nodiscard]] AdcReadMode readMode() const override {
+        return AdcReadMode::SnapshotAllChannels;
     }
 
     bool init(const ConfFile &boardConf) override {

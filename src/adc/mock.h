@@ -20,8 +20,8 @@ class ADC_Fake : public AsyncADC<float> {
 public:
     uint8_t readingChannel = 0;
 
-    [[nodiscard]] SampleReadScheme scheme() const override {
-        return SampleReadScheme::all;
+    [[nodiscard]] AdcReadMode readMode() const override {
+        return AdcReadMode::SnapshotAllChannels;
     }
 
 private:

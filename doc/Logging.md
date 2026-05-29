@@ -14,6 +14,10 @@ console). From `vprintf_`:
   (`flush_async_uart_log`, called from the network loop). The RT loop must never block in
   `uart_tx_char` (~5 ms for a 60-byte line at 115200 baud), so it never formats/writes the console
   itself.
+- **The ESP-IDF `wifi` task** (detected via `pcTaskGetName`, guarded by `xPortCanYield()`): routed
+  straight to `old_vprintf` (UART only), bypassing `vprintf_mux`. Its 3072 B stack can't absorb
+  `vprintf_mux`'s 300 B `loc_buf` + mirror-sink frames during a connect/reconnect logging burst —
+  that overflowed it and reboot-looped the device. See `doc/dev-notes/Real-Time Latency.md`.
 - **Everything else** (core 0 tasks; and core 1 before `deferLogs`): synchronous `vprintf_mux`.
 
 `UART_LOG()` / `printf_mux()` follow the same core-1-defer / else-synchronous split.

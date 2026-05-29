@@ -382,12 +382,18 @@ stack buffer (plus `vsnprintf` + callback frames) overflows the wifi task's **30
 service starts (no telnet / MQTT / BLE → serial reflash only). The mock-ADC bench never associates
 with a real AP, so it booted clean and hid the bug; the live converter (flat) didn't.
 
-**Rule:** keep `enable_esp_log_to_telnet()` **after** `registerServices()` (the proven ordering) — the
-WiFi connect burst then uses the light default vprintf, not `vprintf_mux`, so the backlog captures
-only from there on (not the `setup()` body — accept that). To capture the `setup()` body safely,
-*first* raise `CONFIG_ESP_WIFI_TASK_STACK_SIZE` or shrink / move `vprintf_mux`'s `loc_buf` off-stack.
-Generally: any small-stack system task (wifi 3072 B) that logs through `vprintf_mux` risks this — keep
-the heavy 300 B-buffer formatting path off those tasks.
+**Fix (2026-05-29):** `vprintf_()` now detects the wifi task (`pcTaskGetName`, guarded by
+`xPortCanYield()` so it's never called from an ISR) and routes it to the light default `old_vprintf`
+(UART only), bypassing `vprintf_mux` entirely. The heavy 300 B-buffer + mirror path never runs on the
+3072 B wifi task, so connect *and reconnect* bursts are safe. This also closed a worse case the
+late-hook ordering missed: **post-setup reconnects** (AP loss / a slow WPA handshake) overflowed the
+same way once the hook was active — the likely mechanism behind the chronic converter reboot-on-AP-loss.
+Verified on hardware: 3× wifi off/on + a forced `init→auth→assoc→run` burst, no overflow, uptime
+monotonic. (Note: there is **no `CONFIG_ESP_WIFI_TASK_STACK_SIZE`** in IDF 5.5 — the 3072 B is internal.)
+
+Keeping `enable_esp_log_to_telnet()` **after** `registerServices()` is now belt-and-suspenders, not
+load-bearing. Generally: any small-stack system task (wifi 3072 B) that logs through `vprintf_mux`
+risks this — keep the heavy 300 B-buffer formatting path off those tasks.
 
 # Flash Cache
 

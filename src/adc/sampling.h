@@ -141,9 +141,8 @@ struct PhysicalSensor : public Sensor {
           adc(adc) {
     }
 
-    void createNotchFilter() {
+    void createNotchFilter(float fs) {
         try {
-            auto fs = adc->getSamplingRate(params.adcCh);
             notchFilter = new NotchFilter();
             constexpr auto inverterFreq = 50.0f;
             constexpr auto inverterInputFreq = 2 * inverterFreq; // abs(sin(t))
@@ -198,8 +197,9 @@ private:
     struct AdcState {
         AsyncADC<float> *adc{nullptr};
         std::array<Sensor *, 8> sensorByCh{};
-        std::vector<Sensor *> cycleSensors{}; // only used if readMode==MuxedRoundRobin
-        uint8_t cycleSensorsPos = 0;
+        std::vector<Sensor *> cycleSensors{}; // distinct sensors, only if readMode==MuxedRoundRobin
+        std::vector<uint8_t> cycleOrder{};    // poll order into cycleSensors (Vout interleaved)
+        uint8_t cycleSensorsPos = 0;          // position in cycleOrder
     };
 
     uint8_t calibrating_ = 0;
@@ -270,6 +270,37 @@ public:
         state.adc->startReading((*r)->params.adcCh);
     }
 
+    // Vout (added last, the OV-protection input) is interleaved between the other channels so its
+    // refresh latency on a muxed ADC drops from N polls to 2 -> order [0,V,1,V,...]. Doubles Vout's
+    // sample rate and halves the others'; effectiveSampleRate() compensates the notch tuning.
+    static void buildCycleOrder(AdcState &s) {
+        auto &order = s.cycleOrder;
+        order.clear();
+        uint8_t n = (uint8_t) s.cycleSensors.size();
+        if (n > 2) {
+            uint8_t vout = n - 1;
+            for (uint8_t i = 0; i < vout; ++i) {
+                order.push_back(i);
+                order.push_back(vout);
+            }
+        } else {
+            for (uint8_t i = 0; i < n; ++i) order.push_back(i);
+        }
+    }
+
+    // getSamplingRate() reports the uniform per-channel rate (base/N). A muxed ADC with an
+    // interleaved Vout samples each sensor at a different duty, so scale by N*appearances/pollLen.
+    float effectiveSampleRate(PhysicalSensor *ps) {
+        float fs = ps->adc->getSamplingRate(ps->params.adcCh);
+        auto &s = getAdcState(ps->adc);
+        if (!s.cycleOrder.empty()) {
+            uint8_t app = 0;
+            for (auto o: s.cycleOrder) if (s.cycleSensors[o] == ps) ++app;
+            fs = fs * (float) s.cycleSensors.size() * (float) app / (float) s.cycleOrder.size();
+        }
+        return fs;
+    }
+
 
     /**
      * user must call this from the same task that perform ADC reading (calls hasData & getSample)
@@ -280,20 +311,22 @@ public:
 
         for (auto &s: adcStates) {
             s.adc->start();
-            if (s.adc->readMode() != AdcReadMode::StreamedCallback)
-                _readNext(s);
-            else if (s.adc->readMode() == AdcReadMode::MuxedRoundRobin) {
+            if (s.adc->readMode() == AdcReadMode::MuxedRoundRobin) {
                 assert_throw(!s.cycleSensors.empty(), "no sensors to cycle");
+                buildCycleOrder(s);
                 s.cycleSensorsPos = 0;
-                s.adc->startReading(s.cycleSensors[0]->params.adcCh);
+                s.adc->startReading(s.cycleSensors[s.cycleOrder[0]]->params.adcCh);
+            } else if (s.adc->readMode() != AdcReadMode::StreamedCallback) {
+                _readNext(s); // SnapshotAllChannels: prime the first channel
             }
+            // StreamedCallback: driven by read(cb), nothing to prime
         }
 
 
         for (auto &s: sensors) {
             if (s->isVirtual) continue;
             auto ps = (PhysicalSensor *) s;
-            ps->createNotchFilter();
+            ps->createNotchFilter(effectiveSampleRate(ps));
         }
     }
 
@@ -446,12 +479,13 @@ public:
             //using namespace std::string_literals;
             //assert_throw(false, "cycle readMode"s + "not implemented");
 
-            const auto sensor(state.cycleSensors[state.cycleSensorsPos]);
+            auto &order = state.cycleOrder;
+            const auto sensor(state.cycleSensors[order[state.cycleSensorsPos]]);
 
             auto x = adc->getSample();
             rtcount("adc.update.getSample");
-            state.cycleSensorsPos = (state.cycleSensorsPos + 1) % state.cycleSensors.size();
-            state.adc->startReading(state.cycleSensors[state.cycleSensorsPos]->params.adcCh);
+            state.cycleSensorsPos = (state.cycleSensorsPos + 1) % order.size();
+            state.adc->startReading(state.cycleSensors[order[state.cycleSensorsPos]]->params.adcCh);
             rtcount("adc.update.startReading");
             calibRes = _addSensorSample(sensor, x);
         }
@@ -480,7 +514,10 @@ public:
         for (auto &state: adcStates) {
             auto r = _updateAdc(state);
             if (r > res) res = r;
-            if (state.cycleSensorsPos == 0) updateVirtual = true;
+            // virtuals update once per complete channel set: non-muxed ADCs read every channel
+            // each poll; a muxed ADC completes its set when the round-robin wraps to 0.
+            if (state.adc->readMode() != AdcReadMode::MuxedRoundRobin || state.cycleSensorsPos == 0)
+                updateVirtual = true;
         }
 
         // update virtual sensors

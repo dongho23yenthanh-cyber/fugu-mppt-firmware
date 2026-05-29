@@ -7,6 +7,7 @@
 #include <esp_adc/adc_continuous.h>
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
+#include <esp_timer.h>
 #include "esp_log.h"
 
 #include "adc.h"
@@ -29,6 +30,9 @@ private:
     adc_continuous_handle_t handle = nullptr;
     uint8_t result[ADC1_READ_LEN] = {0};
     bool good_ = true; // cleared on a continuous-read driver error, restored by start()
+    int64_t lastDataUs_ = 0; // last time the DMA delivered samples (no-sample watchdog)
+    int64_t lastWarnUs_ = 0; // throttles the no-sample warning
+    static constexpr int64_t kNoDataTimeoutUs = 1000000; // 1s; normal inter-sample gap is a few ms
 
 
     uint32_t sr = 0; // sampling rate of driver
@@ -101,7 +105,18 @@ public:
 
     bool hasData() override { return notification.wait(1); }
 
-    bool isGood() override { return good_; }
+    bool isGood() override {
+        if (!good_) return false;
+        int64_t now = esp_timer_get_time();
+        if (now - lastDataUs_ > kNoDataTimeoutUs) {
+            if (now - lastWarnUs_ > 5000000) { // throttle to 5s
+                lastWarnUs_ = now;
+                ESP_LOGW("adc_esp32", "no ADC samples for %lu ms", (unsigned long) ((now - lastDataUs_) / 1000));
+            }
+            return false;
+        }
+        return true;
+    }
 
     void setMaxExpectedVoltage(uint8_t ch, float voltage) override {
         adc_atten_t atten;

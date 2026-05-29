@@ -26,6 +26,7 @@ s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *
 
 void ADC_ESP32_Cont::start() {
     good_ = true;
+    lastDataUs_ = esp_timer_get_time(); // grace period before the no-sample watchdog can trip
     adc_continuous_handle_cfg_t adc_config = {
         .max_store_buf_size = ADC1_READ_LEN * 2,
         .conv_frame_size = ADC1_READ_LEN / 2, // use half read len to drain buffer while data exists
@@ -106,6 +107,7 @@ uint32_t ADC_ESP32_Cont::read(SampleCallback &&newSampleCallback) {
     esp_err_t ret = adc_continuous_read(handle, result, ADC1_READ_LEN, &ret_num, 0);
 
     if (ret == ESP_OK) {
+        if (ret_num) lastDataUs_ = esp_timer_get_time();
         //ESP_LOGI("TASK", "ret is %x, ret_num is %"PRIu32" bytes", ret, ret_num);
         for (int i = 0; i < ret_num; i += SOC_ADC_DIGI_RESULT_BYTES) {
             auto *p = (adc_digi_output_data_t *) &result[i];

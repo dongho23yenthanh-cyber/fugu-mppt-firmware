@@ -137,3 +137,85 @@ void test_ADCSampler() {
     TEST_ASSERT_FLOAT_WITHIN(1e-6, ewmI.ewm.std.get(), sensorI.ewm.std.get());
 }
 #endif
+
+namespace {
+// Muxed ADC mock (one channel per poll) that records the startReading() sequence, so the Vout
+// interleave in ADC_Sampler can be tested without ADS1x15 hardware.
+class MuxRrMockADC : public AsyncADC<float> {
+public:
+    std::vector<uint8_t> reads;
+
+    [[nodiscard]] AdcReadMode readMode() const override { return AdcReadMode::MuxedRoundRobin; }
+    bool init(const ConfFile &) override { return true; }
+    void deinit() override {}
+    void startReading(uint8_t ch) override { reads.push_back(ch); }
+    bool hasData() override { return true; }
+    float getSample() override { return 1.0f; }
+    void setMaxExpectedVoltage(uint8_t, float) override {}
+    float getInputImpedance(uint8_t) override { return 1e6f; }
+    float getSamplingRate(uint8_t) override { return 100.0f; } // uniform per-channel rate
+};
+
+SensorParams mkp(uint8_t ch, const char *name) {
+    return SensorParams{ch, {1.f, 0.f}, {1e9f, 1e9f, false}, name, 'u', false};
+}
+}
+
+// Vout (added last) is read every other poll: c0, vout, c1, vout, ...
+void test_vout_interleave_poll_order() {
+    MuxRrMockADC adc;
+    ADC_Sampler sampler{};
+    sampler.ignoreCalibrationConstraints = true;
+    sampler.addSensor(&adc, mkp(0, "c0"), 10.f, 1);
+    sampler.addSensor(&adc, mkp(1, "c1"), 10.f, 1);
+    sampler.addSensor(&adc, mkp(2, "vout"), 10.f, 1); // Vout last
+    sampler.begin();
+    for (int i = 0; i < 7; ++i) sampler.update();
+
+    static const uint8_t expected[8] = {0, 2, 1, 2, 0, 2, 1, 2};
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT(8, adc.reads.size());
+    for (int i = 0; i < 8; ++i)
+        TEST_ASSERT_EQUAL_UINT8(expected[i], adc.reads[i]);
+
+    int nVout = 0, nC0 = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (adc.reads[i] == 2) ++nVout;
+        if (adc.reads[i] == 0) ++nC0;
+    }
+    TEST_ASSERT_EQUAL_INT(4, nVout); // twice as often as the others
+    TEST_ASSERT_EQUAL_INT(2, nC0);
+}
+
+// Interleaving makes Vout's effective rate 2x and the others' 0.5x; effectiveSampleRate() must
+// compensate so the notch is tuned to the real per-channel cadence (base=100, N=3, pollLen=4).
+void test_vout_interleave_notch_rate() {
+    MuxRrMockADC adc;
+    ADC_Sampler sampler{};
+    sampler.ignoreCalibrationConstraints = true;
+    auto c0 = sampler.addSensor(&adc, mkp(0, "c0"), 10.f, 1);
+    sampler.addSensor(&adc, mkp(1, "c1"), 10.f, 1);
+    auto vout = sampler.addSensor(&adc, mkp(2, "vout"), 10.f, 1);
+    sampler.begin();
+
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 150.f, sampler.effectiveSampleRate((PhysicalSensor *) vout)); // 100*3*2/4
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 75.f, sampler.effectiveSampleRate((PhysicalSensor *) c0));     // 100*3*1/4
+}
+
+// With <=2 channels there is nothing to interleave: plain round-robin, rate unchanged.
+void test_cycle_no_interleave_two_channels() {
+    MuxRrMockADC adc;
+    ADC_Sampler sampler{};
+    sampler.ignoreCalibrationConstraints = true;
+    auto c0 = sampler.addSensor(&adc, mkp(0, "c0"), 10.f, 1);
+    auto vout = sampler.addSensor(&adc, mkp(1, "vout"), 10.f, 1);
+    sampler.begin();
+    for (int i = 0; i < 5; ++i) sampler.update();
+
+    static const uint8_t expected[6] = {0, 1, 0, 1, 0, 1};
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT(6, adc.reads.size());
+    for (int i = 0; i < 6; ++i)
+        TEST_ASSERT_EQUAL_UINT8(expected[i], adc.reads[i]);
+
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 100.f, sampler.effectiveSampleRate((PhysicalSensor *) vout));
+    TEST_ASSERT_FLOAT_WITHIN(1e-3f, 100.f, sampler.effectiveSampleRate((PhysicalSensor *) c0));
+}

@@ -49,6 +49,11 @@ void test_LinearTransform();
 // the RUN_TEST below until that is re-enabled.
 // void test_ADCSampler();
 
+// adc/sampling.h — muxed-cycle Vout interleave + notch-rate correction
+void test_vout_interleave_poll_order();
+void test_vout_interleave_notch_rate();
+void test_cycle_no_interleave_two_channels();
+
 // adc/ina226_conv_time.h + adc/adc.h (AsyncADC contract via ADC_Dummy)
 void test_ina226_convtime_exact_step();
 void test_ina226_convtime_rounds_up_between_steps();
@@ -293,6 +298,9 @@ void setup() {
 
     RUN_TEST(test_LinearTransform);
     // RUN_TEST(test_ADCSampler); // body is #if 0'd in test_sampler.cpp
+    RUN_TEST(test_vout_interleave_poll_order);
+    RUN_TEST(test_vout_interleave_notch_rate);
+    RUN_TEST(test_cycle_no_interleave_two_channels);
 
     // adc/ina226_conv_time.h
     RUN_TEST(test_ina226_convtime_exact_step);

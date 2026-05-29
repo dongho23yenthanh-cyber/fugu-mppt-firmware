@@ -42,6 +42,7 @@ from etc.fugu.discover import discover_scope_servers
 from etc.fugu.fugu import FuguDevice
 from etc.fugu.transport import SocketTransport
 from etc.fugu_console import scan_nat_async
+from etc import elf_archive
 
 # CLion / PyCharm Run consoles report as a TTY but don't render ANSI escapes —
 # disable color/style so the boxes don't come out wrapped in raw \x1b[...m codes.
@@ -347,6 +348,15 @@ async def main():
             else:
                 print(f'  {name}: ❌ got {got!r}, expected {local["version"]!r}')
                 res[name] = False
+
+    # archive the flashed ELF per device so a later coredump can be symbolicated
+    for name, ok in res.items():
+        if ok:
+            try:
+                elf_archive.archive(name, method='ota',
+                                    version=local['version'] if local else None)
+            except Exception as e:
+                print(f'  WARN: ELF archive failed for {name}: {e}')
 
     return all(res.values())
 

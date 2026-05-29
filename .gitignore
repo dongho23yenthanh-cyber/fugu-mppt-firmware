@@ -95,3 +95,6 @@ build-*
 test/host-stub/ftp/build/log/
 
 test/host-stub/ftp/build/
+
+# firmware ELF archive (per-flash, for coredump symbolication)
+elf-archive/

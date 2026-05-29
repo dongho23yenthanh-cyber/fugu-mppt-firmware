@@ -16,6 +16,9 @@ idf.py build               # feature flags live in Kconfig now (CONFIG_FUGU_WITH
 idf.py -p $ESPPORT flash monitor
 ```
 
+`idf.py flash`/`app-flash` automatically archive the build ELF for later coredump symbolication (via the project's
+`idf_ext.py`). Name the device with `FUGU_DEVICE=<name> idf.py flash` or `./flash.sh <name>` (see "ELF archive" below).
+
 The top-level `CMakeLists.txt` invokes `littlefs_create_partition_image(... FLASH_IN_PROJECT)` so the **board config (
 currently `config/lab/wokwi_mock`) is flashed together with the firmware**. To target a different board, either edit
 that path in `CMakeLists.txt` before `idf.py flash`, or skip it and provision the littlefs partition separately (see
@@ -55,6 +58,32 @@ bootloader and will **brick, not revert**, on a bad image. To put rollback on a 
 (bootloader + app, omitting littlefs to keep its config) once; OTAs after that self-revert. A bricked device (hung in
 `setup()` before WiFi/services) can only be recovered by serial — see [doc/dev-notes/Real-Time Latency.md] for the
 boot-time stack/cache traps that cause such hangs.
+
+## ELF archive (for coredump symbolication)
+
+`esp-coredump` is SHA-gated: a dump only decodes against the *exact* build ELF (its `app_elf_sha256`, stored in the
+`.bin`/coredump but zeroed in the `.elf`). `etc/elf_archive.py` keeps that ELF around per flash so a later coredump can
+still be symbolicated.
+
+- **OTA** (`etc/ota.py`) archives automatically after each verified-successful push.
+- **Serial:** `idf.py flash`/`app-flash` archive automatically — the project's `idf_ext.py` wraps the stock flash
+  callback (so `idf.py flash monitor` still works; archiving happens before monitor). The device name comes from
+  `$FUGU_DEVICE`, else the serial-port basename. `./flash.sh <device-name> [idf.py args]` is a thin wrapper that just
+  sets `FUGU_DEVICE` (e.g. `./flash.sh fry -p /dev/cu.usbmodem1101 flash monitor`).
+
+It stores one `zstd -19` ELF per unique build (~35 MB → ~9.7 MB) under the gitignored `elf-archive/`, deduped by sha,
+with an `index.jsonl` flash log (time, device, method, version, sha). Compression runs **detached** so it never blocks
+the flash flow; retention keeps the **30** most-recently-flashed builds (`KEEP_BUILDS`). Decode a dump:
+
+```bash
+python3 etc/elf_archive.py decode <core.bin>             # auto-matches the ELF by sha bytes in the dump
+python3 etc/elf_archive.py decode --device flat <core.bin>   # fallback: latest build flashed to flat
+python3 etc/elf_archive.py list                          # flash history
+python3 etc/elf_archive.py find --device flat -o fw.elf  # extract an archived ELF
+```
+
+Only builds flashed *after* this was added are archived; older dumps still need their ELF passed to `esp-coredump`
+manually.
 
 ## Provisioning (board configs)
 

@@ -50,6 +50,9 @@ public:
     explicit ADC_ESP32_Cont(const ConfFile &sensConf) {
         avgNum = sensConf.getLong("esp32adc1_avg");
         sr = sensConf.getLong("esp32adc1_sr");
+        // ChAvgBuf::num is 10-bit: avgNum>=1024 would wrap before reaching the count and starve the
+        // channel; agg is 22-bit and holds 1023*4095 with margin, so 1..1023 is safe.
+        assert_throw(avgNum >= 1 && avgNum <= 1023, "esp32adc1_avg must be 1..1023");
     }
 
     bool init(const ConfFile &boardConf) override {

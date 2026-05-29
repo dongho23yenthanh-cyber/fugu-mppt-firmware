@@ -40,22 +40,7 @@ ETC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo/et
 sys.path.insert(0, ETC_DIR)
 from fugu.transport import SerialTransport, SocketTransport
 from fugu.console import Console
-
-
-class Results:
-    def __init__(self):
-        self.items = []
-
-    def check(self, name, ok, detail=""):
-        self.items.append((name, bool(ok)))
-        print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-        return ok
-
-    def skip(self, name, detail=""):
-        print(f"  [SKIP] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-
-    def ok(self):
-        return all(ok for _, ok in self.items)
+from _harness import Results
 
 
 def main():

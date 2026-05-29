@@ -46,6 +46,7 @@ REPO_DIR = os.path.dirname(ETC_DIR)
 sys.path.insert(0, ETC_DIR)
 from fugu.transport import SerialTransport, SocketTransport
 from fugu.fugu import FuguDevice
+from _harness import Results, wait_for
 
 _L_RE = re.compile(r"L = ([\d.]+)\s*uH")                       # both: "L = 49.69 uH"
 _PEAK_RE = re.compile(r"peak LS\s*:?\s*(\d+)")                 # host "peak LS  : 553", dev "peak LS 560"
@@ -53,32 +54,6 @@ _OFFSET_RE = re.compile(r"peak-ideal\s*([+-]?\d+)\s*ct")       # both: "peak-ide
 # the device/script print these when the operating point can't support the measurement:
 _SKIP_MARKERS = ("need Vin>Vout", "need Vin > Vout", "empty duty band", "empty LS band",
                  "DCM pts above", "DCM points", "too few points", "no status lines", "need a DCM")
-
-
-class Results:
-    def __init__(self):
-        self.items = []
-
-    def check(self, name, ok, detail=""):
-        self.items.append((name, ok))
-        print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-        return ok
-
-    def skip(self, name, detail=""):
-        print(f"  [SKIP] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-
-    def ok(self):
-        return all(ok for _, ok in self.items)
-
-
-def wait_for(predicate, timeout, poll=0.4):
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        v = predicate()
-        if v:
-            return v
-        time.sleep(poll)
-    return None
 
 
 class Tap:

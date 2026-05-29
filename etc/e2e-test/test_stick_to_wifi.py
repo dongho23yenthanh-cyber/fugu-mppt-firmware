@@ -37,93 +37,34 @@ Usage
 """
 import argparse
 import os
-import re
 import sys
-import threading
 import time
-import urllib.request
 
 ETC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo/etc (holds the fugu pkg)
 sys.path.insert(0, ETC_DIR)
 from fugu.transport import SocketTransport, SerialTransport
 from fugu.console import Console
+from _harness import (Results, wait_for, fire_webhook, EventLog,
+                      RE_CONNECT, RE_STATUS_N_RSSI, BOOT_MARKER)
 
-# status line:  ... N=<samples> rssi=<dBm>
-_STATUS = re.compile(r"\bN=(\d+)\b.*?\brssi=(-?\d+)")
-# telemetry.cpp: "Connected to WiFi <ssid>, RSSI <r> IP <ip>"
-_CONNECT = re.compile(r"Connected to WiFi (.+?), RSSI (-?\d+) IP (\S+)")
-_BOOT = "setup() done"
 REBOOT_MARGIN = 100  # N may jitter by a sample or two between reads; a real reboot drops it to ~0
 
 
-class Tap:
+class Tap(EventLog):
     """Records and parses the device's streamed console lines (via Console.on_line)."""
 
-    def __init__(self):
-        self._lock = threading.Lock()
-        self.events = []  # (t, kind, payload): ("N", n), ("rssi", r), ("connect", ssid), ("boot", None)
-        self.lines = []   # (t, raw) for diagnostics
-
     def feed(self, line: str):
-        t = time.monotonic()
-        with self._lock:
-            self.lines.append((t, line))
-            m = _STATUS.search(line)
-            if m:
-                self.events.append((t, "N", int(m.group(1))))
-                self.events.append((t, "rssi", int(m.group(2))))
-            m = _CONNECT.search(line)
-            if m:
-                self.events.append((t, "connect", m.group(1)))
-            if _BOOT in line:
-                self.events.append((t, "boot", None))
-
-    def _of(self, kind, since=0.0):
-        with self._lock:
-            return [(t, p) for (t, k, p) in self.events if k == kind and t >= since]
-
-    def last(self, kind, since=0.0):
-        e = self._of(kind, since)
-        return e[-1][1] if e else None
-
-    def all(self, kind, since=0.0):
-        return [p for _, p in self._of(kind, since)]
+        super().feed(line)
+        if m := RE_STATUS_N_RSSI.search(line):
+            self.add("N", int(m.group(1)))
+            self.add("rssi", int(m.group(2)))
+        if m := RE_CONNECT.search(line):
+            self.add("connect", m.group(1))
+        if BOOT_MARKER in line:
+            self.add("boot")
 
     def saw_boot(self, since):
-        return bool(self._of("boot", since))
-
-
-def wait_for(predicate, timeout, poll=0.2):
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        v = predicate()
-        if v:
-            return v
-        time.sleep(poll)
-    return None
-
-
-def fire_webhook(url, method, timeout):
-    req = urllib.request.Request(url, method=method.upper())
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.status, r.read(200).decode("utf-8", "replace")
-
-
-class Results:
-    def __init__(self):
-        self.items = []
-
-    def check(self, name, ok, detail=""):
-        tag = "PASS" if ok else "FAIL"
-        self.items.append((name, ok))
-        print(f"  [{tag}] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-        return ok
-
-    def skip(self, name, detail=""):
-        print(f"  [SKIP] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-
-    def ok(self):
-        return all(ok for _, ok in self.items)
+        return self.saw("boot", since)
 
 
 def run_round(con: Tap, fire, args, res: Results, rnd: int):
@@ -151,7 +92,7 @@ def run_round(con: Tap, fire, args, res: Results, rnd: int):
     def outage_signal():
         if con.last("rssi", t_fire) == 0:
             return "rssi->0"
-        if any("connection timeout" in l or "Connecting WiFi" in l for _, l in con.lines if _ >= t_fire):
+        if any("connection timeout" in l or "Connecting WiFi" in l for l in con.raw_since(t_fire)):
             return "reconnect attempt logged"
         return None
     outage = wait_for(outage_signal, args.outage_timeout)

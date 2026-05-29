@@ -46,6 +46,7 @@ ETC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo/et
 sys.path.insert(0, ETC_DIR)
 from fugu.transport import SocketTransport, SerialTransport
 from fugu.console import Console
+from _harness import Results, wait_for
 
 LOG_ROOT = "pv/log/"
 
@@ -142,15 +143,6 @@ class LogTap:
         self._c.disconnect()
 
 
-def wait_for(predicate, timeout, poll=0.1):
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        if predicate():
-            return True
-        time.sleep(poll)
-    return False
-
-
 class Ctrl:
     """The out-of-band control console (telnet/serial) that always accepts commands."""
 
@@ -172,19 +164,6 @@ class Ctrl:
     def close(self):
         self._c._stop.set()
         self._c.transport.close()
-
-
-class Results:
-    def __init__(self):
-        self.items = []
-
-    def check(self, name, ok, detail=""):
-        self.items.append((name, ok, detail))
-        print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-        return ok
-
-    def ok(self):
-        return all(ok for _, ok, _ in self.items)
 
 
 def reload_with(ctrl, value):

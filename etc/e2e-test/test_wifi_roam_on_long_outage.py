@@ -42,60 +42,24 @@ Usage
 """
 import argparse
 import os
-import re
 import sys
-import threading
 import time
-import urllib.request
 
 ETC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ETC_DIR)
 from fugu.transport import SerialTransport
 from fugu.fugu import FuguDevice
+from _harness import Results, wait_for, fire_webhook, EventLog, RE_CONNECT
 
-_CONNECT = re.compile(r"Connected to WiFi (.+?), RSSI (-?\d+) IP (\S+)")
 
-
-class Markers:
-    def __init__(self):
-        self._lock = threading.Lock()
-        self.ev = []  # (t, "connect", ssid)
-
+class Markers(EventLog):
     def feed(self, line):
-        if m := _CONNECT.search(line):
-            with self._lock:
-                self.ev.append((time.monotonic(), "connect", m.group(1)))
+        super().feed(line)
+        if m := RE_CONNECT.search(line):
+            self.add("connect", m.group(1))
 
     def connects_since(self, since):
-        with self._lock:
-            return [(t, s) for (t, k, s) in self.ev if k == "connect" and t >= since]
-
-
-def wait_for(predicate, timeout, poll=0.3):
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        v = predicate()
-        if v:
-            return v
-        time.sleep(poll)
-    return None
-
-
-def fire_webhook(url, method, timeout):
-    req = urllib.request.Request(url, method=method.upper())
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.status, r.read(200).decode("utf-8", "replace")
-
-
-class Results:
-    def __init__(self): self.items = []
-    def check(self, name, ok, detail=""):
-        tag = "PASS" if ok else "FAIL"
-        self.items.append((name, ok))
-        print(f"  [{tag}] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-        return ok
-    def skip(self, name, detail=""): print(f"  [SKIP] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-    def ok(self): return all(ok for _, ok in self.items)
+        return self.events("connect", since)  # [(t, ssid)]
 
 
 def run_round(dev: FuguDevice, mk: Markers, args, res: Results, rnd: int):

@@ -60,80 +60,37 @@ import argparse
 import os
 import re
 import sys
-import threading
 import time
 
 ETC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo/etc (holds the fugu pkg)
 sys.path.insert(0, ETC_DIR)
 from fugu.transport import SerialTransport
 from fugu.fugu import FuguDevice
+from _harness import Results, wait_for, EventLog, RE_CONNECT
 
-_CONNECT = re.compile(r"Connected to WiFi (.+?), RSSI")  # telemetry.cpp
 _POWER = re.compile(r"(-?\d+(?:\.\d+)?)W\s")              # power field of the status line
 
 
-class Markers:
+class Markers(EventLog):
     """Records the wifi-lifecycle log lines via FuguDevice.on_message (already ANSI-stripped and
     with pwm-status/ina-timeout noise filtered out). Crash/reboot and rssi come from FuguDevice."""
 
-    def __init__(self):
-        self._lock = threading.Lock()
-        self.ev = []  # (t, kind, payload): connect <ssid> / reenable / off <min> / power <W>
-
     def feed(self, line):
-        t = time.monotonic()
-        with self._lock:
-            if m := _CONNECT.search(line):
-                self.ev.append((t, "connect", m.group(1)))
-            if "WiFi re-enabled after timeout" in line:
-                self.ev.append((t, "reenable", None))
-            if m := re.search(r"WiFi off for (\d+) min", line):
-                self.ev.append((t, "off", int(m.group(1))))
-            if m := _POWER.search(line):
-                self.ev.append((t, "power", float(m.group(1))))
-
-    def _of(self, kind, since):
-        with self._lock:
-            return [(t, p) for (t, k, p) in self.ev if k == kind and t >= since]
-
-    def first_t(self, kind, since=0.0):
-        e = self._of(kind, since)
-        return e[0][0] if e else None
-
-    def last(self, kind, since=0.0):
-        e = self._of(kind, since)
-        return e[-1][1] if e else None
+        super().feed(line)
+        if m := RE_CONNECT.search(line):
+            self.add("connect", m.group(1))
+        if "WiFi re-enabled after timeout" in line:
+            self.add("reenable")
+        if m := re.search(r"WiFi off for (\d+) min", line):
+            self.add("off", int(m.group(1)))
+        if m := _POWER.search(line):
+            self.add("power", float(m.group(1)))
 
     def peak_power(self, since=0.0):
-        ps = [p for _, p in self._of("power", since)]
+        ps = self.all("power", since)
         return max(ps) if ps else None
 
 
-def wait_for(predicate, timeout, poll=0.3):
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        v = predicate()
-        if v:
-            return v
-        time.sleep(poll)
-    return None
-
-
-class Results:
-    def __init__(self):
-        self.items = []
-
-    def check(self, name, ok, detail=""):
-        tag = "PASS" if ok else "FAIL"
-        self.items.append((name, ok))
-        print(f"  [{tag}] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-        return ok
-
-    def skip(self, name, detail=""):
-        print(f"  [SKIP] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-
-    def ok(self):
-        return all(ok for _, ok in self.items)
 
 
 def baseline(dev: FuguDevice, res: Results, need_assoc=True):

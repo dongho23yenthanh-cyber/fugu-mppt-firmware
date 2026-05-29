@@ -46,12 +46,8 @@ ETC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo/et
 sys.path.insert(0, ETC_DIR)
 from fugu.transport import SerialTransport
 from fugu.console import Console
-
-# DUT status line: "... N=<n> rssi=<r>"
-_STATUS = re.compile(r"\bN=(\d+)\b.*?\brssi=(-?\d+)")
-# telemetry.cpp: "Connected to WiFi <ssid>, RSSI <r> IP <ip>"
-_CONNECT = re.compile(r"Connected to WiFi (.+?), RSSI (-?\d+) IP (\S+)")
-_BOOT = "setup() done"
+from _harness import (Results, wait_until, EventLog,
+                      RE_CONNECT, RE_STATUS_N_RSSI, BOOT_MARKER)
 
 # `ip` reply: "Local IP Address: 192.168.4.5"
 _IP_REPLY = re.compile(r"Local IP Address:\s*(\d+\.\d+\.\d+\.\d+)")
@@ -60,50 +56,20 @@ _IP_REPLY = re.compile(r"Local IP Address:\s*(\d+\.\d+\.\d+\.\d+)")
 NETWORK_SERVICES = ("tele", "ftp", "telnet", "scope")
 
 
-class Tap:
-    """Records status-line events from the DUT (rssi, N counter, connect, boot)."""
-
-    def __init__(self):
-        self._lock = threading.Lock()
-        self.events = []  # (t, kind, payload)
-        self.lines = []   # (t, raw)
+class Tap(EventLog):
+    """Records status-line events from the DUT (rssi, N counter, connect, boot, welcome banner)."""
 
     def feed(self, line: str):
-        t = time.monotonic()
-        with self._lock:
-            self.lines.append((t, line))
-            m = _STATUS.search(line)
-            if m:
-                self.events.append((t, "N", int(m.group(1))))
-                self.events.append((t, "rssi", int(m.group(2))))
-            m = _CONNECT.search(line)
-            if m:
-                self.events.append((t, "connect", m.group(1)))
-            if _BOOT in line:
-                self.events.append((t, "boot", None))
-
-    def last(self, kind, since=0.0):
-        with self._lock:
-            for t, k, p in reversed(self.events):
-                if t < since:
-                    break
-                if k == kind:
-                    return p
-        return None
-
-    def saw(self, kind, since=0.0) -> bool:
-        with self._lock:
-            return any(k == kind and t >= since for t, k, _ in self.events)
-
-
-def wait_until(predicate, timeout, poll=0.2):
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        v = predicate()
-        if v:
-            return v
-        time.sleep(poll)
-    return None
+        super().feed(line)
+        if m := RE_STATUS_N_RSSI.search(line):
+            self.add("N", int(m.group(1)))
+            self.add("rssi", int(m.group(2)))
+        if m := RE_CONNECT.search(line):
+            self.add("connect", m.group(1))
+        if BOOT_MARKER in line:
+            self.add("boot")
+        if "Welcome to " in line:
+            self.add("welcome", line)
 
 
 # --- DUT ----------------------------------------------------------------------
@@ -263,20 +229,6 @@ def telnet_probe(host: str, port: int, timeout: float = 5.0) -> str:
 
 # --- result aggregator --------------------------------------------------------
 
-class Results:
-    def __init__(self):
-        self.items: "list[tuple[str, bool]]" = []
-
-    def check(self, name: str, ok: bool, detail: str = "") -> bool:
-        tag = "PASS" if ok else "FAIL"
-        self.items.append((name, ok))
-        print(f"  [{tag}] {name}" + (f"  ({detail})" if detail else ""), flush=True)
-        return ok
-
-    def ok(self) -> bool:
-        return bool(self.items) and all(ok for _, ok in self.items)
-
-
 # --- scenarios ----------------------------------------------------------------
 
 def assert_services(dut: Dut, expected: "dict[str,str]", res: Results, label: str) -> bool:
@@ -357,7 +309,7 @@ def scenario_B_outage_during_boot(dut: Dut, router: Router, args, res: Results, 
 
     # 4. stable: no spontaneous reboot
     time.sleep(5.0)
-    n_boots = sum(1 for t, k, _ in dut.tap.events if k == "boot" and t >= t_boot)
+    n_boots = len(dut.tap.events("boot", t_boot))
     res.check("B: DUT did not reboot itself while waiting", n_boots <= 1,
               f"n_boots={n_boots}")
 
@@ -435,7 +387,7 @@ def main() -> int:
         router.add_portmap("TCP", 23, dut_ip, 23)
 
         # capture hostname for the behavioral probe (welcome banner is "Welcome to <host>")
-        hostname_line = next((l for _, l in dut.tap.lines if "Welcome to " in l), "")
+        hostname_line = dut.tap.last("welcome") or ""
         m = re.search(r"Welcome to (\S+)", hostname_line)
         dut_hostname = m.group(1) if m else "fugu-"
         print(f"  expected banner contains: {dut_hostname!r}", flush=True)

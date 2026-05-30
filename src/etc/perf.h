@@ -96,26 +96,47 @@ static esp_err_t print_real_time_stats(TickType_t xTicksToWait) {
         goto exit;
     }
 
-    printf_mux("| Task | Run Time | Percentage\n");
-    //Match each task in start_array to those in the end_array
-    for (int i = 0; i < start_array_size; i++) {
-        int k = -1;
-        for (int j = 0; j < end_array_size; j++) {
-            if (start_array[i].xHandle == end_array[j].xHandle) {
-                k = j;
-                //Mark that task have been matched by overwriting their handles
-                start_array[i].xHandle = NULL;
-                end_array[j].xHandle = NULL;
-                break;
+    {
+        // CORE% is per-core: total_elapsed_time is one core's worth of ticks, so a
+        // core-pinned task reads 0..100% of its own core (idle = 100% - sum on that core).
+        struct Row { const char *name; uint32_t rt; uint32_t pct; const char *core; };
+        Row *rows = (Row *) malloc(sizeof(Row) * start_array_size);
+        int nrows = 0;
+        //Match each task in start_array to those in the end_array
+        for (int i = 0; i < start_array_size; i++) {
+            TaskHandle_t h = start_array[i].xHandle;
+            int k = -1;
+            for (int j = 0; j < end_array_size; j++) {
+                if (start_array[i].xHandle == end_array[j].xHandle) {
+                    k = j;
+                    //Mark that task have been matched by overwriting their handles
+                    start_array[i].xHandle = NULL;
+                    end_array[j].xHandle = NULL;
+                    break;
+                }
+            }
+            if (k >= 0 && rows) {
+                uint32_t et = end_array[k].ulRunTimeCounter - start_array[i].ulRunTimeCounter;
+                BaseType_t c = xTaskGetCoreID(h);
+                rows[nrows].name = start_array[i].pcTaskName;
+                rows[nrows].rt = et;
+                rows[nrows].pct = (uint32_t) (((uint64_t) et * 100) / total_elapsed_time);
+                rows[nrows].core = (c == tskNO_AFFINITY) ? "any" : (c == 0 ? "0" : "1");
+                ++nrows;
             }
         }
-        //Check if matching task found
-        if (k >= 0) {
-            uint32_t task_elapsed_time = end_array[k].ulRunTimeCounter - start_array[i].ulRunTimeCounter;
-            uint32_t percentage_time = (task_elapsed_time * 100UL) / (total_elapsed_time * portNUM_PROCESSORS);
-            printf_mux("| %s | %"PRIu32" | %"PRIu32"%%\n", start_array[i].pcTaskName, task_elapsed_time,
-                       percentage_time);
+        //Sort by CPU time, busiest first (insertion sort, ~15 rows)
+        for (int i = 1; i < nrows; ++i) {
+            Row key = rows[i];
+            int j = i - 1;
+            for (; j >= 0 && rows[j].rt < key.rt; --j) rows[j + 1] = rows[j];
+            rows[j + 1] = key;
         }
+        printf_mux("%-16s %4s %10s %5s\n", "TASK", "CORE", "RUN_TIME", "CORE%");
+        for (int i = 0; i < nrows; ++i)
+            printf_mux("%-16s %4s %10" PRIu32 " %4" PRIu32 "%%\n",
+                       rows[i].name, rows[i].core, rows[i].rt, rows[i].pct);
+        free(rows);
     }
 
     //Print unmatched tasks

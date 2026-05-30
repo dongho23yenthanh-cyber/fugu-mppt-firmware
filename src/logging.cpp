@@ -234,7 +234,7 @@ void flush_async_uart_log() {
     AsyncLogEntry entry;
     for (int i = 0; i < kMaxPerCall && uart_async_log_queue.try_dequeue(entry); ++i) {
         if (!entry.telnetOnly) {
-            printf_old(entry.str);
+            printf_old("%s", entry.str); // entry.str is data, not a format string (it may contain %)
         }
 
         if (log_telnet)

@@ -118,6 +118,11 @@ static void bleTxDrain(unsigned long nowMs) {
         // the NimBLE btshell throughput guard: one notify needs a couple of mbufs across ATT/L2CAP.)
         if (os_msys_num_free() < 4) break;
         size_t n = std::min(chunk, txBuf.size() - txHead);
+        // Don't split a multi-byte UTF-8 sequence across notifications: clients that decode each
+        // notification independently would render the split halves as replacement chars. If the next
+        // chunk would start on a continuation byte (10xxxxxx), trim back to the code-point boundary.
+        if (txHead + n < txBuf.size())
+            while (n > 1 && ((uint8_t) txBuf[txHead + n] & 0xC0) == 0x80) --n;
         txChar->setValue((uint8_t *) (txBuf.data() + txHead), n);
         lastNotifyOk = true;     // TxCallbacks::onStatus flips this to false on ENOMEM/error (backstop)
         txChar->notify();

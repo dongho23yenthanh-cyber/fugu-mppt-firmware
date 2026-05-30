@@ -1,5 +1,6 @@
 import collections
 import math
+import os
 import select
 import socket
 import sys
@@ -257,54 +258,78 @@ num_bytes_rx = 0
 channelNames = dict()
 
 
+def nat_scope_endpoints():
+    """Scope endpoints derived from the NAT-forwarded telnet endpoints in `etc/nat.env`
+    ($NAT_TELNET, host:port comma-separated). The scope port is telnet + 1 (device 24 vs 23,
+    mirrored by the router). Returns a list of (host, port)."""
+    if not os.environ.get('NAT_TELNET'):
+        env = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'etc', 'nat.env')
+        try:
+            with open(env) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        k, _, v = line.partition('=')
+                        os.environ.setdefault(k.strip(), v.strip())
+        except FileNotFoundError:
+            pass
+    out = []
+    for ep in (os.environ.get('NAT_TELNET') or '').split(','):
+        ep = ep.strip()
+        host, _, port = ep.partition(':')
+        if ep and port:
+            out.append((host.strip(), int(port) + 1))
+    return out
+
+
 def receive_loop(decoder: 'ScopeDecoder'):
     global num_bytes_rx, is_connected
 
     while True:
         print('discovering hosts...')
-        addr = discover_scope_servers()
+        candidates = [(a[0], a[1]) for a in discover_scope_servers()] + nat_scope_endpoints()
 
-        if not addr:
+        if not candidates:
             print('no services discovered')
             time.sleep(1)
             continue
 
-        print('Discovered services:', addr)
-        addr = (addr[0][0], addr[0][1])
-        # addr = ('192.168.1.208', 24)
-        # addr =  ('192.168.1.231', 24)
-
-        print('connecting', addr, '...')
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(4)
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        try:
-            s.connect(addr)
-        except Exception as e:
-            print('connection timeout', e)
-            time.sleep(2)
-            continue
-
-        t_last = time.time()
-        is_connected = True
-
-        while True:
+        print('candidates:', candidates)
+        for addr in candidates:
+            print('connecting', addr, '...')
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(4)
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             try:
-                buf = s.recv(1024 * 4, 0)
-                num_bytes_rx += len(buf)
-                t_last = time.time()
-                decoder.decode(buf)
+                s.connect(addr)
             except Exception as e:
-                if time.time() - t_last >= 8:
-                    print('timeout!', e)
-                    s.close()
-                    is_connected = False
-                    # channelNames.clear()
-                    break
-                else:
-                    pass
-                    # raise
-                time.sleep(.1)
+                print('connection failed', addr, e)
+                s.close()
+                continue
+
+            t_last = time.time()
+            is_connected = True
+
+            while True:
+                try:
+                    buf = s.recv(1024 * 4, 0)
+                    num_bytes_rx += len(buf)
+                    t_last = time.time()
+                    decoder.decode(buf)
+                except Exception as e:
+                    if time.time() - t_last >= 8:
+                        print('timeout!', e)
+                        s.close()
+                        is_connected = False
+                        # channelNames.clear()
+                        break
+                    else:
+                        pass
+                        # raise
+                    time.sleep(.1)
+            break       # held a connection then lost it; rediscover
+        else:
+            time.sleep(2)
 
 
 class ScopeDecoder:

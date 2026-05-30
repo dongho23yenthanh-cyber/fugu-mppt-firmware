@@ -18,8 +18,12 @@ x-axis is therefore real time (seconds), shared across channels of different rat
 
 Connection + wire-format handling is modelled on the legacy scope-client.py reference.
 
-  python etc/scope_client/fugu_scope.py                 # discover via mDNS
+  python etc/scope_client/fugu_scope.py                 # discover via mDNS + nat.env
+  python etc/scope_client/fugu_scope.py -m fry          # pick a discovered device by hostname
   python etc/scope_client/fugu_scope.py --ip 192.168.4.2 [--port 24]
+
+NAT-routed boards (fry/flat) aren't mDNS-reachable; their scope endpoints are derived from the
+telnet endpoints in `etc/nat.env` ($NAT_TELNET) as port+1 (device scope port 24 vs telnet 23).
 """
 import argparse
 import atexit
@@ -49,6 +53,41 @@ TRIGGER_COLOR = "#ff5555"
 BUF_SAMPLES = 200_000          # per-channel sample buffer depth
 COUPLINGS = ["DC", "AC"]
 SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "fugu_scope.yaml")
+NAT_SCOPE_PORT_OFFSET = 1      # scope port = telnet port + 1 (device 24 vs 23, mirrored by the NAT router)
+
+
+def _load_env_file(path):
+    """Fill os.environ from a KEY=VALUE file (shell-set vars win); silent if absent."""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                os.environ.setdefault(key.strip(), val.strip())
+    except FileNotFoundError:
+        pass
+
+
+def nat_scope_endpoints():
+    """Scope endpoints derived from the NAT-forwarded telnet endpoints in `nat.env`.
+
+    `$NAT_TELNET` (filled from `etc/nat.env`) lists telnet endpoints as comma-separated host:port.
+    The scope service sits one port above telnet on the device, and the router mirrors that on the
+    forwarded port, so each scope endpoint is the telnet endpoint's port + NAT_SCOPE_PORT_OFFSET.
+    Returns a list of (host, port); empty when unset.
+    """
+    if not os.environ.get("NAT_TELNET"):
+        _load_env_file(os.path.join(_ROOT, "etc", "nat.env"))
+    out = []
+    for ep in (os.environ.get("NAT_TELNET") or "").split(","):
+        ep = ep.strip()
+        host, _, port = ep.partition(":")
+        if not ep or not port:
+            continue
+        out.append((host.strip(), int(port) + NAT_SCOPE_PORT_OFFSET))
+    return out
 
 
 class Channel:
@@ -250,50 +289,87 @@ class Decoder:
             chans[cid].add_batch(vals, t, self.s.dt)
 
 
+def discover_candidates(state: ScopeState):
+    """Scope endpoints to try, as (host, port, hostname|None): mDNS-advertised first, then the
+    NAT-forwarded endpoints from nat.env (hostname unknown until the scope header arrives)."""
+    cand = []
+    try:
+        from etc.fugu.discover import discover_scope_servers
+        for a, p, name in discover_scope_servers():
+            host = (name or a).rstrip('.')
+            host = host[:-6] if host.endswith('.local') else host
+            cand.append((a, p, host))
+    except Exception as e:
+        print("mDNS discovery failed:", e)
+    seen = {(h, p) for h, p, _ in cand}
+    for h, p in nat_scope_endpoints():
+        if (h, p) not in seen:
+            cand.append((h, p, None))
+    return cand
+
+
+def serve_connection(state: ScopeState, dec: Decoder, host, port, name):
+    """Connect to one scope endpoint and pump samples until it drops. Returns True if a live
+    connection was held (rediscover afterwards), False if the endpoint was unusable or filtered
+    out by --match (try the next candidate)."""
+    if name:
+        state.hostname = name
+    state.status = f"connecting {host}:{port}"
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(4)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    try:
+        s.connect((host, port))
+    except Exception as e:
+        state.status = f"connect failed {host}:{port}: {e}"
+        s.close()
+        return False
+    state.connected = True
+    state.status = f"connected {host}:{port}"
+    state.t0 = time.time()
+    t_last = time.time()
+    while True:
+        try:
+            buf = s.recv(1024 * 8)
+            if not buf:
+                raise ConnectionError("closed")
+            state.num_bytes += len(buf)
+            t_last = time.time()
+            dec.decode(buf, t_last)         # newest sample of the batch ~= now
+            m = state.args.match
+            if m and state.hostname and m not in state.hostname:
+                state.status = f"{state.hostname} != {m}, next"
+                s.close()
+                state.connected = False
+                return False
+        except Exception as e:
+            if time.time() - t_last >= 8:
+                state.status = f"timeout: {e}"
+                s.close()
+                state.connected = False
+                return True
+            time.sleep(0.05)
+
+
 def receive_loop(state: ScopeState, dec: Decoder):
     while True:
         if state.args.ip:
-            addr = (state.args.ip, state.args.port)
+            candidates = [(state.args.ip, state.args.port, None)]
         else:
-            from etc.fugu.discover import discover_scope_servers
             state.status = "discovering..."
-            found = discover_scope_servers()
-            if not found:
+            candidates = discover_candidates(state)
+            if state.args.match:        # drop mDNS hosts that don't match; NAT (name=None) kept,
+                candidates = [c for c in candidates  # filtered after its scope header arrives
+                              if c[2] is None or state.args.match in c[2]]
+            if not candidates:
                 time.sleep(1)
                 continue
-            addr = (found[0][0], found[0][1])
-            host = found[0][2].rstrip('.')
-            state.hostname = host[:-6] if host.endswith('.local') else host
-            print("discovered", found)
-        state.status = f"connecting {addr[0]}:{addr[1]}"
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(4)
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        try:
-            s.connect(addr)
-        except Exception as e:
-            state.status = f"connect failed: {e}"
-            time.sleep(2)
-            continue
-        state.connected = True
-        state.status = f"connected {addr[0]}:{addr[1]}"
-        state.t0 = time.time()
-        t_last = time.time()
-        while True:
-            try:
-                buf = s.recv(1024 * 8)
-                if not buf:
-                    raise ConnectionError("closed")
-                state.num_bytes += len(buf)
-                t_last = time.time()
-                dec.decode(buf, t_last)         # newest sample of the batch ~= now
-            except Exception as e:
-                if time.time() - t_last >= 8:
-                    state.status = f"timeout: {e}"
-                    s.close()
-                    state.connected = False
-                    break
-                time.sleep(0.05)
+            print("candidates", candidates)
+        for host, port, name in candidates:
+            if serve_connection(state, dec, host, port, name):
+                break               # held a live connection; rediscover from scratch
+        else:
+            time.sleep(1)           # nothing usable this round
 
 
 # ---------------------------------------------------------------------------
@@ -486,8 +562,9 @@ def save_csv(state: ScopeState):
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ip", help="device IP (skip mDNS discovery)")
+    ap.add_argument("--ip", help="device IP (skip mDNS/nat.env discovery)")
     ap.add_argument("--port", type=int, default=24)
+    ap.add_argument("-m", "--match", help="connect only to a device whose hostname contains this")
     ap.add_argument("--rate", type=float, default=2000, help="fallback sample rate Hz")
     ap.add_argument("--median", action="store_true", help="5-tap median spike filter")
     args = ap.parse_args()

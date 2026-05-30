@@ -1042,9 +1042,10 @@ static void cmdSensor(cmd *c) {
                  s->ewm.avg.get(), u,
                  sqrt(s->ewm.std.get()) * abs(s->ewm.avg.get()), u,
                  sqrt(s->ewm.std.get()) * 100.f);
-        UART_LOG("  ANF(span=%4.0f):  Nstd= %7.3f   Sstd=%7.3f   NSR=%7.3f", s->anf.span,
+        UART_LOG("  ANF(span=%4.0f):  Nstd= %7.3f   Sstd=%7.3f   NSR=%7.3f%s", s->anf.span,
                  sqrt(s->anf.ewmN.nvar()) * 100.0f, sqrt(s->anf.ewmS.nvar()) * 100.0f,
-                 sqrt(s->anf.ewmN.nvar() / s->anf.ewmS.nvar()));
+                 sqrt(s->anf.ewmN.nvar() / s->anf.ewmS.nvar()),
+                 Sensor::anfEnabled ? "" : "  (stale — run `anf on`)");
     }
 }
 
@@ -1055,6 +1056,16 @@ static void cmdIp(cmd *) { UART_LOG("Local IP Address: %s", WiFi.localIP().toStr
 static void cmdAdcRestart(cmd *) { adcSampler.reInitADCs(); }
 
 static void cmdAdcReset(cmd *) { adcSampler.resetPeripherals(); }
+
+// anf [on|off] — the AdaptiveNoiseFilter is diagnostics-only (read by `sensor`); it's kept out of
+// the RT sample path by default. Enable it to populate the ANF/NSR stats, disable when done.
+static void cmdAnf(cmd *c) {
+    Command cc(c);
+    auto arg = cc.getArg(0).getValue();
+    if (arg == "on") Sensor::anfEnabled = true;
+    else if (arg == "off") Sensor::anfEnabled = false;
+    UART_LOG("anf %s", Sensor::anfEnabled ? "on" : "off");
+}
 
 // hostname [name]  — no arg prints the current hostname; an arg sets it.
 static void cmdHostname(cmd *c) {
@@ -1361,6 +1372,7 @@ void setupCli() {
 #endif
     cli.addCommand("adc-restart", cmdAdcRestart);
     cli.addCommand("adc-reset", cmdAdcReset);
+    cli.addCommand("anf", cmdAnf);
 
     cli.addBoundlessCmd("dc", cmdDc); // dc <hs> [ls]
     cli.addSingleArgCmd("sync", cmdSync);

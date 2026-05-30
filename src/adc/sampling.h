@@ -66,6 +66,7 @@ struct Sensor {
     NotchFilter *notchFilter = nullptr; // filter 50/60 Hz inverter noise
     RunningMedian5<float> med3{}; // filter burst noise
     AdaptiveNoiseFilter anf{};
+    inline static bool anfEnabled = false; // diagnostics-only; kept out of the RT path unless `anf on`
     EWM<false, float> ewm; // filter residual noise
     MeanAccumulator calibBuffer{}; // for offset calibration
 
@@ -117,7 +118,7 @@ struct Sensor {
         if (notchFilter)notchFilter->filter(&last, &v, 1);
         v = med3.next(v);
         ewm.add(v);
-        anf.add(v);
+        if (anfEnabled) anf.add(v);
 
         ++numSamples;
 

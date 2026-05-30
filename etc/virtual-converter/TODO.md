@@ -20,7 +20,12 @@ Design: [docs/superpowers/specs/2026-05-23-virtual-converter-design.md](../../do
 7. `vconv` console command (`pv`, `bat`, `set`, dump).
 8. `config/lab/vconv_mock/` board config.
 9. `test/host-stub/vconv-test.cpp` — CCM steady-state, DCM boundary, PV IV-curve peak, cap time constant.
-10. On-target smoke test: MPPT finds MPP near `0.8 * Voc`, PD loops regulate, charger reaches CV.
+10. ~~On-target smoke test: MPPT finds MPP near `0.8 * Voc`, PD loops regulate, charger reaches CV.~~
+    **Done (2026-05-30).** Validated on esp32-classic: plant `Isc=13 Voc=76 k=0.85`, MPPT converges
+    sweep→P&O and holds `Vin≈64.6V (=0.85·Voc), ~815W`, no protection trips. Classic needs its own
+    `config/lab/vconv_mock_esp32` (the original `vconv_mock` is S3-only: `mcu=esp32s3` + GPIOs 47/40/42
+    crash `pinMode` on classic) and `sdkconfig.esp32vconv`. See `doc/dev-notes/telnet-wifi-off-uaf.md`
+    for a crash this run surfaced.
 
 ## Config validation tool
 

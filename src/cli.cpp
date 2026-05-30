@@ -270,8 +270,10 @@ static void cmdWifi(cmd *c) {
     } else if (arg == "off") {
         // "off <minutes>" disables temporarily and keeps the saved ssid for reconnect;
         // bare "off" disables for good and forgets the sticky ssid.
+        // The actual WiFi/netif teardown is deferred to networkLoopTick's WiFi-down edge so it never
+        // runs inside this console/telnet input callback: deiniting the netif under the telnet socket
+        // the command arrived on frees lwip pbufs out from under the log mirror (InstrFetch UAF).
         long mins = cc.countArgs() >= 2 ? cc.getArg(1).getValue().toInt() : 0;
-        disconnect_wifi(true);
         g_app.disableWifi = true;
         if (mins > 0) {
             g_app.wifiReenableMs = wallClockMs() + (uint32_t) mins * 60000;

@@ -81,6 +81,8 @@ A registry holding `Service*` (global instance `g_services`, an inline variable 
 - `startEnabledAtBoot()` — starts every service whose persisted `enabled` flag is set.
 - `startEnabledNetworkServices()` — restarts enabled network services that are not `Running`;
   called on the Wi-Fi-up edge.
+- `stopNetworkServices()` — stops the network services while the netif is still valid; called on the
+  Wi-Fi-down edge, before `WiFi.disconnect()`.
 - `tickAll()` — ticks every service.
 
 ## Threading and integration
@@ -98,6 +100,13 @@ from constructors — the filesystem is not mounted at static-init time). Regist
 Network services (`requiresNetwork == true`) return false from `onStart()` while Wi-Fi is down, so
 they report `Failed`. When Wi-Fi comes up, `loopNetwork_task` detects the rising edge and calls
 `startEnabledNetworkServices()`, which (re)starts them. MDNS is set up before they start.
+
+The **falling edge** is symmetric, and deliberately deferred: `wifi off` only sets `disableWifi` —
+it may run from a console / telnet / MQTT input callback — and `loopNetwork_task` does the actual
+teardown on the next tick (`stopNetworkServices()` then `WiFi.disconnect()`), *outside* any input
+callback. Tearing down inline was a use-after-free: a `wifi off` arriving over telnet deinitialised
+the netif under its own socket, and the command's confirmation log — mirrored to that telnet client —
+then wrote to freed lwip pbufs.
 
 ## File layout
 

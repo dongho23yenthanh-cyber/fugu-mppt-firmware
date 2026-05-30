@@ -867,6 +867,21 @@ static void networkLoopTick() {
         connect_wifi_async();
     }
 
+    // WiFi-down edge: `wifi off` only sets disableWifi (from a console/telnet/MQTT input callback);
+    // do the actual teardown HERE, outside that callback. Stop network services while the netif is
+    // still valid, then drop WiFi — deiniting lwip from inside telnet.loop() freed pbufs under the
+    // log mirror (a use-after-free). Latched so it runs once per down edge.
+    static bool wifiTorndown = false;
+    if (g_app.disableWifi) {
+        if (!wifiTorndown) {
+            g_services.stopNetworkServices();
+            disconnect_wifi(true);
+            wifiTorndown = true;
+        }
+    } else if (wifiTorndown) {
+        wifiTorndown = false;
+    }
+
     if (!g_app.disableWifi) {
         /* RF/PLL bring-up adds only ~3ms RT-loop lag (measured bench + fry/flat), well under the
          * watchdog, so connect regardless of conversion; still gate on uC temp.

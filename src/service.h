@@ -208,6 +208,14 @@ public:
                 s->start();
     }
 
+    // Stop network-requiring services while the netif is still valid — symmetric to
+    // startEnabledNetworkServices(), called on the WiFi-down edge before WiFi.disconnect(). Releases
+    // each service's sockets + log sink before lwip is deinited (tearing down after deinit was a UAF).
+    void stopNetworkServices() {
+        for (auto *s: _services)
+            if (s->requiresNetwork() && s->state() != ServiceState::Stopped) s->stop();
+    }
+
     void tickAll() {
         for (auto *s: _services)
             s->tick();

@@ -22,6 +22,15 @@ several it waits and the control panel's "Devices" list lets you pick one (and s
 "Disconnect"). --ip pins a target and skips discovery; --match restricts auto-pick to hostnames
 containing the given substring.
 
+Capture save/load (bottom button row):
+  * "save NPZ"/"save CSV" write one file per channel under `<hostname>/<datetime>/<ch>_<SR>.{npz,csv}`
+    plus a `view.json` sidecar (per-channel scale/offset/coupling). The npz holds only the raw int16
+    samples (key `v`); timing is reconstructed on load from the `_<SR>` rate in the filename and the
+    capture time in the directory name, so no timestamps are stored.
+  * "load..." opens a file dialog; picking any file loads the whole capture directory, freezes live
+    streaming and plots it (the view anchors on the data's end). Click a device to go live again.
+  * "clear buf" empties all sample buffers.
+
 Connection + wire-format handling is modelled on the legacy scope-client.py reference.
 
   python etc/scope_client/fugu_scope.py                 # discover via mDNS + nat.env, pick in the UI

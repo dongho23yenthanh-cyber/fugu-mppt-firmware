@@ -64,6 +64,9 @@ void test_vout_interleave_poll_order();
 void test_vout_interleave_notch_rate();
 void test_cycle_no_interleave_two_channels();
 void test_streamed_watchdog_does_not_deadlock_read();
+// etc/rt.h — TaskNotification binary-semaphore wait() (boot "ADC error" burst regression)
+void test_tasknotification_burst_reads_as_one_wakeup();
+void test_tasknotification_single_wakeup_then_empty();
 
 // adc/ina226_conv_time.h + adc/adc.h (AsyncADC contract via ADC_Dummy)
 void test_ina226_convtime_exact_step();
@@ -321,6 +324,8 @@ void setup() {
     RUN_TEST(test_vout_interleave_notch_rate);
     RUN_TEST(test_cycle_no_interleave_two_channels);
     RUN_TEST(test_streamed_watchdog_does_not_deadlock_read);
+    RUN_TEST(test_tasknotification_burst_reads_as_one_wakeup);
+    RUN_TEST(test_tasknotification_single_wakeup_then_empty);
 
     // adc/ina226_conv_time.h
     RUN_TEST(test_ina226_convtime_exact_step);

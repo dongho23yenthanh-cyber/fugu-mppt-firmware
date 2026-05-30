@@ -86,6 +86,24 @@ reliably break out. Fix: for the `StreamedCallback` backend, **drain `read()` fi
 self-clears), then report `AdcError` from the watchdog afterwards. General rule: a liveness watchdog
 must never sit in front of the operation that proves liveness.
 
+**…but drain-first was necessary-not-sufficient — the real boot `ADC error` was `wait()` starving
+`read()`.** The reorder above still left every device tripping `E (….) main: ADC error` a second or
+two after boot. Root cause was *not* in the ADC code at all but in `TaskNotification::wait()`
+(`src/etc/rt.h`): it returned `ulTaskNotifyTake(pdFALSE, …) == 1`, i.e. true only when *exactly one*
+notification was pending. At boot `loopRT` arms the watchdog in `start()`, then sits in the
+`delay(1000)` under `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS` before the drain loop spins up — so the
+conv-done ISR piles up *thousands* of notifications. `wait()` then returns false (`count != 1`),
+`hasData()` is false, `read()` is **never called**, `lastDataUs_` never refreshes, and the watchdog
+trips on its first `isGood()` (instrumented: `reads=0 hits=0 stale≈1100ms`). The drain-first reorder
+can't help when the thing gating the drain is `hasData()` itself. Fix: make `wait()` a proper
+clear-on-exit binary semaphore — `ulTaskNotifyTake(pdTRUE, …) != 0` — so any pending count reads as
+one wakeup and `read()` drains the whole ring. This also removes a latent steady-state bug (the old
+`==1` dropped a sample whenever ≥2 frames queued between iterations) and matches the FreeRTOS
+"as-binary-semaphore" pattern `TaskNotification` already cites. The pre-watchdog firmware
+(`fry-adcOk-wifiSOF`) hid this: the same burst just cost a few harmless spin iterations.
+(Diagnostic gotcha: `%lld` in `ESP_LOG` corrupts args under newlib-nano — the first instrumentation
+pass printed impossible values; use 32-bit `%ld`/`%lu` casts. See *Configuration* / newlib notes.)
+
 ## Set explicit core affinity
 
 ```

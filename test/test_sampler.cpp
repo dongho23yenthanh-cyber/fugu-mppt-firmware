@@ -277,3 +277,30 @@ void test_streamed_watchdog_does_not_deadlock_read() {
     TEST_ASSERT_EQUAL_UINT32(1, s->numSamples);
     TEST_ASSERT_FLOAT_WITHIN(1e-3f, 42.0f, s->last);
 }
+
+// Regression for the boot "ADC error" (fry-brk1): TaskNotification::wait() must report a *burst* of
+// pending notifications as one wakeup, not starve read(). At boot loopRT arms the watchdog in
+// start(), then sits in delay(1000) (CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS) while the conv-done
+// ISR piles up thousands of notifications. The old (pdFALSE, ==1) wait() returned false for any
+// count != 1, so hasData() was false, read() never ran, lastDataUs_ never refreshed, and the
+// no-sample watchdog tripped. Clear-on-exit (pdTRUE, !=0) collapses the burst into one wakeup.
+void test_tasknotification_burst_reads_as_one_wakeup() {
+    TaskNotification n;
+    n.subscribe();          // bind this (the Unity/loop) task
+    n.wait(0);              // drain any stale count from prior tests
+
+    for (int i = 0; i < 2000; ++i) n.notify();   // burst, as a 1 s ISR pileup would
+
+    TEST_ASSERT_TRUE(n.wait(10));   // pre-fix: false (count==2000 != 1) -> read() starved
+    TEST_ASSERT_FALSE(n.wait(1));   // clear-on-exit drained the whole burst in one wakeup
+}
+
+// A single notification still wakes once and only once.
+void test_tasknotification_single_wakeup_then_empty() {
+    TaskNotification n;
+    n.subscribe();
+    n.wait(0);
+    n.notify();
+    TEST_ASSERT_TRUE(n.wait(10));
+    TEST_ASSERT_FALSE(n.wait(1));   // timed out: nothing left pending
+}

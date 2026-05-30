@@ -1,6 +1,5 @@
 import collections
 import math
-import os
 import select
 import socket
 import sys
@@ -16,7 +15,10 @@ import pandas as pd
 from matplotlib.pyplot import figure
 from scipy import signal
 
-from etc.fugu.discover import discover_scope_servers
+try:
+    from etc.scope_client.nat_discover import discover_endpoints, choose_endpoint
+except ImportError:
+    from nat_discover import discover_endpoints, choose_endpoint
 
 duration = 4 / 1
 sample_rate = 2000
@@ -258,78 +260,54 @@ num_bytes_rx = 0
 channelNames = dict()
 
 
-def nat_scope_endpoints():
-    """Scope endpoints derived from the NAT-forwarded telnet endpoints in `etc/nat.env`
-    ($NAT_TELNET, host:port comma-separated). The scope port is telnet + 1 (device 24 vs 23,
-    mirrored by the router). Returns a list of (host, port)."""
-    if not os.environ.get('NAT_TELNET'):
-        env = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'etc', 'nat.env')
-        try:
-            with open(env) as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#') and '=' in line:
-                        k, _, v = line.partition('=')
-                        os.environ.setdefault(k.strip(), v.strip())
-        except FileNotFoundError:
-            pass
-    out = []
-    for ep in (os.environ.get('NAT_TELNET') or '').split(','):
-        ep = ep.strip()
-        host, _, port = ep.partition(':')
-        if ep and port:
-            out.append((host.strip(), int(port) + 1))
-    return out
-
-
-def receive_loop(decoder: 'ScopeDecoder'):
+def receive_loop(decoder: 'ScopeDecoder', endpoint):
+    """(Re)connect to the chosen `endpoint` = (host, port, name) and pump samples. If no endpoint
+    was chosen (none discovered at startup), discover and auto-connect to the first that appears."""
     global num_bytes_rx, is_connected
 
     while True:
-        print('discovering hosts...')
-        candidates = [(a[0], a[1]) for a in discover_scope_servers()] + nat_scope_endpoints()
+        if endpoint is None:
+            cands = discover_endpoints()
+            if not cands:
+                print('no services discovered')
+                time.sleep(1)
+                continue
+            endpoint = cands[0]
+            print('auto-selected', endpoint)
 
-        if not candidates:
-            print('no services discovered')
-            time.sleep(1)
+        host, port, name = endpoint
+        print('connecting', (host, port), name or '', '...')
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(4)
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            s.connect((host, port))
+        except Exception as e:
+            print('connection failed', (host, port), e)
+            s.close()
+            time.sleep(2)
             continue
 
-        print('candidates:', candidates)
-        for addr in candidates:
-            print('connecting', addr, '...')
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(4)
-            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        t_last = time.time()
+        is_connected = True
+
+        while True:
             try:
-                s.connect(addr)
+                buf = s.recv(1024 * 4, 0)
+                num_bytes_rx += len(buf)
+                t_last = time.time()
+                decoder.decode(buf)
             except Exception as e:
-                print('connection failed', addr, e)
-                s.close()
-                continue
-
-            t_last = time.time()
-            is_connected = True
-
-            while True:
-                try:
-                    buf = s.recv(1024 * 4, 0)
-                    num_bytes_rx += len(buf)
-                    t_last = time.time()
-                    decoder.decode(buf)
-                except Exception as e:
-                    if time.time() - t_last >= 8:
-                        print('timeout!', e)
-                        s.close()
-                        is_connected = False
-                        # channelNames.clear()
-                        break
-                    else:
-                        pass
-                        # raise
-                    time.sleep(.1)
-            break       # held a connection then lost it; rediscover
-        else:
-            time.sleep(2)
+                if time.time() - t_last >= 8:
+                    print('timeout!', e)
+                    s.close()
+                    is_connected = False
+                    # channelNames.clear()
+                    break
+                else:
+                    pass
+                    # raise
+                time.sleep(.1)
 
 
 class ScopeDecoder:
@@ -470,7 +448,10 @@ def main():
 
     dec = ScopeDecoder(on_sample=on_sample, on_channels=on_channels)
 
-    Thread(target=receive_loop, args=(dec,), daemon=True).start()
+    print('discovering hosts...')
+    endpoint = choose_endpoint(discover_endpoints())
+
+    Thread(target=receive_loop, args=(dec, endpoint), daemon=True).start()
     Thread(target=redraw_loop, args=(channels, fig, ax), daemon=True).start()
     Thread(target=lf_loop, daemon=True).start()
 
@@ -478,7 +459,5 @@ def main():
         fpl.loop.run()
     plt.show()
 
-print('discovering hosts..')
-print(discover_scope_servers())
 main()
 # websockets.

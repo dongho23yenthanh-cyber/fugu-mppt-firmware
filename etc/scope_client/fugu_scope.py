@@ -16,14 +16,21 @@ x-axis is therefore real time (seconds), shared across channels of different rat
   * edge trigger with auto/normal mode, pre-trigger position, and a dotted level line
     you can drag with the mouse; the trigger follows the source channel's coupling
 
+Device discovery runs continuously in a background thread (--discover-interval, default 3 s; the
+"Rescan" button forces a sweep). With a single device found the receive loop auto-connects; with
+several it waits and the control panel's "Devices" list lets you pick one (and switch live, or
+"Disconnect"). --ip pins a target and skips discovery; --match restricts auto-pick to hostnames
+containing the given substring.
+
 Connection + wire-format handling is modelled on the legacy scope-client.py reference.
 
-  python etc/scope_client/fugu_scope.py                 # discover via mDNS + nat.env
-  python etc/scope_client/fugu_scope.py -m fry          # pick a discovered device by hostname
+  python etc/scope_client/fugu_scope.py                 # discover via mDNS + nat.env, pick in the UI
+  python etc/scope_client/fugu_scope.py -m fry          # auto-pick a discovered device by hostname
   python etc/scope_client/fugu_scope.py --ip 192.168.4.2 [--port 24]
 
 NAT-routed boards (fry/flat) aren't mDNS-reachable; their scope endpoints are derived from the
-telnet endpoints in `etc/nat.env` ($NAT_TELNET) as port+1 (device scope port 24 vs telnet 23).
+telnet endpoints in `etc/nat.env` ($NAT_TELNET): the router forwards telnet on 23x and scope on
+24x, so the scope port is the telnet port + 10.
 """
 import argparse
 import atexit
@@ -43,6 +50,11 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+try:
+    from nat_discover import ScopeDiscovery
+except ImportError:
+    from etc.scope_client.nat_discover import ScopeDiscovery
+
 import fastplotlib as fpl
 from fastplotlib.ui import EdgeWindow
 from imgui_bundle import imgui
@@ -53,41 +65,6 @@ TRIGGER_COLOR = "#ff5555"
 BUF_SAMPLES = 200_000          # per-channel sample buffer depth
 COUPLINGS = ["DC", "AC"]
 SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "fugu_scope.yaml")
-NAT_SCOPE_PORT_OFFSET = 1      # scope port = telnet port + 1 (device 24 vs 23, mirrored by the NAT router)
-
-
-def _load_env_file(path):
-    """Fill os.environ from a KEY=VALUE file (shell-set vars win); silent if absent."""
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, val = line.partition("=")
-                os.environ.setdefault(key.strip(), val.strip())
-    except FileNotFoundError:
-        pass
-
-
-def nat_scope_endpoints():
-    """Scope endpoints derived from the NAT-forwarded telnet endpoints in `nat.env`.
-
-    `$NAT_TELNET` (filled from `etc/nat.env`) lists telnet endpoints as comma-separated host:port.
-    The scope service sits one port above telnet on the device, and the router mirrors that on the
-    forwarded port, so each scope endpoint is the telnet endpoint's port + NAT_SCOPE_PORT_OFFSET.
-    Returns a list of (host, port); empty when unset.
-    """
-    if not os.environ.get("NAT_TELNET"):
-        _load_env_file(os.path.join(_ROOT, "etc", "nat.env"))
-    out = []
-    for ep in (os.environ.get("NAT_TELNET") or "").split(","):
-        ep = ep.strip()
-        host, _, port = ep.partition(":")
-        if not ep or not port:
-            continue
-        out.append((host.strip(), int(port) + NAT_SCOPE_PORT_OFFSET))
-    return out
 
 
 class Channel:
@@ -163,6 +140,17 @@ class Channel:
     def dt_est(self, fallback):
         return self.dt_ch if self.dt_ch > 0 else fallback
 
+    def clear(self):
+        """Drop all buffered samples + the clock-recovery state, keeping the view settings
+        (scale/offset/coupling/visibility/line)."""
+        self.ring.fill(np.nan)
+        self.ts.fill(np.nan)
+        self.head = self.n_samples = 0
+        self.t_first = self.dt_ch = self.ts_last = self._t_prev = 0.0
+        if self._med is not None:
+            self._med.clear()
+        self._ndrawn = 0
+
     def recent(self, k):
         """Newest k (value, timestamp) samples, oldest..newest."""
         n = min(self.head, BUF_SAMPLES)
@@ -224,6 +212,13 @@ class ScopeState:
         self.hostname = ""
         self.fps = 0.0
         self.do_autofit = False
+        # device discovery / selection
+        self.candidates = []           # discovered scope endpoints [(host, port, name)]
+        self.requested = None          # endpoint the receive loop should hold, or None
+        self.user_picked = False       # once True, auto-pick won't override the manual choice
+        self.rejected = set()          # (host, port) auto-pick skips (e.g. --match mismatch)
+        self.discovery = None          # ScopeDiscovery (persistent mDNS browser), set in main()
+        self.rescan = threading.Event()
         # persisted settings applied to channels as they appear
         self.saved_channels = {}
         self.saved_trig_source = None
@@ -250,6 +245,42 @@ class ScopeState:
         with self.lock:
             return [self.channels[c] for c in self.order]
 
+    def clear_buffers(self):
+        """Reset every channel's sample buffer (e.g. on (re)connect, to drop stale samples)."""
+        with self.lock:
+            for ch in self.channels.values():
+                ch.clear()
+
+    # --- device discovery / selection ------------------------------------
+    def set_candidates(self, cand):
+        """Replace the discovered-endpoint list (called from the discovery thread). With no manual
+        choice yet, auto-connect only when there's no ambiguity: a single candidate, or a --match
+        filter that already narrowed it. Multiple candidates wait for the user to pick."""
+        with self.lock:
+            self.candidates = cand
+            if self.user_picked or self.requested is not None:
+                return
+            usable = [c for c in cand if (c[0], c[1]) not in self.rejected]
+            if usable and (len(usable) == 1 or self.args.match):
+                self.requested = usable[0]
+
+    def list_candidates(self):
+        with self.lock:
+            return list(self.candidates)
+
+    def select(self, target):
+        with self.lock:
+            self.user_picked = True
+            self.requested = target
+
+    def disconnect(self):
+        with self.lock:
+            self.user_picked = True
+            self.requested = None
+
+    def request_rescan(self):
+        self.rescan.set()
+
 
 # ---------------------------------------------------------------------------
 # wire protocol decoder (12-bit packed samples + ###ScopeHead header)
@@ -274,44 +305,30 @@ class Decoder:
                                     for c in self.s.channel_list()])
             return
         chans = self.s.channels
-        batches = {}                    # cid -> [values] in this chunk
-        i, n = 0, len(ba)
-        while i + 1 < n:
-            b0 = ba[i]
-            if b0 & 0x01:               # extended (16/32-bit) not implemented
-                break
-            cid = (b0 & 0x0E) >> 1
-            v = (ba[i + 1] << 4) | ((b0 & 0xF0) >> 4)
-            if cid in chans:
-                batches.setdefault(cid, []).append(v)
-            i += 2
-        for cid, vals in batches.items():
-            chans[cid].add_batch(vals, t, self.s.dt)
+        n = len(ba) & ~1                # whole 2-byte samples only
+        if n < 2:
+            return
+        raw = np.frombuffer(ba, dtype=np.uint8, count=n)
+        b0, b1 = raw[0::2], raw[1::2]
+        ext = np.flatnonzero(b0 & 0x01)     # extended (16/32-bit) samples: stop at the first
+        if ext.size:
+            if ext[0] == 0:
+                return
+            b0, b1 = b0[:ext[0]], b1[:ext[0]]
+        cid = (b0 & 0x0E) >> 1
+        v = (b1.astype(np.uint16) << 4) | (b0 >> 4)     # 12-bit little-nibble-packed value
+        for c in np.unique(cid):                        # one batch per channel per chunk
+            ci = int(c)
+            if ci in chans:
+                chans[ci].add_batch(v[cid == c], t, self.s.dt)
 
 
-def discover_candidates(state: ScopeState):
-    """Scope endpoints to try, as (host, port, hostname|None): mDNS-advertised first, then the
-    NAT-forwarded endpoints from nat.env (hostname unknown until the scope header arrives)."""
-    cand = []
-    try:
-        from etc.fugu.discover import discover_scope_servers
-        for a, p, name in discover_scope_servers():
-            host = (name or a).rstrip('.')
-            host = host[:-6] if host.endswith('.local') else host
-            cand.append((a, p, host))
-    except Exception as e:
-        print("mDNS discovery failed:", e)
-    seen = {(h, p) for h, p, _ in cand}
-    for h, p in nat_scope_endpoints():
-        if (h, p) not in seen:
-            cand.append((h, p, None))
-    return cand
-
-
-def serve_connection(state: ScopeState, dec: Decoder, host, port, name):
-    """Connect to one scope endpoint and pump samples until it drops. Returns True if a live
-    connection was held (rediscover afterwards), False if the endpoint was unusable or filtered
-    out by --match (try the next candidate)."""
+def serve_connection(state: ScopeState, dec: Decoder, target):
+    """Connect to one scope endpoint `target` = (host, port, name) and pump samples until it
+    drops or the user picks another device. Returns True if the connection was held (the receive
+    loop then just reconnects to whatever is requested), False if the endpoint was unusable or
+    filtered out by --match (its (host, port) is marked rejected so auto-pick skips it)."""
+    host, port, name = target
     if name:
         state.hostname = name
     state.status = f"connecting {host}:{port}"
@@ -326,9 +343,15 @@ def serve_connection(state: ScopeState, dec: Decoder, host, port, name):
         return False
     state.connected = True
     state.status = f"connected {host}:{port}"
+    state.clear_buffers()               # drop stale samples from any previous connection
     state.t0 = time.time()
     t_last = time.time()
+    noted = False
     while True:
+        if state.requested is not target:   # user picked another device / disconnected (atomic read)
+            s.close()
+            state.connected = False
+            return True
         try:
             buf = s.recv(1024 * 8)
             if not buf:
@@ -336,11 +359,16 @@ def serve_connection(state: ScopeState, dec: Decoder, host, port, name):
             state.num_bytes += len(buf)
             t_last = time.time()
             dec.decode(buf, t_last)         # newest sample of the batch ~= now
+            if not noted and state.hostname and state.discovery is not None:
+                state.discovery.note_hostname(host, port, state.hostname)   # picker label + skip re-probe
+                noted = True
             m = state.args.match
             if m and state.hostname and m not in state.hostname:
                 state.status = f"{state.hostname} != {m}, next"
                 s.close()
                 state.connected = False
+                with state.lock:
+                    state.rejected.add((host, port))
                 return False
         except Exception as e:
             if time.time() - t_last >= 8:
@@ -351,25 +379,42 @@ def serve_connection(state: ScopeState, dec: Decoder, host, port, name):
             time.sleep(0.05)
 
 
-def receive_loop(state: ScopeState, dec: Decoder):
+def discovery_loop(state: ScopeState):
+    """Snapshot the persistent ScopeDiscovery into state every --discover-interval seconds (and
+    immediately on a Rescan request). The mDNS browser runs continuously inside ScopeDiscovery, so
+    a snapshot is cheap and silent — no per-sweep Zeroconf churn."""
     while True:
-        if state.args.ip:
-            candidates = [(state.args.ip, state.args.port, None)]
-        else:
-            state.status = "discovering..."
-            candidates = discover_candidates(state)
-            if state.args.match:        # drop mDNS hosts that don't match; NAT (name=None) kept,
-                candidates = [c for c in candidates  # filtered after its scope header arrives
-                              if c[2] is None or state.args.match in c[2]]
-            if not candidates:
-                time.sleep(1)
-                continue
-            print("candidates", candidates)
-        for host, port, name in candidates:
-            if serve_connection(state, dec, host, port, name):
-                break               # held a live connection; rediscover from scratch
-        else:
-            time.sleep(1)           # nothing usable this round
+        cand = state.discovery.snapshot()
+        if state.args.match:            # drop mDNS hosts that don't match; NAT (name=None) kept,
+            cand = [c for c in cand     # its hostname is only known once the telnet probe resolves
+                    if c[2] is None or state.args.match in c[2]]
+        state.set_candidates(cand)
+        state.rescan.wait(state.args.discover_interval)
+        state.rescan.clear()
+
+
+def receive_loop(state: ScopeState, dec: Decoder):
+    if state.args.ip:                   # explicit target: no discovery, just (re)connect forever
+        target = (state.args.ip, state.args.port, None)
+        state.select(target)
+        while True:
+            serve_connection(state, dec, target)
+            time.sleep(0.5)
+    while True:                         # discovery runs in discovery_loop; here we just hold a pick
+        with state.lock:
+            target = state.requested
+            n = len(state.candidates)
+            auto = not state.user_picked
+        if target is None:
+            state.status = "select a device" if n > 1 else "discovering..."
+            time.sleep(0.3)
+            continue
+        held = serve_connection(state, dec, target)
+        if not held and auto:           # auto-picked endpoint unusable; let auto-pick re-choose
+            with state.lock:
+                if state.requested == target and not state.user_picked:
+                    state.requested = None
+        time.sleep(0.3)
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +443,40 @@ class Controls(EdgeWindow):
         super().__init__(figure=figure, size=size, location=location, title="fugu scope")
         self.s = state
 
+    def _devices(self, s):
+        """Discovered-device picker. The list refreshes in the background; click one to connect,
+        Disconnect to release. With a single device the receive loop auto-connects; with several it
+        waits here for a pick."""
+        with s.lock:
+            cands = list(s.candidates)
+            req = s.requested
+            picked = s.user_picked
+        imgui.separator()
+        imgui.text(f"Devices ({len(cands)})")
+        shown = list(cands)
+        if req is not None and req not in shown:    # keep a NAT/manual target visible even if not advertised
+            shown.append(req)
+        for i, c in enumerate(shown):
+            host, port, name = c
+            is_req = (c == req)
+            connected = s.connected and is_req
+            label = (s.hostname if connected and s.hostname else (name or f"{host}:{port}"))
+            mark = "> " if is_req else "  "
+            imgui.push_id(i)
+            clicked, _ = imgui.selectable(mark + label + ("  *" if connected else ""), is_req)
+            imgui.pop_id()
+            if clicked:
+                s.select(c)
+        if not shown:
+            imgui.text_disabled("  (discovering...)")
+        if imgui.small_button("Rescan"):
+            s.request_rescan()
+        imgui.same_line()
+        if imgui.small_button("Disconnect"):
+            s.disconnect()
+        if req is None and not picked and len(cands) > 1:
+            imgui.text_colored(imgui.ImVec4(1.0, 0.8, 0.2, 1.0), "multiple found - pick one")
+
     def update(self):
         s = self.s
         title = s.hostname or (f"{s.args.ip}:{s.args.port}" if s.args.ip else "")
@@ -405,6 +484,9 @@ class Controls(EdgeWindow):
         imgui.text(s.status)
         imgui.text(f"fps {s.fps:4.0f}  rx {s.num_bytes/1e3/max(1e-3, time.time()-s.t0):6.1f} kB/s")
         chans = s.channel_list()
+
+        if not s.args.ip:
+            self._devices(s)
 
         imgui.separator()
         imgui.text("Horizontal")
@@ -567,6 +649,8 @@ def main():
     ap.add_argument("-m", "--match", help="connect only to a device whose hostname contains this")
     ap.add_argument("--rate", type=float, default=2000, help="fallback sample rate Hz")
     ap.add_argument("--median", action="store_true", help="5-tap median spike filter")
+    ap.add_argument("--discover-interval", type=float, default=3.0,
+                    help="seconds between background device-discovery sweeps")
     args = ap.parse_args()
 
     state = ScopeState(args)
@@ -574,6 +658,9 @@ def main():
     atexit.register(save_settings, state, SETTINGS_PATH)
     dec = Decoder(state)
     threading.Thread(target=receive_loop, args=(state, dec), daemon=True).start()
+    if not args.ip:
+        state.discovery = ScopeDiscovery()
+        threading.Thread(target=discovery_loop, args=(state,), daemon=True).start()
 
     fig = fpl.Figure(size=(1100, 650))
     sub = fig[0, 0]

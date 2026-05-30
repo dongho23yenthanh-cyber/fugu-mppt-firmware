@@ -94,8 +94,7 @@ class Dut:
         return wait_until(lambda: self.tap.saw("boot", since=t0), boot_timeout, poll=0.3) is not None
 
     def force_idle(self):
-        # `dc 0` switches to manual PWM mode at zero duty, keeping the converter idle so
-        # wifiLoop() keeps attempting reconnect (main.cpp:717 only retries when Pout < 10W).
+        # `dc 0` switches to manual PWM mode at zero duty, keeping the converter idle.
         self.cmd("dc 0", timeout=2.0)
 
     def ip(self) -> str:

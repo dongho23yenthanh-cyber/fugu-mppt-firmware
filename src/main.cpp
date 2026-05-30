@@ -56,7 +56,7 @@
 #include <esp_timer.h>
 #include <esp_ota_ops.h>
 #include <driver/gpio.h>
-#include <filesystem>
+#include <dirent.h>
 
 #include "etc/rt_core_check.h"
 
@@ -409,9 +409,11 @@ void setup() {
     // file → boot loop). Fall back to an empty config and run the safe-idle path via g_app.setupErr.
     ConfFile boardConf = loadConfSafe("/littlefs/conf/board.conf");
 
-    if (!boardConf && std::filesystem::exists("/littlefs/conf")) {
-        for (const auto &entry: std::filesystem::directory_iterator("/littlefs/conf")) {
-            ESP_LOGI("main", "file: %s", entry.path().c_str());
+    if (!boardConf) {
+        if (DIR *d = opendir("/littlefs/conf")) {
+            for (dirent *e; (e = readdir(d));)
+                ESP_LOGI("main", "file: %s", e->d_name);
+            closedir(d);
         }
     }
 

@@ -1,13 +1,16 @@
 #include "cli.h"
 
 #include <Arduino.h>
+
+#include "tele/telemetry_service.h"
 #ifdef WITH_NETW
 #include <WiFi.h>
 #endif
 #include <cmath>
 #include <cstring>
 #include <cstdio>
-#include <filesystem>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <esp_timer.h>
 #include <esp_memory_utils.h>
 #include <esp_core_dump.h>
@@ -308,23 +311,29 @@ static std::string lfsPath(const String &arg) {
 
 // ls [path]  — list a littlefs directory (default /littlefs), or stat a single file.
 static void cmdLs(cmd *c) {
-    namespace fs = std::filesystem;
     auto path = lfsPath(Command(c).getArg(0).getValue());
-    std::error_code ec;
-    if (!fs::exists(path, ec))
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0)
         CMD_FAIL_RETURN("ls: not found: %s", path.c_str());
-    if (!fs::is_directory(path, ec)) {
-        UART_LOG("%8lu  %s", (unsigned long) fs::file_size(path, ec), path.c_str());
+    if (!S_ISDIR(st.st_mode)) {
+        UART_LOG("%8lu  %s", (unsigned long) st.st_size, path.c_str());
         return;
     }
+    DIR *d = opendir(path.c_str());
+    if (!d)
+        CMD_FAIL_RETURN("ls: cannot open %s", path.c_str());
     int n = 0;
-    for (auto &e: fs::directory_iterator(path, ec)) {
-        if (e.is_directory(ec))
-            UART_LOG("    <dir>  %s/", e.path().filename().c_str());
+    for (dirent *e; (e = readdir(d));) {
+        std::string full = path + "/" + e->d_name;
+        struct stat es;
+        bool ok = stat(full.c_str(), &es) == 0;
+        if (ok && S_ISDIR(es.st_mode))
+            UART_LOG("    <dir>  %s/", e->d_name);
         else
-            UART_LOG("%8lu  %s", (unsigned long) e.file_size(ec), e.path().filename().c_str());
+            UART_LOG("%8lu  %s", (unsigned long) (ok ? es.st_size : 0), e->d_name);
         ++n;
     }
+    closedir(d);
     UART_LOG("ls: %d entries in %s", n, path.c_str());
 }
 

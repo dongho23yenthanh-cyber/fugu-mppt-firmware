@@ -1207,9 +1207,12 @@ static void cmdStatus(cmd *) {
              p.Vbat_max, chg.Vout_max(), p.Ibat_lim, chg.Iout_max());
     UART_LOG("  v_term=%.3fV cv_min=%.3f cv_eoc=%.3f  Cbat=%.1fAh recharge_dod=%.2f",
              chg.termCond.v_term(), p.cv_min, p.cv_eoc, p.Cbat, p.recharge_dod);
+    float ah = bs.coulombCounter.ahSinceFull();
     UART_LOG("  BMS vcell_high=%.3fV (%s, %lus ago)  ibat=%.2fA  ahSinceFull=%.2fAh  vout_avg=%.2fV",
              bs.vcell_high, vcOk ? "ok" : "stale/na", ageS,
-             bs.ibatSmoothed(), bs.coulombCounter.ahSinceFull(), bs.vout_avg.get());
+             bs.ibatSmoothed(), ah, bs.vout_avg.get());
+    if ((bool) chg.termCond && std::isfinite(p.Cbat) && p.Cbat > 0.f && p.recharge_dod > 0.f)
+        UART_LOG("  DoD since full: %.0f%% / %.0f%% to recharge", ah / p.Cbat * 100.f, p.recharge_dod * 100.f);
 }
 
 // svc [list]                       svc on|off|restart|rs <name>

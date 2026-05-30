@@ -861,14 +861,24 @@ def pull_coredump(con, action, elf_path):
     with open(out, "wb") as f:
         f.write(data)
     print(f"coredump: wrote {len(data)} bytes to {out}")
+    if not shutil.which("esp-coredump"):
+        print("esp-coredump not on PATH — in the ESP-IDF env (. ./idf-export.sh) run:")
+        print(f"  esp-coredump info_corefile --core-format raw -c {out} "
+              f"{elf_path or 'build/fugu-firmware.elf'}")
+        return 0
+    # Without an explicit --elf, let the ELF archive match the dump to its build by the
+    # app-SHA the dump embeds — esp-coredump is SHA-gated and a guessed build/ rarely matches.
+    archiver = os.path.join(os.path.dirname(__file__), "idf-devtools", "elf_archive.py")
+    if not elf_path and os.path.exists(archiver):
+        cmd = [sys.executable, archiver, "decode", out]
+        print("+ " + " ".join(cmd))
+        if subprocess.run(cmd).returncode == 0:
+            return 0
+        print("elf-archive could not match this dump; falling back to build/ ELF")
     elf = elf_path or "build/fugu-firmware.elf"
     cmd = ["esp-coredump", "info_corefile", "--core-format", "raw", "-c", out, elf]
-    if shutil.which("esp-coredump"):
-        print("+ " + " ".join(cmd))
-        subprocess.run(cmd)
-    else:
-        print("esp-coredump not on PATH — in the ESP-IDF env (. ./idf-export.sh) run:")
-        print("  " + " ".join(cmd))
+    print("+ " + " ".join(cmd))
+    subprocess.run(cmd)
     return 0
 
 

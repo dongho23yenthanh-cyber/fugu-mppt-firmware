@@ -1,8 +1,12 @@
 #include <unity.h>
 #include <array>
+#include <memory>
 #include <esp_log.h>
 #include "util.h"   // loopWallClockUs_, wallClockMs() — tracker.h relies on its includer for these
 #include "tracker.h"
+
+// Tracker embeds two 2048-entry tables (~16 KB) — far over the task stack, so heap-allocate it
+// (the firmware holds it as a static MpptController member, never on the stack).
 
 // The Tracker is time-gated: a perturbation ("tick") only happens when
 // now - _time > 1000/frequency. wallClockMs() reads loopWallClockUs_, which the
@@ -17,7 +21,8 @@ static void advanceMs(unsigned long ms) { loopWallClockUs_ += ms * 1000ULL; }
 // power < 1: tracker forces direction=true (pump more power) regardless of prior direction.
 void test_tracker_low_power_forces_pump() {
     loopWallClockUs_ = 1'000'000;
-    Tracker t;
+    auto tp = std::make_unique<Tracker>();
+    auto &t = *tp;
     t.resetTracker(0.f, /*direction=*/false);
     advanceMs(100);
     float step = t.update(0.5f, 100, 0.f);
@@ -28,7 +33,8 @@ void test_tracker_low_power_forces_pump() {
 // dP < 0 beyond the deadband -> reverse perturbation direction.
 void test_tracker_reverses_on_power_drop() {
     loopWallClockUs_ = 1'000'000;
-    Tracker t;
+    auto tp = std::make_unique<Tracker>();
+    auto &t = *tp;
     t.resetTracker(100.f, /*direction=*/true);
     advanceMs(100);
     float step = t.update(90.f, 100, 0.f);   // dP = -10
@@ -39,7 +45,8 @@ void test_tracker_reverses_on_power_drop() {
 // dP > 0: keep climbing in the same direction.
 void test_tracker_keeps_direction_on_power_rise() {
     loopWallClockUs_ = 1'000'000;
-    Tracker t;
+    auto tp = std::make_unique<Tracker>();
+    auto &t = *tp;
     t.resetTracker(100.f, /*direction=*/true);
     advanceMs(100);
     float step = t.update(110.f, 100, 0.f);  // dP = +10
@@ -50,7 +57,8 @@ void test_tracker_keeps_direction_on_power_rise() {
 // A drop smaller than minPowerStep (1.0) and below minPowerStepRel must not reverse.
 void test_tracker_deadband_ignores_small_drop() {
     loopWallClockUs_ = 1'000'000;
-    Tracker t;
+    auto tp = std::make_unique<Tracker>();
+    auto &t = *tp;
     t.resetTracker(100.f, /*direction=*/true);
     advanceMs(100);
     float step = t.update(99.5f, 100, 0.f);  // dP=-0.5: abs<1.0 and 0.5/105 < 0.015
@@ -62,7 +70,8 @@ void test_tracker_deadband_ignores_small_drop() {
 // power is rising (which on its own would not reverse).
 void test_tracker_cloud_recovery_reverses_on_vin_jump() {
     loopWallClockUs_ = 1'000'000;
-    Tracker t;
+    auto tp = std::make_unique<Tracker>();
+    auto &t = *tp;
     t.resetTracker(100.f, /*direction=*/true);
     advanceMs(100);
     t.update(100.f, 100, 30.f);  // primes _lastVin (0->30 reverses once); dir now false
@@ -86,7 +95,8 @@ void test_tracker_converges_to_peak() {
         return p < 0.f ? 0.f : p;
     };
     int duty = 200;                       // start ~800 below the peak, in the zero-power region
-    Tracker t;
+    auto tp = std::make_unique<Tracker>();
+    auto &t = *tp;
     t.resetTracker(P(duty), /*direction=*/true);
     for (int i = 0; i < 140; ++i) {
         advanceMs(100);

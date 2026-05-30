@@ -38,6 +38,7 @@ import asyncio
 import glob
 import os
 import re
+import signal
 import sys
 import threading
 import time
@@ -414,10 +415,22 @@ def discover_devices():
         (scan_ble_proxy, _print_ble_proxy),
         (scan_mqtt, _print_mqtt),
     ]
-    with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
-        futs = {ex.submit(scan): printer for scan, printer in jobs}
-        for fut in as_completed(futs):
-            futs[fut](fut.result())
+    # The BLE/socket scans block in worker threads that can't be cancelled synchronously, so a
+    # KeyboardInterrupt in the main thread can't unwind the executor's join (Ctrl+C would otherwise
+    # hang until the slowest scan returns). Install a SIGINT handler that exits immediately — the
+    # scan is read-only, nothing to clean up.
+    def _on_sigint(*_):
+        print("\nscan interrupted", file=sys.stderr, flush=True)
+        os._exit(130)
+
+    prev = signal.signal(signal.SIGINT, _on_sigint)
+    try:
+        with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+            futs = {ex.submit(scan): printer for scan, printer in jobs}
+            for fut in as_completed(futs):
+                futs[fut](fut.result())
+    finally:
+        signal.signal(signal.SIGINT, prev)
     return 0
 
 
@@ -846,6 +859,11 @@ def main():
 
         interactive(con, elf_path)  # default
         return 0
+    except (OSError, EOFError, ConnectionError) as e:
+        # A mid-session connection drop (e.g. the firmware's single-client telnet server reused
+        # while a prior client lingers) should exit cleanly, not dump a traceback.
+        print(f"connection error: {e}", file=sys.stderr)
+        return 1
     finally:
         con.close()
 

@@ -35,6 +35,7 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY = sys.executable
@@ -241,9 +242,15 @@ def main():
 
     clusters = CLUSTERS if o.cluster == "all" else [o.cluster]
     results = []
+    ran_one = False
     for spec_name, script, cl, _note, build, timeout in SPECS:
         if cl in clusters:
+            # The device's telnet server is single-client; settle between back-to-back tests so a
+            # new connect doesn't race the prior test's not-yet-released socket (transient drops).
+            if ran_one and not o.dry_run:
+                time.sleep(2.0)
             results.append((spec_name, run_one(spec_name, script, build, timeout, o)))
+            ran_one = True
     if "destructive" in clusters and o.with_fuzz:
         for name, script, timeout in FUZZ:
             results.append((name, run_one(name, script, lambda o: [], timeout, o)))

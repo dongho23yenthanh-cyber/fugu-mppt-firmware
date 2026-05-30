@@ -71,12 +71,25 @@ def main():
         net = con.command("netstat", timeout=4.0)
         if not net.ok:
             print("`netstat` not recognised — CONFIG_FUGU_WITH_NETTOOLS is off; skipping all checks", flush=True)
-            for name in ("netstat", "nslookup", "ping", "tcpconnect", "curl GET", "curl POST"):
+            for name in ("netstat", "ifconfig", "arg-validation", "nslookup", "resolve",
+                         "ping", "tcpconnect", "probe", "curl GET", "curl POST"):
                 res.skip(name, "feature not built")
             return 0
 
         # --- netstat (works regardless of link state) ---
         res.check("netstat prints a mac= line", "mac=" in net.text, net.text.strip()[:80])
+        # `ifconfig` is an alias for the same handler
+        ifc = con.command("ifconfig", timeout=4.0)
+        res.check("ifconfig alias prints a mac= line", ifc.ok and "mac=" in ifc.text, ifc.text.strip()[:60])
+
+        # --- argument validation (link-independent): every verb rejects malformed args *before*
+        # touching the network, so these hold whether or not WiFi is up, and prove the verbs parse
+        # their args rather than merely existing. ---
+        for label, bad in (("curl", "curl"), ("ping", "ping"),
+                           ("nslookup", "nslookup"), ("tcpconnect", "tcpconnect 1.2.3.4")):
+            r = con.command(bad, timeout=4.0)
+            res.check(f"{label} rejects malformed args", not r.ok,
+                      (r.text.strip().splitlines() or ["no reply"])[-1][:70])
         gw = None
         if m := re.search(r"gw=(\d+\.\d+\.\d+\.\d+)", net.text):
             gw = m.group(1)
@@ -104,6 +117,10 @@ def main():
             nl = con.command("nslookup 8.8.8.8", timeout=4.0)
             res.check("nslookup resolves a literal IP", nl.ok and "8.8.8.8 -> 8.8.8.8" in nl.text,
                       nl.text.strip()[:80])
+            # `resolve` is an alias for nslookup (same handler -> same "nslookup:" reply prefix)
+            rs = con.command("resolve 8.8.8.8", timeout=4.0)
+            res.check("resolve alias resolves a literal IP", rs.ok and "8.8.8.8 -> 8.8.8.8" in rs.text,
+                      rs.text.strip()[:60])
             host = con.command("nslookup example.com", timeout=6.0)
             if host.ok and "->" in host.text:
                 res.check("nslookup resolves a hostname (DNS)", True, host.text.strip().splitlines()[-1][:60])
@@ -126,6 +143,11 @@ def main():
             verdict = re.search(r"tcpconnect: \S+ (open|refused|timeout|error)", tc.text)
             res.check("tcpconnect emits a verdict", verdict is not None,
                       verdict.group(0) if verdict else tc.text.strip()[:80])
+            # `probe` is an alias for tcpconnect (same handler -> same "tcpconnect:" reply prefix)
+            pa = con.command(f"probe {phost} {pport}", timeout=8.0)
+            res.check("probe alias emits a verdict",
+                      re.search(r"tcpconnect: \S+ (open|refused|timeout|error)", pa.text) is not None,
+                      (pa.text.strip().splitlines() or ["no reply"])[-1][:70])
             if verdict and verdict.group(1) == "open":
                 res.check(f"tcpconnect reached {args.probe}", True)
             else:

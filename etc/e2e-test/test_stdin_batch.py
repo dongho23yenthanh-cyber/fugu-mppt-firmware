@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 ETC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo/etc
 sys.path.insert(0, ETC_DIR)
@@ -98,6 +99,9 @@ def main():
 
     res = Results()
     run_and_check(res, transport_argv, use_stdin=True, timeout=args.timeout)
+    # The firmware's telnet server is single-client; give the prior connection's slot a moment to
+    # free before the second back-to-back connect, else it can be refused/dropped mid-batch.
+    time.sleep(1.5)
     run_and_check(res, transport_argv, use_stdin=False, timeout=args.timeout)
 
     print("\n" + ("ALL CHECKS PASSED" if res.ok() else "SOME CHECKS FAILED"))

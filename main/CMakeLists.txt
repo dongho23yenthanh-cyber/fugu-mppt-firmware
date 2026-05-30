@@ -14,6 +14,7 @@ if ($ENV{RUN_TESTS})
             "../test/test_ina226.cpp"
             "../test/test_adc_hw.cpp"
             "../test/test_adc_min.cpp"
+            "../test/test_tracker.cpp"
     )
 elseif ($ENV{MAIN_SRC})
     set(MAIN_SRC $ENV{MAIN_SRC})

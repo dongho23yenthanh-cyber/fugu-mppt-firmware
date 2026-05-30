@@ -1,0 +1,100 @@
+#include <unity.h>
+#include <array>
+#include <esp_log.h>
+#include "util.h"   // loopWallClockUs_, wallClockMs() — tracker.h relies on its includer for these
+#include "tracker.h"
+
+// The Tracker is time-gated: a perturbation ("tick") only happens when
+// now - _time > 1000/frequency. wallClockMs() reads loopWallClockUs_, which the
+// test build leaves at 0, so we drive it here. Each step advances 100 ms, comfortably
+// above the 50 ms (freq=20) / 33 ms (freq=30, normal) tick period, so every update ticks.
+// All times stay < 30 s, keeping the tracker in normal mode (slow-mode needs no-new-max
+// for >30 s). vin=0 neutralises the cloud-recovery branch (abs(0-0)/0.1 < 5%) so these
+// tests isolate the pure power-based perturb&observe; the vin path has its own test.
+
+static void advanceMs(unsigned long ms) { loopWallClockUs_ += ms * 1000ULL; }
+
+// power < 1: tracker forces direction=true (pump more power) regardless of prior direction.
+void test_tracker_low_power_forces_pump() {
+    loopWallClockUs_ = 1'000'000;
+    Tracker t;
+    t.resetTracker(0.f, /*direction=*/false);
+    advanceMs(100);
+    float step = t.update(0.5f, 100, 0.f);
+    TEST_ASSERT_TRUE(t._direction);
+    TEST_ASSERT_TRUE(step > 0.f);
+}
+
+// dP < 0 beyond the deadband -> reverse perturbation direction.
+void test_tracker_reverses_on_power_drop() {
+    loopWallClockUs_ = 1'000'000;
+    Tracker t;
+    t.resetTracker(100.f, /*direction=*/true);
+    advanceMs(100);
+    float step = t.update(90.f, 100, 0.f);   // dP = -10
+    TEST_ASSERT_FALSE(t._direction);
+    TEST_ASSERT_TRUE(step < 0.f);
+}
+
+// dP > 0: keep climbing in the same direction.
+void test_tracker_keeps_direction_on_power_rise() {
+    loopWallClockUs_ = 1'000'000;
+    Tracker t;
+    t.resetTracker(100.f, /*direction=*/true);
+    advanceMs(100);
+    float step = t.update(110.f, 100, 0.f);  // dP = +10
+    TEST_ASSERT_TRUE(t._direction);
+    TEST_ASSERT_TRUE(step > 0.f);
+}
+
+// A drop smaller than minPowerStep (1.0) and below minPowerStepRel must not reverse.
+void test_tracker_deadband_ignores_small_drop() {
+    loopWallClockUs_ = 1'000'000;
+    Tracker t;
+    t.resetTracker(100.f, /*direction=*/true);
+    advanceMs(100);
+    float step = t.update(99.5f, 100, 0.f);  // dP=-0.5: abs<1.0 and 0.5/105 < 0.015
+    TEST_ASSERT_TRUE(t._direction);
+    TEST_ASSERT_TRUE(step > 0.f);
+}
+
+// Cloud recovery: a >5% Vin change since the last reversal flips direction even when
+// power is rising (which on its own would not reverse).
+void test_tracker_cloud_recovery_reverses_on_vin_jump() {
+    loopWallClockUs_ = 1'000'000;
+    Tracker t;
+    t.resetTracker(100.f, /*direction=*/true);
+    advanceMs(100);
+    t.update(100.f, 100, 30.f);  // primes _lastVin (0->30 reverses once); dir now false
+    advanceMs(100);
+    t.update(105.f, 100, 30.f);  // vin stable, power up -> no reversal, dir stays false
+    TEST_ASSERT_FALSE(t._direction);
+    advanceMs(100);
+    t.update(106.f, 100, 33.f);  // vin 30->33 = ~10% -> reverse despite rising power
+    TEST_ASSERT_TRUE(t._direction);
+}
+
+// Closed-loop hill-climb: drive a synthetic parabolic P(duty) peaking at duty=1000,
+// applying the sign of the returned step to the duty each tick. The tracker must climb
+// out of the zero-power region (power<1 forces pump) and settle near the peak.
+void test_tracker_converges_to_peak() {
+    loopWallClockUs_ = 1'000'000;
+    const int peak = 1000;
+    auto P = [&](int d) {
+        float x = (float) (d - peak) / 400.f;
+        float p = 200.f * (1.f - x * x);
+        return p < 0.f ? 0.f : p;
+    };
+    int duty = 200;                       // start ~800 below the peak, in the zero-power region
+    Tracker t;
+    t.resetTracker(P(duty), /*direction=*/true);
+    for (int i = 0; i < 140; ++i) {
+        advanceMs(100);
+        float step = t.update(P(duty), (uint16_t) duty, 0.f);
+        duty += (step > 0.f ? 1 : -1) * 8;
+        if (duty < 0) duty = 0;
+        if (duty > 2047) duty = 2047;
+    }
+    // converged near the peak (deadband near the flat top bounds the residual dither)
+    TEST_ASSERT_INT_WITHIN(120, peak, duty);
+}

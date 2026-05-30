@@ -186,6 +186,14 @@ void test_mcpwm_ost_brake_latches();
 void test_mcpwm_interleaved_phase();
 void test_mcpwm_endpoint_duty_scope();
 
+// tracker.h — perturb&observe MPPT
+void test_tracker_low_power_forces_pump();
+void test_tracker_reverses_on_power_drop();
+void test_tracker_keeps_direction_on_power_rise();
+void test_tracker_deadband_ignores_small_drop();
+void test_tracker_cloud_recovery_reverses_on_vin_jump();
+void test_tracker_converges_to_peak();
+
 // conf.h
 void test_conf_getlong_bases();
 void test_conf_getlong_default_when_missing();
@@ -284,6 +292,16 @@ void setup() {
     RUN_TEST(test_pd_normalize_relative_error);
     RUN_TEST(test_pd_reset_clears_derivative);
     RUN_TEST(test_pd_smooth_setpoint_lags_step);
+
+    // tracker.h — perturb&observe MPPT. Runs before buck.h because on the ESP32-classic the buck
+    // tests drive LEDC on pwm_hi=1 (= U0TXD), hijacking the console UART — anything logged after
+    // that is lost. (On the S3 those GPIOs aren't the console, so order is immaterial there.)
+    RUN_TEST(test_tracker_low_power_forces_pump);
+    RUN_TEST(test_tracker_reverses_on_power_drop);
+    RUN_TEST(test_tracker_keeps_direction_on_power_rise);
+    RUN_TEST(test_tracker_deadband_ignores_small_drop);
+    RUN_TEST(test_tracker_cloud_recovery_reverses_on_vin_jump);
+    RUN_TEST(test_tracker_converges_to_peak);
 
     // buck.h — diode-emulation / sync-rect math
     RUN_TEST(test_buck_ripple_current);

@@ -57,3 +57,10 @@ https://pastebin.com/uuGtCAZj
 esp32 not exiting from DL mode: https://github.com/espressif/esp-idf/issues/13287
 esp32-s3 does not reset after upload : https://github.com/espressif/arduino-esp32/issues/6762
 https://github.com/espressif/esptool/commit/0215786283660480e9ec85dd077e6fc2f46919e9#diff-cb25ea9381c2f7a537ecf1516335d3a9e8a711a9dbf3d1eff78453a611072103R356
+
+
+
+# alts
+STM32WBA52
+STM32WB55 (STM32WB55CEU6)
+STM32WB09KE

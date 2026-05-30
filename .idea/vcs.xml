@@ -28,6 +28,7 @@
     <mapping directory="$IDF_PATH$/components/spiffs/spiffs" vcs="Git" />
     <mapping directory="$IDF_PATH$/components/unity/unity" vcs="Git" />
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/_tmp_stm32" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/components/Adafruit_ADS1X15/Adafruit_ADS1X15" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/components/Adafruit_BusIO" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/components/Arduino-LiquidCrystal-I2C/Arduino-LiquidCrystal-I2C-library" vcs="Git" />
@@ -37,6 +38,8 @@
     <mapping directory="$PROJECT_DIR$/components/SimpleFTPServer/SimpleFTPServer" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/components/esp32-semihosting-profiler/esp32-semihosting-profiler" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/etc/fugu" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/etc/idf-devtools" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/test/host-stub/arduino-shim" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/third_party/STM32CubeWB0" vcs="Git" />
   </component>
 </project>

@@ -857,7 +857,7 @@ static void loopRTNewData(unsigned long nowMs) {
 
 
 // Per-tick WiFi + network-service work for loopNetwork_task. Handles auto-reenable timer, the
-// power/temp-gated wifiLoop, and self-healing network services on the WiFi-up edge.
+// temp-gated wifiLoop, and self-healing network services on the WiFi-up edge.
 static void networkLoopTick() {
 #ifdef WITH_NETW
     if (g_app.disableWifi && g_app.wifiReenableMs && (int32_t) (wallClockMs() - g_app.wifiReenableMs) >= 0) {
@@ -868,11 +868,11 @@ static void networkLoopTick() {
     }
 
     if (!g_app.disableWifi) {
-        /* only connect with disabled power conversion
-         * ESP32's wifi can cause latency issues otherwise
+        /* RF/PLL bring-up adds only ~3ms RT-loop lag (measured bench + fry/flat), well under the
+         * watchdog, so connect regardless of conversion; still gate on uC temp.
          */
         bool converting = !converter.disabled() && mppt.tracker._curPower >= 10;
-        wifiLoop(!converting && mppt.ucTemp.last() < 80);
+        wifiLoop(mppt.ucTemp.last() < 80);
 
         // self-heal: bring up enabled network services on the WiFi-up edge (they fail to start
         // at boot when WiFi isn't connected yet). _wifiConnected() has set up MDNS by now.

@@ -87,12 +87,16 @@ def _mqtt_cmd(o):
 
 def _console_plan(o, mock=False):
     if o.serial:
-        base = ["--port", o.serial]
+        base = ["--serial", o.serial]
     elif net_target(o):
-        base = ["--ip", net_target(o)]
+        base = ["--telnet", net_target(o)]
     else:
         raise Skip("needs --serial or --telnet")
-    return base + ["--test"] + (["--mock"] if mock else [])
+    if mock:
+        base += ["--mock"]
+    if o.include_network:
+        base += ["--include-network"]
+    return base
 
 
 def _influx(o):
@@ -154,8 +158,8 @@ SPECS = [
     ("nettools",        "test_nettools.py",                    "console", "serial|telnet", _nettools, 180),
     ("stdin-batch",     "test_stdin_batch.py",                 "console", "serial|telnet", _stdin_batch, 180),
     ("mqtt-cmd-input",  "test_mqtt_cmd_input.py",              "console", "serial|telnet + broker", _mqtt_cmd, 120),
-    ("console-plan",    "../fugu_console.py",                  "console", "serial|telnet", _console_plan, 240),
-    ("console-plan",    "../fugu_console.py",                  "mock",    "serial|telnet (mock fw)", lambda o: _console_plan(o, mock=True), 240),
+    ("console-plan",    "test_console_plan.py",                "console", "serial|telnet", _console_plan, 240),
+    ("console-plan",    "test_console_plan.py",                "mock",    "serial|telnet (mock fw)", lambda o: _console_plan(o, mock=True), 240),
     ("influx",          "influx_test.py",                      "mock",    "serial (mock fw)", _influx, 180),
     ("coredump",        "test_coredump.py",                    "destructive", "serial — PANICS the device", _coredump, 180),
     ("measure-coil",    "test_measure_coil.py",                "power",   "serial|telnet — real coil, needs Vin>Vout", _measure_coil, 600),
@@ -216,6 +220,8 @@ def main():
     ap.add_argument("--serial", metavar="DEV", help="serial console / DUT port")
     ap.add_argument("--telnet", metavar="HOST[:PORT]", help="TCP/telnet console host")
     ap.add_argument("--mock", action="store_true", help="the connected build is a mock (for influx)")
+    ap.add_argument("--include-network", action="store_true",
+                    help="also run the console-plan's NVS/Wi-Fi-mutating commands (wifi on, hostname)")
     ap.add_argument("--with-fuzz", action="store_true", help="also run the long fuzzers (destructive cluster)")
     ap.add_argument("--list", action="store_true", help="list clusters and their tests, then exit")
     ap.add_argument("--dry-run", action="store_true", help="print the argv each test would run, don't run")

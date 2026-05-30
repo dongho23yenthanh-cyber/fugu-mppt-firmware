@@ -217,9 +217,10 @@ plaintext API/no noise — by `--name` or `--address`), or MQTT (`--mqtt`)** —
 command (repeat `-c` for several over one connection), `--stdin` runs newline-separated commands
 from stdin over one connection (best for scripted/agent use — one connect, replies tagged `=== cmd ===`;
 auto-selected when no mode flag is given and stdin is piped, so a heredoc just works),
-`--test` is a PASS/FAIL/SKIP exerciser over a fixed command PLAN (`--mock` adds the PWM/charger group,
-`--include-network` the NVS/Wi-Fi group), and the default (a transport but no mode flag) is an
-interactive REPL. With no args at all it scans every transport for devices. Transport +
+and the default (a transport but no mode flag) is an
+interactive REPL. With no args at all it scans every transport for devices. The PASS/FAIL/SKIP
+command exerciser moved out of the client into the e2e suite
+(`etc/e2e-test/test_console_plan.py`, with `--mock`/`--include-network` flags). Transport +
 line-console mechanics live in the vendored `etc/fugu/` package (its own repo, `fl4p/fugu-py`):
 `transport.py` (`SerialTransport`/`SocketTransport`/`BleTransport`/`EspHomeBleTransport`/
 `MqttTransport`), `console.py` (`Console`: line assembly, `command()→Reply`); `fugu.py::FuguDevice`

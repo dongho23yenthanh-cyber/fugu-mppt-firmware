@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
-"""Console client + exerciser for the Fugu MPPT firmware.
+"""Console client for the Fugu MPPT firmware.
 
 Talks the device's string command protocol (the same one served on UART/USB-CDC/telnet/MQTT/BLE,
 see `doc/Console.md`) over any transport. Modes: one command or several (`-c`, repeatable; or
 `--stdin` to read newline-separated commands — both run over a single connection; stdin batch mode
-is auto-selected when no mode flag is given and stdin is piped), the test PLAN (`--test`,
-walks every console command in a meaningful order — read-only diagnostics, config round-trips and
-service ops, then the converter/PWM commands that move power — and reports PASS/FAIL/SKIP), or —
-given a transport but no mode flag — an interactive REPL (the default). With *no arguments at all*
-it scans every transport for reachable devices (serial port globs, mDNS scope/telnet hosts, the
-NAT-forwarded telnet endpoints in `nat.env`, local BLE NUS, BLE NUS seen through the ESPHome
-bluetooth_proxy in `$BLE_PROXY`, and — when `$MQTT_HOST` is set — hostnames seen on the broker's
-`pv/log/`) and prints what to pass to connect, without connecting. The transport and the line-console mechanics live in
-the `fugu` package (`fugu.transport`, `fugu.console.Console`); this file is the CLI and the plan.
+is auto-selected when no mode flag is given and stdin is piped), or — given a transport but no mode
+flag — an interactive REPL (the default). With *no arguments at all* it scans every transport for
+reachable devices (serial port globs, mDNS scope/telnet hosts, the NAT-forwarded telnet endpoints
+in `nat.env`, local BLE NUS, BLE NUS seen through the ESPHome bluetooth_proxy in `$BLE_PROXY`, and —
+when `$MQTT_HOST` is set — hostnames seen on the broker's `pv/log/`) and prints what to pass to
+connect, without connecting. The transport and the line-console mechanics live in the `fugu`
+package (`fugu.transport`, `fugu.console.Console`); this file is the CLI.
 Defaults to serial; `--ble`/`--ip` select BLE or TCP/telnet, `--ble-proxy HOST` reaches BLE NUS
 through an ESPHome bluetooth_proxy (plaintext API, no noise encryption).
 
-The PWM/charger group is gated behind `--mock`. A mock build (fake ADC, no real switching —
-`config/lab/*_mock`, sensor.conf using ADC_Fake) can run the full set safely; on real hardware
-those commands can destroy the switches or disrupt an active charge, so they are skipped by
-default and reported as SKIPPED. NVS-mutating and reboot/flash commands (wifi, hostname, ota,
-restart) always require an explicit opt-in flag.
+The PASS/FAIL/SKIP command exerciser that used to be this client's `--test`/`--mock` mode now lives
+in the e2e suite: `python etc/e2e-test/test_console_plan.py --serial … [--mock] [--include-network]`.
 
 Requires `pyserial` (serial) and/or `bleak` (BLE):  pip install pyserial bleak
 
@@ -31,8 +26,6 @@ Examples:
     python etc/fugu_console.py --ble                     # interactive REPL over BLE
     python etc/fugu_console.py --ble-proxy 192.168.1.50  # BLE via ESPHome bluetooth_proxy (by name)
     python etc/fugu_console.py --ble-proxy 192.168.1.50 --address AA:BB:CC:DD:EE:FF  # by MAC
-    python etc/fugu_console.py --test --mock             # run the full command PLAN on a mock build
-    python etc/fugu_console.py --ip 192.168.4.2 --test   # run the safe subset over TCP/telnet
     python etc/fugu_console.py --mqtt 192.168.1.134 --mqtt-port 1882 -c "svc list"   # over MQTT
     python etc/fugu_console.py --mqtt 192.168.1.134 --mqtt-readonly  # passive log monitor (REPL)
     python etc/fugu_console.py -c "svc list"             # run one command, print the reply
@@ -428,138 +421,15 @@ def discover_devices():
     return 0
 
 
-# Test plan. Each step: (command, expect_substr | None, group, tolerate_reject)
-#   group "always"   : safe read-only / non-destructive, run everywhere
-#   group "mock"     : drives PWM or the live charger; only with --mock
-#   group "net"      : mutates NVS / Wi-Fi / reboots; only with --include-network
-#   tolerate_reject  : the firmware declining is an acceptable outcome — either the final-else
-#                      REJECT marker, or an early `return false` that prints a warning but no OK
-#                      (e.g. no fan / no panel switch / wrong topology for this hardware).
-GROUP_ALWAYS, GROUP_MOCK, GROUP_NET = "always", "mock", "net"
-
 # Per-command timeout overrides (seconds), keyed by command verb (first token). The default 4 s
-# fits most commands; the I2C bus scan is slower (more so amid the mock's ADC-timeout chatter),
-# and `ota <url>` blocks until the firmware finishes downloading and reboots (or its 10 s connect
-# timeout fires + recovery) — ~40 s for a successful flash, so 180 s gives comfortable headroom.
+# fits most commands; the I2C bus scan is slower, and `ota <url>` blocks until the firmware
+# finishes downloading and reboots (or its 10 s connect timeout fires + recovery) — ~40 s for a
+# successful flash, so 180 s gives comfortable headroom.
 TIMEOUT_OVERRIDE = {"scan-i2c": 12.0, "ota": 180.0, "curl": 15.0, "ping": 8.0, "tcpconnect": 8.0}
 
 
 def _timeout_for(cmd: str, default: float = 4.0) -> float:
     return TIMEOUT_OVERRIDE.get(cmd.split(None, 1)[0] if cmd else cmd, default)
-
-PLAN = [
-    # --- read-only diagnostics --------------------------------------------------------------
-    ("mem", "Free heap", GROUP_ALWAYS, False),
-    # peek of a known DRAM address with size 4 hits the typed-print path; the device echoes
-    # `peek 0x... = 0x...`, so the address fragment is a reliable expect-substring.
-    ("peek 0x3fc88000 4", "peek 0x3fc88000 =", GROUP_ALWAYS, False),
-    ("sensor", "Sensor", GROUP_ALWAYS, False),
-    ("rt-stats", None, GROUP_ALWAYS, False),
-    ("reset-lag", None, GROUP_ALWAYS, False),
-    ("ip", "IP Address", GROUP_ALWAYS, False),
-    ("scan-i2c", None, GROUP_ALWAYS, True),  # may report no devices on a mock
-    ("svc list", "NAME", GROUP_ALWAYS, False),
-    # --- MCU/ESP32 debug surface (unconditional commands) -----------------------------------
-    ("tasks", "STKFREE", GROUP_ALWAYS, False),       # FreeRTOS table; header has STKFREE_B
-    ("bootinfo", "reset reason", GROUP_ALWAYS, False),
-    ("heap", "INTERNAL", GROUP_ALWAYS, False),
-    ("heap check", "integrity", GROUP_ALWAYS, False),
-    ("log wifi info", None, GROUP_ALWAYS, False),    # set a tag's log level (reversible, harmless)
-    ("ls", "entries", GROUP_ALWAYS, False),          # lists /littlefs -> "ls: N entries in ..."
-    ("ls conf", "entries", GROUP_ALWAYS, False),
-    ("cat conf/board.conf", None, GROUP_ALWAYS, True),  # file presence depends on the board config
-    # --- network debug tools (CONFIG_FUGU_WITH_NETTOOLS; default off -> unknown cmd -> SKIP) -----
-    # tolerate=True covers both "feature not built" and "no connectivity"; the expect-substring is
-    # still enforced when the command runs and returns OK. nslookup of a literal IP needs no DNS.
-    ("netstat", "mac=", GROUP_ALWAYS, True),
-    ("nslookup 8.8.8.8", "8.8.8.8", GROUP_ALWAYS, True),
-    ("ping 8.8.8.8 1", "sent", GROUP_ALWAYS, True),  # summary prints even at 100% loss
-    ("tcpconnect 8.8.8.8 53", None, GROUP_ALWAYS, True),  # 'open' with internet, else declined->SKIP
-    ("curl https://example.com", "HTTP", GROUP_ALWAYS, True),
-    ("curl -X POST -d hello=world https://example.com", "HTTP", GROUP_ALWAYS, True),
-    # --- config: dump, then a non-destructive round-trip on a scratch file ------------------
-    ("get-config board.conf", "board.conf", GROUP_ALWAYS, False),
-    ("get-config converter.conf", "converter.conf", GROUP_ALWAYS, False),
-    ("set-config selftest.conf probe 4242", None, GROUP_ALWAYS, False),
-    ("get-config selftest.conf probe", "4242", GROUP_ALWAYS, False),
-    # --- harmless actuators ------------------------------------------------------------------
-    ("led 030", None, GROUP_ALWAYS, False),
-    ("fan 30", None, GROUP_ALWAYS, True),  # declined if no fan is configured (e.g. mock)
-    ("fan 0", None, GROUP_ALWAYS, True),
-    ("led 000", None, GROUP_ALWAYS, False),
-    # --- service management: log level + restart (reversible; skip if the service isn't built) -
-    ("svc log scope info", None, GROUP_ALWAYS, True),
-    ("svc restart scope", None, GROUP_ALWAYS, True),
-    # --- ADC backend re-init (brief; safe on a mock) ----------------------------------------
-    ("adc-restart", None, GROUP_MOCK, True),
-    ("adc-reset", None, GROUP_MOCK, True),
-    # --- charger limit overrides (live params) ----------------------------------------------
-    ("vset 28.5", None, GROUP_MOCK, False),
-    ("iset 10", None, GROUP_MOCK, False),
-    ("speed 1.0", None, GROUP_MOCK, False),
-    # --- PWM / converter: enter manual mode, exercise switches, return to tracking ----------
-    ("dc 0", None, GROUP_MOCK, False),  # switches to manual PWM at zero duty
-    ("+5", None, GROUP_MOCK, False),
-    ("-5", None, GROUP_MOCK, False),
-    ("sync on", None, GROUP_MOCK, False),
-    ("sync off", None, GROUP_MOCK, False),
-    ("sync forced", None, GROUP_MOCK, False),
-    ("sync off", None, GROUP_MOCK, False),
-    ("bf 1", None, GROUP_MOCK, True),  # rejected if no backflow switch configured
-    ("bf 0", None, GROUP_MOCK, True),
-    ("short-ls", None, GROUP_MOCK, True),  # only valid in boost with Vin~0
-    ("dc 0", None, GROUP_MOCK, False),
-    ("mppt", None, GROUP_MOCK, False),  # back to tracking (valid only in manual mode)
-    ("sweep", None, GROUP_MOCK, False),
-    # --- network / NVS / reboot (opt-in only) -----------------------------------------------
-    ("wifi on", None, GROUP_NET, False),
-    ("hostname fugu-test", None, GROUP_NET, False),
-    # `ota <url>` and `wifi off`/`wifi-add` intentionally omitted: they flash/reboot or wipe NVS.
-    # `wifi off <minutes>` (temporary, keeps the SSID) has its own test: e2e-test/test_wifi_off_timeout.py
-]
-
-
-def run_plan(con: Console, mock: bool, include_net: bool):
-    results = []  # (cmd, status, note)  status in {PASS, FAIL, SKIP}
-    for cmd, expect, group, tolerate in PLAN:
-        if group == GROUP_MOCK and not mock:
-            results.append((cmd, "SKIP", "drives PWM/charger — needs --mock"))
-            continue
-        if group == GROUP_NET and not include_net:
-            results.append((cmd, "SKIP", "mutates NVS/Wi-Fi — needs --include-network"))
-            continue
-
-        reply = con.command(cmd, timeout=_timeout_for(cmd))
-
-        if reply.ok:
-            if expect is not None and expect not in reply.text:
-                status, note = "FAIL", f"expected {expect!r} in reply"
-            else:
-                status, note = "PASS", ""
-        elif tolerate:
-            # explicit reject, or an early `return false` (warning, no OK) — both acceptable here
-            status, note = "SKIP", "declined by firmware (not applicable on this setup)"
-        elif reply.rejected:
-            status, note = "FAIL", "rejected"
-        elif reply.timed_out and not reply:
-            status, note = "FAIL", "no response (timeout)"
-        else:
-            status, note = "FAIL", "no OK confirmation"
-
-        results.append((cmd, status, note))
-        flag = {"PASS": "ok  ", "FAIL": "FAIL", "SKIP": "skip"}[status]
-        print(f"[{flag}] {cmd:<28} {note}")
-        for ln in reply:
-            print("        " + ln)
-
-    print("\n" + "=" * 60)
-    npass = sum(1 for r in results if r[1] == "PASS")
-    nfail = sum(1 for r in results if r[1] == "FAIL")
-    nskip = sum(1 for r in results if r[1] == "SKIP")
-    print(f"summary: {npass} passed, {nfail} failed, {nskip} skipped")
-    if nfail:
-        print("failed:", ", ".join(r[0] for r in results if r[1] == "FAIL"))
-    return nfail
 
 
 _PEEK_TYPED_RE = re.compile(r"peek\s+0x[0-9a-fA-F]+\s+=\s+0x([0-9a-fA-F]+)")
@@ -640,16 +510,16 @@ def _handle_peek_struct(con: Console, args: str, elf_path: str | None) -> None:
     print(peek_symbols.format_struct_dump(elf_path, target, image, addr, max_depth=depth))
 
 
-def resolve_command_mode(explicit_cmds, use_stdin, want_test, want_coredump, stdin_is_tty):
+def resolve_command_mode(explicit_cmds, use_stdin, want_coredump, stdin_is_tty):
     """Decide how a non-discovery run dispatches commands. Pure (no I/O) so it's unit-testable.
 
     Returns (read_stdin, active, delimit):
-      active     — run a command sequence and exit; False falls through to --coredump/--test/REPL.
+      active     — run a command sequence and exit; False falls through to --coredump/REPL.
       read_stdin — append newline-separated stdin lines to the command list.
       delimit    — tag each reply with `=== cmd ===` (when running more than a lone `-c`).
     With no mode flag and stdin not a terminal (piped/heredoc), batch from stdin instead of the REPL.
     """
-    auto_batch = (not explicit_cmds and not use_stdin and not want_test
+    auto_batch = (not explicit_cmds and not use_stdin
                   and not want_coredump and not stdin_is_tty)
     read_stdin = use_stdin or auto_batch
     active = bool(explicit_cmds) or read_stdin
@@ -931,10 +801,6 @@ def main():
     ap.add_argument("--mqtt-pass", default=os.environ.get("MQTT_PASS"), help="MQTT password")
     ap.add_argument("--mqtt-readonly", action="store_true",
                     help="read-only MQTT monitor: stream output, never publish commands")
-    ap.add_argument("--mock", action="store_true",
-                    help="device runs a mock setup (fake ADC, no real PWM) — enables the PWM/charger commands")
-    ap.add_argument("--include-network", action="store_true",
-                    help="also run network/NVS-mutating commands (wifi on, hostname)")
     ap.add_argument("-c", "--command", action="append", metavar="CMD",
                     help="send a command and print the reply, then exit; repeat -c to run several "
                          "commands over one connection")
@@ -942,8 +808,6 @@ def main():
                     help="read newline-separated commands from stdin and run them over one "
                          "connection (blank lines and # comments skipped); exits on EOF. "
                          "Auto-enabled when no mode flag is given and stdin is not a terminal")
-    ap.add_argument("--test", action="store_true",
-                    help="run the PASS/FAIL/SKIP command PLAN instead of the interactive REPL")
     ap.add_argument("--elf", default=None,
                     help="firmware ELF for `peek <symbol>`/`sym` resolution (default: $FUGU_ELF or "
                          "newest build*/fugu-firmware.elf)")
@@ -956,7 +820,6 @@ def main():
     if len(sys.argv) == 1:  # no arguments: search every transport, don't connect
         return discover_devices()
 
-    print(f"({'MOCK' if args.mock else 'REAL-HARDWARE'} mode)")
     try:
         transport = make_transport(args)
         # Telnet drops the first byte sent during the post-connect handshake; wait for the banner.
@@ -968,7 +831,7 @@ def main():
     try:
         commands = list(args.command or [])
         read_stdin, active, delimit = resolve_command_mode(
-            commands, args.stdin, args.test, bool(args.coredump), sys.stdin.isatty())
+            commands, args.stdin, bool(args.coredump), sys.stdin.isatty())
         if read_stdin:
             commands += [ln for ln in (raw.strip() for raw in sys.stdin)
                          if ln and not ln.startswith("#")]
@@ -980,13 +843,6 @@ def main():
             return 0
         if args.coredump:
             return pull_coredump(con, args.coredump, elf_path)
-        if args.test:
-            print("waiting for device to be ready …")
-            if not con.wait_ready():
-                print("device did not respond to 'mem' — wrong port/address, baud, or still booting?")
-                return 1
-            print("device ready.\n")
-            return 1 if run_plan(con, args.mock, args.include_network) else 0
 
         interactive(con, elf_path)  # default
         return 0

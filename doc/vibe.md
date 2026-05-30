@@ -50,24 +50,20 @@ write a config tool
 # adc error
 
 there is currently a regression in the changes that had been made to the ADC code today.
-the devices all fail with `E (1920) main: ADC error`. 
+the devices all fail with `E (1920) main: ADC error`.  Even though it might self-heal, this is not proper behavior.
+And it the real converters produces garbage ADC readings (INA226 current).
 We added a ADC watchdog, before we noticed that error. There have been many commits and it got a bit messy.
 
-Relevant git tags are:
+Relevant git tags/commits are:
 * fry-work: flashed it and it worked smoothly.
 * fry-adcOk-wifiSOF: adc ok but sometimes wifi stack overflow (disable wifi)
+* 81c9c10e3f06e17645013151464cb33210f15fa3 : sample WD
 * fry-brk1: (adc error)
 
 So the breaking change must be between fry-brk1 and  fry-adcOk-wifiSOF .
-T
-
-fry (currently usb attached) has an issue with the ADC. it is not a hardware
-fault.   i think thereis sth wrong with the ina226 recent changes . can you A/B test to find the
-breaking change?
-
+My idea is to carefully inspect every ADC-related change within the relevant tags and do bisect.
+You can work with the bench device on the serial port /dev/cu.usbmodem1301.
+WiFi is disabled. flash with `idf.py app-flash` to preserve the config partition.
+You cannot break it. Do it on autopilot.
 
 
-
-
-It is safe to touch the device, it has solide hardware protection.
-Do it on autopilot.

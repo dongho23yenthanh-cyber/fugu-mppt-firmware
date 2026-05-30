@@ -1,5 +1,24 @@
 # todo
 
+* remove cmdAnf, just leave anf disabled, strip it, 
+  * comment out this line:   UART_LOG("  ANF(span=%4.0f):  Nstd= %7.3f   Sstd=%7.3f   NSR=%7.3f%s", s->anf.span,
+* create a wifi service
+
+* review conf files
+* add logic
+* profile the active control loop (mppt.update) — on the mock it stays in UV and early-returns
+  (1.4us); drive it active (`dc <n>` / non-zero-V mock) or measure on fry/flat to get real
+  per-section rtcount for the control path (5 PD ctrls, computeSyncRectRatio, fan/digitalWrite).
+  this is what drives loopRt to ~64% on a live converter; the sampler path is not the bottleneck.
+  * vconv (CONFIG_FUGU_WITH_VCONV + config/lab/vconv_mock) DOES exercise the full control path and
+    is great for *profiling* — but its MPPT is timing-FRAGILE: it's a discrete co-simulated feedback
+    loop, so sub-us perturbations (an extra rtcount label, a different instruction schedule) flip it
+    between converging to MPP (~815W) and wandering to a bad point (~60W, duty pinned near max).
+    deterministic (noise=0) so each boot repeats exactly. => use vconv to read per-section costs, NOT
+    to validate control-behavior changes (a throttle/hoist experiment looked like a regression that
+    was really just sim fragility). validate control changes on fry/flat. profiling lesson: rtcount
+    means are inflated by ADC-ISR preemption; the `min` column is the truer pure-compute figure.
+* ina226 588us conv time timeouts
 * critical commits
   * the esp32 adc fix
   * the RT core pining

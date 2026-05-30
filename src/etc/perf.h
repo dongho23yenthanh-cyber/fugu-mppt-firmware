@@ -176,7 +176,12 @@ inline esp_err_t print_real_time_stats(TickType_t xTicksToWait) {
 }
 #endif
 
-void print_real_time_stats_1s_task(void *) {
+// Run the 2s stats measurement synchronously in the caller's (console) task. Blocking keeps it
+// serialized by the console dispatcher — no detached task to pile up when `rt-stats` is spammed
+// (which SW-reset the device) — and the `OK:` reply lands *after* the table, so scripted callers
+// actually capture the output. The vTaskDelay inside yields, so core0 housekeeping and the task WDT
+// keep running during the window; the RT loop on core1 is unaffected. (perf.h has a single includer
+// per the ODR note; cli.cpp calls this extern.)
+void print_real_time_stats_blocking() {
     print_real_time_stats(pdMS_TO_TICKS(2000));
-    vTaskDelete(NULL);
 }

@@ -54,8 +54,6 @@
 #include "sim/vconv.h"
 #endif
 
-void print_real_time_stats_1s_task(void *);
-
 #include "app_state.h"
 
 // Components owned by main.cpp. The mode flags (g_app.manualPwm/g_app.disableWifi/g_app.wifiReenableMs/g_app.maxLoopLag
@@ -777,8 +775,12 @@ static void cmdNetstat(cmd *) {
 }
 #endif // WITH_NETTOOLS
 
+// Runs synchronously (2s): blocks the console task so the `OK:` reply follows the table (scripted
+// callers capture it) and concurrent rt-stats can't pile up. perf.h def; see note there.
+extern void print_real_time_stats_blocking();
+
 static void cmdRtStats(cmd *) {
-    xTaskCreatePinnedToCore(print_real_time_stats_1s_task, "rtstats", 4096, NULL, 1, NULL, NON_RT_CORE /*core*/);
+    print_real_time_stats_blocking();
 }
 
 // monotonic seconds since boot; resets only on reboot (unlike status N, which zeroes on each sweep)

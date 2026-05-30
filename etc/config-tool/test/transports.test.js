@@ -3,6 +3,49 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { loadEditor } = require('./_setup');
 
+// A multi-byte UTF-8 glyph (℃ = e2 84 83) can straddle two notifications/messages. A per-packet
+// TextDecoder would flush the split halves as replacement chars (the half ending in e2 → one �,
+// the next packet's 84 83 → two more) — the "garbage after svc" bug. The persistent {stream}
+// decoder must stitch them.
+function splitAtSecondGlyph(bytes) {
+  const a = bytes.indexOf(0xe2);
+  const b = bytes.indexOf(0xe2, a + 1);
+  const cut = b + 1;                       // between the 2nd glyph's lead byte and its continuations
+  return [bytes.slice(0, cut), bytes.slice(cut)];
+}
+
+test('onBleNotify reassembles a UTF-8 glyph split across two notifications', async () => {
+  const { window } = await loadEditor();
+  const seen = [];
+  const fn = ln => seen.push(ln);
+  window._lineListeners.add(fn);
+
+  const [p1, p2] = splitAtSecondGlyph(new TextEncoder().encode('63℃65℃\n'));
+  window.onBleNotify({ target: { value: p1 } });
+  window.onBleNotify({ target: { value: p2 } });
+
+  window._lineListeners.delete(fn);
+  assert.deepEqual(seen, ['63℃65℃']);
+});
+
+test('mqttFeedPayload reassembles a UTF-8 glyph split across two messages', async () => {
+  const { window } = await loadEditor();
+  const client = window.mqtt.connect('ws://broker/', {});
+  await new Promise(r => setTimeout(r, 0));
+  await window.mqttBindDevice(client, 'fry');
+
+  const seen = [];
+  const fn = ln => seen.push(ln);
+  window._lineListeners.add(fn);
+
+  const [p1, p2] = splitAtSecondGlyph(new TextEncoder().encode('45℃57℃\n'));
+  client.emit('message', 'pv/log/fry', p1);
+  client.emit('message', 'pv/log/fry', p2);
+
+  window._lineListeners.delete(fn);
+  assert.deepEqual(seen, ['45℃57℃']);
+});
+
 test('sendCommand resolves true on OK echo and false on ERR echo', async () => {
   const { window } = await loadEditor();
   window._activeWrite = async () => {};

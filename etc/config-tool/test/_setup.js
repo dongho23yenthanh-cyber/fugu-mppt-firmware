@@ -45,6 +45,7 @@ window.ansiConvert = {
 const TEST_HOOKS = `
 window._lineListeners = lineListeners;
 window._dispatchLine = (ln) => lineListeners.forEach(fn => fn(ln));
+window.onBleNotify = onBleNotify;
 window._tables = { META, FILE_META, FILE_KEYS, TYPE_KEYS };
 Object.defineProperty(window, "_state",          { get: () => state });
 Object.defineProperty(window, "_activeWrite",    { get: () => activeWrite, set: v => { activeWrite = v; } });

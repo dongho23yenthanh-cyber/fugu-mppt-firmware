@@ -1193,10 +1193,13 @@ async function connectSerial(){
 const NUS_SVC = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 const NUS_RX  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // write (client -> device)
 const NUS_TX  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // notify (device -> client)
-let bleDevice=null, bleServer=null, bleRxChar=null, bleTxChar=null, bleBuf="";
+let bleDevice=null, bleServer=null, bleRxChar=null, bleTxChar=null, bleBuf="", bleDec=new TextDecoder();
 
 function onBleNotify(e){
-  bleBuf += new TextDecoder().decode(e.target.value);
+  // Stream-decode: a multi-byte UTF-8 glyph (e.g. ℃) can straddle two notifications, so a fresh
+  // per-packet decoder would flush the split halves as replacement chars. One persistent {stream}
+  // decoder stitches them. Reset bleDec wherever bleBuf resets so a stale partial can't leak.
+  bleBuf += bleDec.decode(e.target.value, {stream:true});
   let i;
   while ((i=bleBuf.indexOf("\n")) >= 0){
     const ln = bleBuf.slice(0,i).replace(/\r$/,"");
@@ -1220,7 +1223,7 @@ async function bleWrite(str){
 async function disconnectBluetooth(){
   try { if (bleTxChar){ bleTxChar.removeEventListener('characteristicvaluechanged', onBleNotify); await bleTxChar.stopNotifications(); } } catch(_){}
   try { if (bleServer && bleServer.connected) bleServer.disconnect(); } catch(_){}
-  bleTxChar=null; bleRxChar=null; bleServer=null; bleDevice=null; bleBuf=""; activeWrite=null;
+  bleTxChar=null; bleRxChar=null; bleServer=null; bleDevice=null; bleBuf=""; bleDec=new TextDecoder(); activeWrite=null;
 }
 
 // gatt.connect()+service discovery on Chrome/macOS often fails on the first try
@@ -1259,7 +1262,7 @@ async function connectBluetooth(){
   try {
     const { server, rx, tx } = await bleConnectAndDiscover(bleDevice);
     bleServer = server; bleRxChar = rx; bleTxChar = tx;
-    bleBuf="";
+    bleBuf=""; bleDec=new TextDecoder();
     await bleTxChar.startNotifications();
     bleTxChar.addEventListener('characteristicvaluechanged', onBleNotify);
     activeWrite = bleWrite;
@@ -1281,12 +1284,12 @@ async function connectBluetooth(){
      • write() publishes one trimmed command per call to pv/log/<host>/cmd
 ---------------------------------------------------------------------------- */
 const MQTT_LOG_ROOT = "pv/log/";
-let mqttClient=null, mqttDeviceHost=null, mqttBuf="";
+let mqttClient=null, mqttDeviceHost=null, mqttBuf="", mqttDec=new TextDecoder();
 let grantedMqttConfig=null;   // {url,username,password,device} for silent re-connect
 let mqttScanClient=null;      // temporary client used only by the scan dialog
 
 function mqttFeedPayload(payload){
-  mqttBuf += new TextDecoder().decode(payload);
+  mqttBuf += mqttDec.decode(payload, {stream:true}); // stream-decode: see onBleNotify
   let i;
   while ((i=mqttBuf.indexOf("\n")) >= 0){
     const ln = mqttBuf.slice(0,i).replace(/\r$/,"");
@@ -1307,7 +1310,7 @@ async function mqttWrite(str){
 
 async function disconnectMqtt(){
   const c = mqttClient;
-  mqttClient=null; mqttDeviceHost=null; mqttBuf="";
+  mqttClient=null; mqttDeviceHost=null; mqttBuf=""; mqttDec=new TextDecoder();
   if (activeWrite===mqttWrite) activeWrite=null;
   if (c){ try { c.end(true); } catch(_){} }
 }
@@ -1328,7 +1331,7 @@ function mqttBrokerConnect(url, username, password){
 // Subscribe and live-connect to one device: feed its log payloads into lineListeners
 // and pick up the activeWrite handle so getConfig/sendCommand work as on serial/BLE.
 async function mqttBindDevice(client, hostname){
-  mqttClient = client; mqttDeviceHost = hostname; mqttBuf = "";
+  mqttClient = client; mqttDeviceHost = hostname; mqttBuf = ""; mqttDec=new TextDecoder();
   client.on("message", (topic, payload)=>{
     // pv/log/<hostname> only — ignore the deeper /cmd echo, and other devices
     const parts = topic.split("/");
@@ -1471,7 +1474,7 @@ async function ensureConnection(){
   } else if (lastTransport==="ble"){
     if (!grantedBleDevice) throw new Error("connect to the device first");
     const { server, rx, tx } = await bleConnectAndDiscover(grantedBleDevice);
-    bleServer = server; bleRxChar = rx; bleTxChar = tx; bleBuf="";
+    bleServer = server; bleRxChar = rx; bleTxChar = tx; bleBuf=""; bleDec=new TextDecoder();
     await bleTxChar.startNotifications();
     bleTxChar.addEventListener('characteristicvaluechanged', onBleNotify);
     activeWrite = bleWrite;

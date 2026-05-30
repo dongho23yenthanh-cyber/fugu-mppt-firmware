@@ -12,7 +12,7 @@ Before any `idf.py` invocation, source ESP-IDF into the shell. The repo ships a 
 ```bash
 . ./idf-export.sh          # sources ../../esp/idf5.5/export.sh, sets IDF_TARGET=esp32s3, autodetects $ESPPORT
 idf.py set-target esp32s3  # only needed once per build dir
-idf.py build               # feature flags live in Kconfig now (CONFIG_FUGU_WITH_*, idf.py menuconfig -> "Fugu MPPT firmware"): BLE/NETW default on, MCPWM/VCONV/SPROFILER/MEASURE_COIL off. The old WITH_* env vars are rejected. Binary telemetry is a tele.conf setting, not a build flag
+idf.py build               # feature flags live in Kconfig now (CONFIG_FUGU_WITH_*, idf.py menuconfig -> "Fugu MPPT firmware"): BLE/NETW default on, NETTOOLS/MCPWM/VCONV/SPROFILER/MEASURE_COIL off (NETTOOLS depends on NETW). The old WITH_* env vars are rejected. Binary telemetry is a tele.conf setting, not a build flag
 idf.py -p $ESPPORT flash monitor
 ```
 
@@ -278,8 +278,10 @@ When connected to the 192.168.1.x network, these devices might be behind a NAT r
 
 | hostname | IP          | telnet reachable via |
 |----------|-------------|----------------------|
-| fry      | 192.168.4.2 | 192.168.1.173:232    |
-| flat     | 192.168.4.3 | 192.168.1.173:233    |
+| fry      | 192.168.4.2 | 192.168.1.231:232    |
+| flat     | 192.168.4.3 | 192.168.1.231:233    |
+
+Check etc/nat.env for up-to-date addresses.
 
 **IMPORTANT: fry & flat are both real power converters connected to solar panels and a battery.
 Driving their Half-Bridge must be taken with care!**

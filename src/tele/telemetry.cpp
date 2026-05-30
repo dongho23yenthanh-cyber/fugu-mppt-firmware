@@ -107,6 +107,7 @@ void connect_wifi_async() {
     if (!noSsid) {
         NetworkManager::setHostname(getHostname().c_str());
         WiFi.mode(WIFI_STA);
+        WiFi.setSleep(WIFI_PS_MIN_MODEM); // modem-sleep between DTIM beacons; cuts RF idle power/heat, keeps console+MQTT latency low
     }
 }
 

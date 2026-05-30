@@ -12,6 +12,7 @@
 inline bool wifiIsConnected() { return WiFi.isConnected(); }
 inline int wifiRssi() { return WiFi.RSSI(); }
 inline void wifiHardOff() { WiFi.disconnect(true); }
+inline void wifiSetPowerSave(bool deep) { WiFi.setSleep(deep ? WIFI_PS_MAX_MODEM : WIFI_PS_MIN_MODEM); }
 inline std::string wifiLocalIp() { return std::string(WiFi.localIP().toString().c_str()); }
 #else
 // telemetry.h's wifiLoop/connect_wifi_async/wait_for_wifi/disconnect_wifi are declared regardless

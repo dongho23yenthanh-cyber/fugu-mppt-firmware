@@ -876,14 +876,28 @@ static void networkLoopTick() {
         /* only connect with disabled power conversion
          * ESP32's wifi can cause latency issues otherwise
          */
-        wifiLoop((converter.disabled() || mppt.tracker._curPower < 10) && mppt.ucTemp.last() < 80);
+        bool converting = !converter.disabled() && mppt.tracker._curPower >= 10;
+        wifiLoop(!converting && mppt.ucTemp.last() < 80);
 
         // self-heal: bring up enabled network services on the WiFi-up edge (they fail to start
         // at boot when WiFi isn't connected yet). _wifiConnected() has set up MDNS by now.
         static bool wifiWasUp = false;
+        static int8_t psMode = -1; // -1 unset, 0 MIN_MODEM, 1 MAX_MODEM
         bool wifiUp = wifiIsConnected();
-        if (wifiUp && !wifiWasUp) g_services.startEnabledNetworkServices();
+        if (wifiUp && !wifiWasUp) { g_services.startEnabledNetworkServices(); psMode = -1; } // connect reset PS to MIN
         wifiWasUp = wifiUp;
+
+        // Night = not converting for a while: drop to MAX_MODEM to cut standby battery draw. Back to
+        // MIN_MODEM the instant PV power returns so daytime console/MQTT/OTA stay responsive.
+        static uint32_t lastActiveMs = 0;
+        uint32_t nowMs = wallClockMs();
+        if (converting) lastActiveMs = nowMs;
+        int8_t want = (nowMs - lastActiveMs > 5u * 60 * 1000) ? 1 : 0;
+        if (wifiUp && want != psMode) {
+            psMode = want;
+            wifiSetPowerSave(want);
+            UART_LOG("WiFi power save: %s", want ? "MAX_MODEM (night/idle)" : "MIN_MODEM (active)");
+        }
     }
 #endif
 }

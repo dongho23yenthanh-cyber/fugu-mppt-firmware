@@ -218,6 +218,10 @@ class ScopeState:
         self.user_picked = False       # once True, auto-pick won't override the manual choice
         self.rejected = set()          # (host, port) auto-pick skips (e.g. --match mismatch)
         self.discovery = None          # ScopeDiscovery (persistent mDNS browser), set in main()
+        # loaded-file ("frozen") playback
+        self.frozen = False            # showing a loaded capture: ignore live data, anchor on it
+        self.frozen_now = 0.0          # view anchor (latest loaded timestamp) instead of wall clock
+        self.scene_dirty = False       # render thread must drop stale line graphics and rebuild
         self.rescan = threading.Event()
         # persisted settings applied to channels as they appear
         self.saved_channels = {}
@@ -272,11 +276,22 @@ class ScopeState:
         with self.lock:
             self.user_picked = True
             self.requested = target
+            if self.frozen:                 # leaving a loaded capture to go live again
+                self._go_live_locked()
 
     def disconnect(self):
         with self.lock:
             self.user_picked = True
             self.requested = None
+
+    def _go_live_locked(self):
+        """Drop the loaded capture and let a live device repopulate the channels (caller holds lock,
+        and is on a thread allowed to flag the scene — graphics removal happens in the render loop)."""
+        self.frozen = False
+        self.channels = {}
+        self.order = []
+        self.trig_cid = -1
+        self.scene_dirty = True
 
     def request_rescan(self):
         self.rescan.set()
@@ -290,6 +305,8 @@ class Decoder:
         self.s = state
 
     def decode(self, ba: bytes, t: float):
+        if self.s.frozen:                   # showing a loaded capture: ignore live samples
+            return
         if ba[:13] == b'###ScopeHead:' and b'###ENDHEAD\n' in ba[:256]:
             body = ba[13:ba.index(b'###ENDHEAD\n')].decode('utf-8', 'replace')
             for ent in body.strip(' ,').split(','):
@@ -398,9 +415,15 @@ def receive_loop(state: ScopeState, dec: Decoder):
         target = (state.args.ip, state.args.port, None)
         state.select(target)
         while True:
+            if state.frozen:            # showing a loaded capture: don't stream
+                time.sleep(0.3)
+                continue
             serve_connection(state, dec, target)
             time.sleep(0.5)
     while True:                         # discovery runs in discovery_loop; here we just hold a pick
+        if state.frozen:
+            time.sleep(0.3)
+            continue
         with state.lock:
             target = state.requested
             n = len(state.candidates)
@@ -550,6 +573,15 @@ class Controls(EdgeWindow):
         imgui.same_line()
         if imgui.button("save CSV"):
             save_csv(s)
+        imgui.same_line()
+        if imgui.button("save NPZ"):
+            save_npz(s)
+        imgui.same_line()
+        if imgui.button("load..."):
+            threading.Thread(target=do_load, args=(s,), daemon=True).start()
+        imgui.same_line()
+        if imgui.button("clear buf"):
+            s.clear_buffers()
 
 
 def _rgba(cid):
@@ -626,17 +658,234 @@ def save_settings(state: ScopeState, path):
         print("settings save failed:", e)
 
 
+def _sanitize(s):
+    return "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in s)
+
+
+def _capture_dir(state: ScopeState):
+    """`<hostname>/<UTC-datetime>/` for the current capture; created on demand, with a small
+    `view.json` sidecar holding each channel's scale/offset/coupling (the npz/csv store just data)."""
+    import json
+    d = os.path.join(_sanitize(state.hostname or "scope"),
+                     time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
+    os.makedirs(d, exist_ok=True)
+    view = {c.name: {"scale": round(float(c.scale), 6), "offset": round(float(c.offset), 3),
+                     "coupling": c.coupling} for c in state.channel_list()}
+    try:
+        with open(os.path.join(d, "view.json"), "w") as f:
+            json.dump(view, f)
+    except OSError as e:
+        print("view sidecar write failed:", e)
+    return d
+
+
+def _read_view(path):
+    """The `view.json` sidecar (channel -> {scale,offset,coupling}) for the capture `path` is in."""
+    import json
+    d = path if os.path.isdir(path) else os.path.dirname(path)
+    try:
+        with open(os.path.join(d, "view.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _channel_samples(c):
+    """The channel's finite samples oldest..newest as (values float32, timestamps float64), or None."""
+    n = min(c.head, BUF_SAMPLES)
+    if n < 1:
+        return None
+    vals, ts = c.recent(n)
+    good = np.isfinite(ts) & np.isfinite(vals)
+    vals, ts = vals[good], ts[good]
+    return (vals, ts) if vals.size else None
+
+
 def save_csv(state: ScopeState):
+    """One CSV per channel under `<hostname>/<datetime>/<ch>_<SR>.csv` (time_s,value rows)."""
     import csv
+    d = _capture_dir(state)
     for c in state.channel_list():
-        fn = f"{c.name}_{int(round(c.sample_rate()))}hz.csv"
+        s = _channel_samples(c)
+        if s is None:
+            continue
+        vals, ts = s
+        fn = os.path.join(d, f"{c.name}_{int(round(c.sample_rate()))}.csv")
         with open(fn, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow([c.name])
-            for v in c.ordered():
-                if np.isfinite(v):
-                    w.writerow([float(v)])
+            w.writerow(["time_s", c.name])
+            t0 = ts[0]
+            for tv, vv in zip(ts - t0, vals):
+                w.writerow([f"{tv:.6f}", float(vv)])
         print("written", fn)
+
+
+def save_npz(state: ScopeState):
+    """One compressed .npz per channel under `<hostname>/<datetime>/<ch>_<SR>.npz`, holding just the
+    raw ADC samples as int16 (`v`, oldest..newest). Timing isn't stored — it's reconstructed on load
+    from the `_<SR>` rate in the filename and the capture time in the directory name."""
+    d = _capture_dir(state)
+    for c in state.channel_list():
+        s = _channel_samples(c)
+        if s is None:
+            continue
+        vals, _ = s
+        fn = os.path.join(d, f"{c.name}_{int(round(c.sample_rate()))}.npz")
+        np.savez_compressed(fn, v=np.rint(vals).astype(np.int16))
+        print("written", fn)
+
+
+# ---------------------------------------------------------------------------
+# loading saved captures back into the scope (freezes live streaming)
+# ---------------------------------------------------------------------------
+def _sr_from_name(base):
+    """Sample rate (Hz) parsed from a `<ch>_<SR>.<ext>` filename, or None."""
+    import re
+    m = re.search(r"_(\d+(?:\.\d+)?)$", base.rsplit(".", 1)[0])
+    return float(m.group(1)) if m else None
+
+
+def _stem_name(base):
+    """Channel name from `<ch>_<SR>.<ext>` (everything before the final `_<SR>`)."""
+    stem = base.rsplit(".", 1)[0]
+    return stem.rsplit("_", 1)[0] if _sr_from_name(base) is not None else stem
+
+
+def _load_channel_file(path):
+    """Parse one saved channel file into an entry dict {name, vals, ts}, or None.
+
+    Neither format stores timing: .npz is just int16 values and .csv (when written here, value-only)
+    too, so timestamps are a uniform grid from the `_<SR>` rate in the filename. A .csv that *does*
+    carry a leading time column (e.g. hand-made) is honoured."""
+    import csv
+    base = os.path.basename(path)
+    sr = _sr_from_name(base) or 1000.0
+    if path.endswith(".npz"):
+        z = np.load(path)
+        vals = (z["v"] if "v" in z else z[z.files[0]]).astype(np.float32)
+        ts = np.arange(vals.size, dtype=np.float64) / max(sr, 1e-6)
+        return {"name": _stem_name(base), "vals": vals, "ts": ts}
+    if path.endswith(".csv"):
+        rows = list(csv.reader(open(path, newline="")))
+        if not rows:
+            return None
+        header = rows[0]
+        has_time = len(header) >= 2 and header[0].strip().lower() in ("time_s", "t", "time")
+        body = rows[1:] if any(not _is_float(x) for x in header) else rows
+        vals, tcol = [], []
+        for r in body:
+            if not r:
+                continue
+            if has_time and len(r) >= 2 and _is_float(r[0]) and _is_float(r[1]):
+                tcol.append(float(r[0])); vals.append(float(r[1]))
+            elif _is_float(r[-1]):
+                vals.append(float(r[-1]))
+        if not vals:
+            return None
+        vals = np.asarray(vals, np.float32)
+        ts = (np.asarray(tcol, np.float64) if len(tcol) == len(vals)
+              else np.arange(vals.size, dtype=np.float64) / max(sr, 1e-6))
+        name = header[-1] if (header and not _is_float(header[-1])) else _stem_name(base)
+        return {"name": name, "vals": vals, "ts": ts}
+    return None
+
+
+def _is_float(x):
+    try:
+        float(x); return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _capture_epoch(path):
+    """Epoch seconds parsed from the `<...>/<UTC-datetime>/` capture directory name, or None."""
+    import calendar
+    d = path if os.path.isdir(path) else os.path.dirname(path)
+    try:
+        return float(calendar.timegm(time.strptime(os.path.basename(d.rstrip("/\\")),
+                                                    "%Y%m%dT%H%M%SZ")))
+    except ValueError:
+        return None
+
+
+def _capture_files(path):
+    """Channel files for the capture `path` belongs to: every *.npz/*.csv in its directory (so
+    picking any one file loads the whole capture), preferring .npz when a channel has both."""
+    d = path if os.path.isdir(path) else os.path.dirname(path) or "."
+    files = [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.endswith((".npz", ".csv"))]
+    by_stem = {}
+    for f in files:
+        stem = os.path.basename(f).rsplit(".", 1)[0]
+        if stem not in by_stem or f.endswith(".npz"):     # prefer npz (exact int values vs csv text)
+            by_stem[stem] = f
+    return list(by_stem.values())
+
+
+def load_capture(state: ScopeState, path):
+    """Load a saved capture (the whole `<hostname>/<datetime>/` directory `path` sits in) and freeze
+    the scope on it. Runs off the render thread: builds Channels here, then flags `scene_dirty` so the
+    render loop swaps the line graphics."""
+    entries = []
+    for f in _capture_files(path):
+        try:
+            e = _load_channel_file(f)
+            if e and e["vals"].size:
+                entries.append(e)
+        except Exception as ex:
+            print("skip", os.path.basename(f), "-", ex)
+    if not entries:
+        print("load: no channels in", path)
+        return
+    t_end = _capture_epoch(path)
+    if t_end is None:
+        t_end = 0.0                       # unparseable dir name: keep timing relative
+    view = _read_view(path)
+    chans, order = {}, []
+    for cid, e in enumerate(entries):
+        ch = Channel(cid, e["name"], "u", 12, median=False)
+        vals, ts = e["vals"], e["ts"]
+        if vals.size > BUF_SAMPLES:
+            vals, ts = vals[-BUF_SAMPLES:], ts[-BUF_SAMPLES:]
+        ts = ts - ts[-1] + t_end          # end-align every channel to the capture time
+        k = vals.size
+        ch.ring[:k] = vals
+        ch.ts[:k] = ts
+        ch.head = ch.n_samples = k
+        ch.t_first = float(ts[0])
+        ch.ts_last = float(ts[-1])
+        ch.dt_ch = float((ts[-1] - ts[0]) / (k - 1)) if k > 1 else state.dt
+        vw = view.get(e["name"], {})
+        ch.scale = float(vw.get("scale", ch.scale))
+        ch.offset = float(vw.get("offset", ch.offset))
+        ch.coupling = vw.get("coupling", ch.coupling)
+        chans[cid] = ch
+        order.append(cid)
+    capture_dir = path if os.path.isdir(path) else os.path.dirname(path)
+    with state.lock:
+        state.channels = chans
+        state.order = order
+        state.trig_cid = order[0]
+        state.frozen = True
+        state.frozen_now = t_end
+        state.requested = None
+        state.user_picked = True
+        state.scene_dirty = True
+        state.status = "file: " + (os.path.basename(capture_dir.rstrip("/\\")) or capture_dir)
+    print(f"loaded {len(entries)} channel(s) from {capture_dir}")
+
+
+def do_load(state: ScopeState):
+    """File-dialog → load_capture, in a worker thread (the native dialog blocks)."""
+    path = None
+    try:
+        from imgui_bundle import portable_file_dialogs as pfd
+        sel = pfd.open_file("Load scope capture", "",
+                            ["scope captures (*.npz *.csv)", "*.npz *.csv", "All files", "*"]).result()
+        path = sel[0] if sel else None
+    except Exception as e:
+        print("file dialog unavailable:", e)
+    if path:
+        load_capture(state, path)
 
 
 # ---------------------------------------------------------------------------
@@ -706,6 +955,7 @@ def main():
     fig.renderer.add_event_handler(on_up, "pointer_up")
 
     frame_t = [time.time()]
+    drawn_lines = []                  # every line graphic we've added, for scene rebuilds on load
 
     def update():
         now = time.time()
@@ -713,6 +963,18 @@ def main():
         if dt > 0:
             state.fps = 0.9 * state.fps + 0.1 * (1.0 / dt)
         frame_t[0] = now
+
+        if state.scene_dirty:         # channel set was swapped (load / go-live): rebuild all lines
+            for ln in drawn_lines:
+                try:
+                    sub.remove_graphic(ln)
+                except Exception:
+                    pass
+            drawn_lines.clear()
+            for c in state.channel_list():
+                c.line = None
+                c._ndrawn = 0
+            state.scene_dirty = False
 
         if state.do_autofit:
             autofit(state)
@@ -727,13 +989,17 @@ def main():
                 c.line = sub.add_line(data=data, thickness=1, colors=col, name=c.name)
                 c.line.visible = c.visible
                 c._ndrawn = 0
+                drawn_lines.append(c.line)
 
         tw = state.t_window
         tch = state.channels.get(state.trig_cid)
 
+        # anchor on the loaded capture's end when frozen, else on the wall clock
+        t_clock = state.frozen_now if state.frozen else now
+
         # trigger search on the source channel (raw units; AC -> relative to visible mean)
         triggered = False
-        t_anchor = now
+        t_anchor = t_clock
         if tch is not None and min(tch.head, BUF_SAMPLES) >= 2:
             dtc = tch.dt_est(state.dt)
             n_win = int(np.clip(tw / dtc, 16, min(tch.head, BUF_SAMPLES)))

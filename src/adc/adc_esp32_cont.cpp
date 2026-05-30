@@ -33,6 +33,8 @@ void ADC_ESP32_Cont::start() {
         // the driver will trigger the interrupt once <conv_frame_size> bytes are available. if we miss
         // one interrupt, and we only read <conv_frame_size> bytes per notification, one frame will always
         // stay in the ring buffer (<max_store_buf_size> bytes), adding unnecessary latency
+        // NOTE: conv_frame_size (= the DMA EOF granularity) is the lever that sets DMA stall headroom —
+        // see ADC1_READ_LEN in adc_esp32_cont.h. max_store_buf_size only sizes the software pool.
 
         .flags = {.flush_pool = false}, // TODO
     };

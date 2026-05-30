@@ -17,7 +17,15 @@
 #include "sdkconfig.h"
 
 
-#define ADC1_READ_LEN 128
+// conv_frame_size = ADC1_READ_LEN/2 sets the DMA EOF granularity. The driver keeps a fixed
+// INTERNAL_BUF_NUM (5) frames of DMA descriptors, so DMA survival under an ISR stall = 5 * frame
+// time. A console uxTaskGetSystemState() (tasks/rt-stats) holds taskENTER_CRITICAL ~1.2ms (8 tasks),
+// during which our conv_done callback can't recycle descriptors. At 128B frames (here) that's
+// 5*~0.38ms = ~1.9ms of headroom at 83kHz, so the DMA rides through instead of wedging. Cost:
+// conv_done/OV-protection latency rises ~one frame (192us->~384us). A busier (>~13 task) converter's
+// critical section can exceed 1.9ms; the loopRT watchdog then resets+recovers it. See
+// doc/dev-notes/Real-Time Latency.
+#define ADC1_READ_LEN 256
 
 #define ADC_ATTEN_NA ((adc_atten_t)-1)
 
@@ -32,7 +40,10 @@ private:
     bool good_ = true; // cleared on a continuous-read driver error, restored by start()
     int64_t lastDataUs_ = 0; // last time the DMA delivered samples (no-sample watchdog)
     int64_t lastWarnUs_ = 0; // throttles the no-sample warning
-    static constexpr int64_t kNoDataTimeoutUs = 1000000; // 1s; normal inter-sample gap is a few ms
+    // 250ms: well above the ~0.38ms frame interval, low enough that a wedge the DMA headroom didn't
+    // absorb is reset quickly (the converter is NOT stopped for a transient — see loopRT). A genuine
+    // dead ADC is caught by the sustained-error path there.
+    static constexpr int64_t kNoDataTimeoutUs = 250000;
 
 
     uint32_t sr = 0; // sampling rate of driver

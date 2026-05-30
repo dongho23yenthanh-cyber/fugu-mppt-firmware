@@ -462,3 +462,27 @@ CONFIG_ARDUINO_UDP_RUN_CORE0=y
 
 
 LLM > Do an ISR audit on RT performance/r
+# Console `tasks` / `rt-stats` wedged the continuous-ADC DMA (2026-05-30)
+
+`uxTaskGetSystemState()` (used by the `tasks` and `rt-stats` console commands) walks every TCB under
+`taskENTER_CRITICAL(&xKernelLock)` — measured ~1.16 ms for 8 tasks, scaling ~linearly, so ~2 ms on a
+networked converter. While core 0 holds that lock, our IRAM `conv_done` callback on core 1 spins in
+`vTaskNotifyGiveFromISR()`, stalling the ADC driver ISR so it can't recycle DMA descriptors.
+
+The IDF continuous-ADC driver keeps a *fixed* `INTERNAL_BUF_NUM = 5` frames of DMA descriptors
+(independent of `max_store_buf_size`, which only sizes the software ring/pool). At the old
+`conv_frame_size = 64 B` that's only 5 × ~192 µs ≈ **0.96 ms** of headroom — less than the critical
+section — so the DMA ran dry and **halted**, recovering only via `resetPeripherals()` (stop+start).
+This is pre-existing (a 05-28 build reboots on `rt-stats`); the 05-29 no-sample watchdog merely made it
+visible. `flush_pool`/bigger `max_store_buf_size` do **not** help — the wedge is descriptor starvation,
+not pool overflow.
+
+Fix:
+- **A** — `conv_frame_size` raised to 128 B (`ADC1_READ_LEN` 128→256), giving 5 × ~0.38 ms ≈ 1.9 ms of
+  DMA headroom so the driver rides through the critical section. Cost: conv-done / OV-protection
+  latency rises from ~192 µs to ~384 µs. (A busier converter whose critical section exceeds ~1.9 ms
+  still wedges; the loopRT watchdog (B) then resets+recovers it without a converter backoff. Bump
+  `ADC1_READ_LEN` to 384/512 for more headroom at the cost of more latency.)
+- **B** — `loopRT` ADC watchdog unified + made transient-tolerant: a stall is reset promptly
+  (~300 ms throttle) and the converter is stopped only if it persists > ~800 ms (genuine dead ADC),
+  so a diagnostic-induced blip no longer trips a backoff on a live converter.

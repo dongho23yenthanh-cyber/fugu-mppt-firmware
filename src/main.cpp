@@ -551,49 +551,42 @@ static void loopRT(void *arg) {
 
         if (adcSampler.halted) continue;
 
-        if (samplerRet == ADC_Sampler::UpdateRet::AdcError) {
-            // AdcError repeats every poll while the ADC is down and the loop busy-spins, so only
-            // log/re-trip on the backoff edge — else "ADC error"/"backoff" floods the console at
-            // loop rate (the backoff window is what's meant to suppress the per-tick spam).
-            if (!mppt.inBackoff()) {
-                ESP_LOGE("main", "ADC error");
-                stopAndBackoff(16);
-            }
-            // A stalled continuous-ADC DMA reports AdcError every poll but nothing restarts it
-            // (the converter is now disabled, so the timeout-driven resetPeripherals below is
-            // skipped). Re-init the ADCs here, throttled, so a dead DMA self-heals.
-            static unsigned long lastAdcResetMs = 0;
-            if (nowMs - lastAdcResetMs > 8000) {
+        if (samplerRet == ADC_Sampler::UpdateRet::CalibFailure)
+            stopAndBackoff(4);
+
+        // ADC stall watchdog. AdcError = the continuous-ADC isGood() tripped (DMA stalled); a stale
+        // timeLastSampler = the sampler is alive but no fresh sample reached the controller. Either way
+        // we restart the ADC promptly. The converter is stopped only if the stall PERSISTS past
+        // kAdcSustainedMs — a transient wedge (e.g. a console uxTaskGetSystemState() briefly starving
+        // the DMA) recovers on one reset and must NOT trip a backoff on a live converter. Calibration
+        // legitimately withholds fresh samples, so it's excluded from the timeLastSampler arm.
+        constexpr unsigned long kAdcResetThrottleMs = 300, kAdcSustainedMs = 800, kAdcRestartMs = 60000;
+        static unsigned long adcStalledSinceMs = 0, lastAdcResetMs = 0;
+
+        bool adcStalled = samplerRet == ADC_Sampler::UpdateRet::AdcError ||
+                          (samplerRet != ADC_Sampler::UpdateRet::NewData && !adcSampler.isCalibrating() &&
+                           timeLastSampler && nowUs - timeLastSampler > 200000);
+
+        if (adcStalled) {
+            if (!adcStalledSinceMs) adcStalledSinceMs = nowMs;
+            if (nowMs - lastAdcResetMs > kAdcResetThrottleMs) { // restart a wedged DMA quickly
                 lastAdcResetMs = nowMs;
                 adcSampler.resetPeripherals();
             }
-        }
-
-        if (samplerRet == ADC_Sampler::UpdateRet::CalibFailure) {
-            stopAndBackoff(4);
+            if (nowMs - adcStalledSinceMs > kAdcSustainedMs && !converter.disabled() && !mppt.inBackoff()) {
+                ESP_LOGE("main", "ADC stall %lu ms, shutdown (nSamples=%lu)", nowMs - adcStalledSinceMs,
+                         lastMpptUpdateNumSamples);
+                stopAndBackoff(16);
+            }
+            if (nowMs - adcStalledSinceMs > kAdcRestartMs) systemRestart();
+        } else {
+            adcStalledSinceMs = 0;
         }
 
         if (samplerRet != ADC_Sampler::UpdateRet::NewData) {
             if (adcSampler.isCalibrating() && mppt.boardPowerSupplyUnderVoltage()) {
                 ESP_LOGW("main", "Board power supply UV %.2f!", mppt.boardPowerSupplyVoltage());
                 adcSampler.cancelCalibration();
-            }
-
-            if (timeLastSampler && nowUs - timeLastSampler > 200000) {
-                if (!converter.disabled()) {
-                    stopAndBackoff(4);
-                    ESP_LOGE("main", "Timeout new ADC sample, shutdown! nSamples=%lu dt=%lu ms",
-                             lastMpptUpdateNumSamples, (nowUs - timeLastSampler) / 1000);
-                    if (adcSampler.resetPeripherals()) {
-                        ESP_LOGI("main", "ADC peripherals reset");
-                    } else {
-                        ESP_LOGE("main", "Failed to reset ADC peripherals");
-                    }
-                }
-
-                if (timeLastSampler && nowUs - timeLastSampler > 60000000) {
-                    systemRestart();
-                }
             }
 
             if (!timeLastSampler and nowMs > 20000) {

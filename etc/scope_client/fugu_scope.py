@@ -55,6 +55,19 @@ try:
 except ImportError:
     from etc.scope_client.nat_discover import ScopeDiscovery
 
+# macOS: fastplotlib's canvas (rendercanvas -> `glfw` pip pkg) and imgui_bundle each ship their own
+# libglfw. Loading both registers the GLFW NSApp/window delegates twice and mouse events route to the
+# wrong (unused) GLFW, so the window renders but the controls never get input. Point the `glfw` pkg at
+# imgui_bundle's bundled dylib *before* fastplotlib imports it, so only one GLFW is ever loaded.
+if sys.platform == "darwin" and not os.environ.get("PYGLFW_LIBRARY"):
+    try:
+        import imgui_bundle
+        _glfw_lib = os.path.join(os.path.dirname(imgui_bundle.__file__), "libglfw.3.dylib")
+        if os.path.exists(_glfw_lib):
+            os.environ["PYGLFW_LIBRARY"] = _glfw_lib
+    except Exception:
+        pass
+
 import fastplotlib as fpl
 from fastplotlib.ui import EdgeWindow
 from imgui_bundle import imgui

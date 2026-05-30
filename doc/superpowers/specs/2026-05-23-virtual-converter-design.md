@@ -318,6 +318,16 @@ unphysical and meaningless when there's no sink.
 `g_vconv.step(1.0f / adc_freq)` runs `N = round(pwmFreq / adc_freq)` cycles (typically 10–15). N is recomputed each step
 from the latched `pwmFreq` in case it changes (it won't, but the cost is one division).
 
+**Coalesced-tick catch-up.** The periodic timer notifies the RT task every ADC tick, but the notification is a
+clear-on-exit binary count: if the control loop overruns one tick, several notifications pile into one wakeup.
+`hasData()` reads that count (`TaskNotification::waitCount`) and advances the plant by `count × dt`, not a single `dt`,
+so sim-time tracks the elapsed wall-clock-ticks even under overrun — a real plant keeps moving while the controller is
+busy. Stepping `count × dt` is exactly equivalent to `count` separate `dt` steps (proved by
+`test_vconv_catchup_equals_uncoalesced`). The catch-up is capped at `kMaxCatchupTicks` (8) so a gross stall can't turn
+into a multi-ms compute spike. The earlier single-`dt`-per-wakeup behavior silently dropped sim-time, which is what made
+the MPPT loop flip convergence basins under sub-µs timing perturbations — vconv is for **profiling**, not control-
+behavior validation (validate control changes on real hardware).
+
 ### ADC noise
 
 `ADC_VConv::getSample(ch)` adds zero-mean Gaussian noise per channel *after* fetching the deterministic plant value,

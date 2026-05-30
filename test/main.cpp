@@ -68,6 +68,12 @@ void test_streamed_watchdog_does_not_deadlock_read();
 void test_tasknotification_burst_reads_as_one_wakeup();
 void test_tasknotification_single_wakeup_then_empty();
 
+// adc/vconv.h + sim/vconv.h — coalesced-tick catch-up stepping (waitCount + capped hasData)
+void test_vconv_waitcount_returns_burst_count();
+void test_vconv_catchup_equals_uncoalesced();
+void test_vconv_single_step_drops_simtime();
+void test_vconv_hasdata_steps_capped_coalesced_count();
+
 // adc/ina226_conv_time.h + adc/adc.h (AsyncADC contract via ADC_Dummy)
 void test_ina226_convtime_exact_step();
 void test_ina226_convtime_rounds_up_between_steps();
@@ -344,6 +350,12 @@ void setup() {
     RUN_TEST(test_streamed_watchdog_does_not_deadlock_read);
     RUN_TEST(test_tasknotification_burst_reads_as_one_wakeup);
     RUN_TEST(test_tasknotification_single_wakeup_then_empty);
+
+    // adc/vconv.h + sim/vconv.h — coalesced-tick catch-up stepping
+    RUN_TEST(test_vconv_waitcount_returns_burst_count);
+    RUN_TEST(test_vconv_catchup_equals_uncoalesced);
+    RUN_TEST(test_vconv_single_step_drops_simtime);
+    RUN_TEST(test_vconv_hasdata_steps_capped_coalesced_count);
 
     // adc/ina226_conv_time.h
     RUN_TEST(test_ina226_convtime_exact_step);

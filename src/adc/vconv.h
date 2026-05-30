@@ -58,12 +58,17 @@ public:
     }
 
     bool hasData() override {
-        bool got = taskNotification_.wait(10);
-        if (got) {
+        uint32_t ticks = taskNotification_.waitCount(10);
+        if (ticks) {
+            // Step the plant by however many ADC ticks coalesced, not just one, so sim-time tracks
+            // wall-clock-ticks even when the control loop overruns and notifications pile up. This
+            // keeps the plant clock in sync with any wall-clock-driven controller logic (capped so a
+            // gross stall can't become a multi-ms catch-up spike).
+            if (ticks > kMaxCatchupTicks) ticks = kMaxCatchupTicks;
             const float dt = 1.0f / (float) adcFreq_;
-            g_vconv.stepSeconds(dt, 39000);
+            g_vconv.stepSeconds(dt * (float) ticks, 39000);
         }
-        return got;
+        return ticks != 0;
     }
 
     void setMaxExpectedVoltage(uint8_t, float) override {}
@@ -92,6 +97,7 @@ public:
     }
 
 private:
+    static constexpr uint32_t kMaxCatchupTicks = 8; // bound the per-call plant catch-up after a stall
     uint8_t readingChannel_ = 0;
     uint32_t adcFreq_ = 3000;
     float noiseVin_ = 0.0f, noiseVout_ = 0.0f, noiseIout_ = 0.0f, noiseNtc_ = 0.0f;

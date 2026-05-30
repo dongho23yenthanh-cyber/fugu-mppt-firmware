@@ -15,6 +15,11 @@ if ($ENV{RUN_TESTS})
             "../test/test_adc_hw.cpp"
             "../test/test_adc_min.cpp"
             "../test/test_tracker.cpp"
+            "../test/test_vconv.cpp"
+            # vconv plant: gated by CONFIG_FUGU_WITH_VCONV in normal builds (VCONV_SRC), but its
+            # pure-C++ plant is always linked here for test_vconv.cpp. WITH_VCONV defaults off, so
+            # VCONV_SRC stays empty in test builds -> no duplicate symbol.
+            "../src/sim/vconv.cpp"
     )
 elseif ($ENV{MAIN_SRC})
     set(MAIN_SRC $ENV{MAIN_SRC})

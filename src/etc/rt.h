@@ -105,12 +105,17 @@ public:
      * @return false on timeout
      */
     inline bool wait(uint32_t ms) {
+        return waitCount(ms) != 0;
+    }
+
+    // Like wait() but returns how many notifications had piled up (0 == timeout).
+    // clear-on-exit (pdTRUE): a burst that accumulated while the reader wasn't draining reads as one
+    // wakeup carrying the full count. The old (pdFALSE, ==1) decrement-by-one returned false whenever
+    // >1 had accumulated, starving read().
+    inline uint32_t waitCount(uint32_t ms) {
         void(this);
         //assert(readingTask and readingTask == xTaskGetCurrentTaskHandle());
-        // binary semaphore: clear-on-exit so any number of pending notifications (e.g. a burst that
-        // piled up while the reader wasn't draining) reads as one wakeup. The old (pdFALSE, ==1)
-        // decrement-by-one returned false whenever >1 had accumulated, starving read().
-        return ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms)) != 0;
+        return ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms));
     }
 
     /***

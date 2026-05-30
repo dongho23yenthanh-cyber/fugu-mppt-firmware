@@ -38,7 +38,8 @@ rejection message for invalid arguments / wrong context.
 | --- | --- |
 | `fan <float>` | Set fan speed, 0–100. |
 | `led <RRGGBB>`, `led <RGB>` | Set the LED color in hex or short hex (e.g. `led 33ff33` or `led 3f3`). |
-| `sensor` | Dump per-sensor state (last/raw value, EWM average and std, adaptive notch filter stats). `sensor avg` prints one compact line of EWM averages (`sens: vin=… iout=… …`) for fast polling. |
+| `sensor` | Dump per-sensor state (last/raw value, EWM average and std, adaptive-noise-filter stats). `sensor avg` prints one compact line of EWM averages (`sens: vin=… iout=… …`) for fast polling. The ANF line reads `(stale)` unless `anf on` is active (the filter is kept off the RT path by default). |
+| `anf [on\|off]` | Enable/disable the per-sample AdaptiveNoiseFilter, which feeds the noise/NSR stats in `sensor`. It's diagnostics-only and off by default to keep it out of the RT sample path; turn it on while inspecting sensor noise, off when done. |
 | `mem` | Display heap and PSRAM size (total and free). |
 | `heap [check]` | Per-capability heap report (INTERNAL / DMA / SPIRAM): free, minimum-ever-free, and largest free block (bytes) — fragmentation at a glance. `heap check` additionally runs `heap_caps_check_integrity_all` and prints `OK`/`CORRUPT`. |
 | `tasks` | FreeRTOS task table: name, state (run/rdy/blk/sus), priority, pinned core (0/1/any), and **minimum-ever free stack in bytes** (`uxTaskGetStackHighWaterMark`) — the value to watch for stack overflows. Complements `rt-stats` (which shows CPU %, not headroom). |
@@ -49,7 +50,7 @@ rejection message for invalid arguments / wrong context.
 | `peek <addr> [len]` | Read memory at `<addr>` (hex `0x…`, decimal, or octal). With `len ∈ {1,2,4,8}` (default 4) prints one typed hex value (`peek 0x… = 0x…`); other `len` ≤ 256 prints a hex+ASCII dump. Refuses addresses outside internal RAM / DROM / external RAM / IRAM/IROM (the latter needs 4-byte alignment for word-bus reads). The host CLI (`etc/fugu_console.py`) accepts `peek <symbol>[.field…][+offset]` and ships `sym <pattern>` + `peek-struct <symbol>[.field…]` — all resolved client-side against the build ELF (DWARF for member offsets / field decoding), so the device only ever sees a numeric address. |
 | `peek-struct <obj>[.field…] [depth]` *(host-only)* | DWARF-typed dump of an object or sub-object: enumerates each member (offset, type, name) and decodes its value (int / float / bool / pointer / enum / char[]). Reads the byte image via chunked `peek` calls. Embedded aggregates expand inline up to `[depth]` levels (default 2, range 0..16); past the budget they print as `<TypeName, N B>` and can be drilled into with a longer dotted path. Static `constexpr` class members are skipped (no storage). |
 | `uptime` | Print seconds since boot (monotonic; resets only on reboot) and the running app description (name, version, build date/time, IDF version). |
-| `rt-stats` | Print FreeRTOS per-task runtime statistics (sampled over 1 s). |
+| `rt-stats` | Print FreeRTOS per-task runtime statistics (sampled over ~2 s), sorted busiest-first, with each task's pinned core and **per-core CPU %** (a core-pinned task reads 0–100 % of its own core; read saturation off the `IDLEx` row, not the busy task). |
 | `reset-lag` | Reset the max-lag statistic and print [rtcount](Real-time%20Counter.md) timings. |
 | `scan-i2c` | Run an I²C bus scan. |
 | `adc-restart` | Re-initialize the ADC backends. |

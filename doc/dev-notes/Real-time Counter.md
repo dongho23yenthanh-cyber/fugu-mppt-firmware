@@ -24,3 +24,20 @@ rtcount("someFunc");
 
 ```
 
+## Implementation notes
+
+Stats live in a fixed, pre-allocated `rtcount_entry[RTCOUNT_MAX]` table (`src/etc/rt.h`), not a map —
+`rtcount()` runs on the RT core and must never touch the heap (a first-seen key allocating mid-loop once
+tripped a TLSF heap assert).
+
+Two consequences for callers:
+
+- **Labels must be string literals** (or otherwise interned `const char*`). Lookup matches by pointer, not
+  by string content, so two identical-looking literals from different translation units would count
+  separately, and a constructed/temporary string won't match itself across calls.
+- **At most `RTCOUNT_MAX` (64) distinct labels.** Excess labels are silently dropped (the table is capped,
+  never grown). Bump the constant in `rt.h` if a profiling session needs more.
+
+`total`/`max`/`min` are accumulated in CPU cycles and divided by the core clock (MHz) at print time, so
+sub-microsecond blocks keep their precision instead of truncating to whole µs.
+

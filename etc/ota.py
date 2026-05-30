@@ -15,9 +15,15 @@ fallback_hosts = [
     python3 -m http.server 9000upd
 3. discover hosts
 4 iterate hosts
-    > ota http://192.168.1.161:9000/build/fugu-firmware.bin 
+    > ota http://192.168.1.161:9000/build/fugu-firmware.bin
 
 idf.py build
+
+Safety guards (read from the build's sdkconfig.json, see ota_build_flags.py):
+- a no-network build (CONFIG_FUGU_WITH_NETW=n) warns; devices lose Wi-Fi after OTA.
+- a plant-sim build (CONFIG_FUGU_WITH_VCONV=y) warns hard: VCONV swaps the real PWM driver for a
+  simulator (src/buck.h) so a real converter makes 0W while looking alive. Both require an
+  interactive y/N and are refused non-interactively.
 
 """""
 import sys
@@ -47,6 +53,9 @@ from etc.fugu_console import scan_nat_async
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'idf-devtools'))
 import elf_archive  # vendored submodule (github.com/fl4p/idf-devtools)
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ota_build_flags import build_has_networking, build_is_plant_sim
+
 # CLion / PyCharm Run consoles report as a TTY but don't render ANSI escapes —
 # disable color/style so the boxes don't come out wrapped in raw \x1b[...m codes.
 # Also fix width to a wide value: with force_terminal=False rich would default to
@@ -69,7 +78,8 @@ argp.add_argument('-n', '--dry-run', action='store_true',
                   help='only print what would be updated, do not send `ota`')
 argp.add_argument('-m', '--match', metavar='REGEX',
                   help='only act on devices whose name matches REGEX (re.search)')
-args = argp.parse_args()
+# args/hosts are module globals populated by cli() (under __main__) so importing this module for
+# its helpers doesn't parse argv or hit the network.
 
 
 def read_local_app_desc(bin_path):
@@ -88,14 +98,8 @@ def read_local_app_desc(bin_path):
                 time=s(0x50, 16), date=s(0x60, 16), idf=s(0x70, 32))
 
 
-def build_has_networking(bin_path):
-    """True/False if the build that produced bin_path has CONFIG_FUGU_WITH_NETW, None if unknown."""
-    cfg = os.path.join(os.path.dirname(bin_path), 'config', 'sdkconfig.json')
-    try:
-        with open(cfg) as f:
-            return bool(json.load(f).get('FUGU_WITH_NETW'))
-    except (OSError, ValueError):
-        return None
+# build_has_networking() / build_is_plant_sim() (read sdkconfig.json) live in ota_build_flags.py
+# so they stay host-unit-testable without this module's network/argparse import side effects.
 
 
 RE_APP_LINE = re.compile(r'App:\s+(\S+)\s+v\S+\s+(\S+)\s+\(built (.+),\s+IDF\s+(\S+)\)')
@@ -122,25 +126,6 @@ def ensure_http_server():
                             cwd=repo_root, stderr=subprocess.DEVNULL)
     atexit.register(proc.terminate)
     time.sleep(.5)
-
-
-hosts = [(h, 23, n) for h, _, n in discover_scope_servers()]
-hosts += asyncio.run(scan_nat_async(reachable_only=True))
-hosts = hosts or fallback_hosts
-
-if not hosts:
-    print('no hosts discovered!')
-    sys.exit(1)
-
-if args.match:
-    pat = re.compile(args.match)
-    hosts = [h for h in hosts if pat.search(h[2])]
-    if not hosts:
-        print(f'no devices match {args.match!r}')
-        sys.exit(1)
-
-print(hosts)
-
 
 
 async def fetch_version(addr, port, name, retry=False):
@@ -340,6 +325,13 @@ async def main():
         print('⚠️  this build has networking DISABLED (CONFIG_FUGU_WITH_NETW=n) — '
               'devices will lose Wi-Fi after OTA and can only be recovered by serial.')
 
+    sim = build_is_plant_sim(FIRMWARE_BIN)
+    if sim:
+        print('⛔  this is a PLANT-SIMULATION build (CONFIG_FUGU_WITH_VCONV=y) — the real PWM '
+              'driver is replaced by a simulator (src/buck.h), so the half-bridge never switches. '
+              'Flashing it to a real converter yields 0W (Vin pinned at Voc) while the device '
+              'still looks alive. This is a bench/sim image; do NOT push it to fry/flat.')
+
     if args.dry_run:
         print('dry-run, would update:')
         for _, _, name in to_update:
@@ -351,6 +343,14 @@ async def main():
             print('aborting: no-network image, refusing to OTA non-interactively')
             return False
         if input('proceed anyway? [y/N] ').strip().lower() not in ('y', 'yes'):
+            print('aborted')
+            return False
+
+    if sim:
+        if not sys.stdin.isatty():
+            print('aborting: plant-sim (VCONV) image, refusing to OTA non-interactively')
+            return False
+        if input('really OTA a plant-sim build to these devices? [y/N] ').strip().lower() not in ('y', 'yes'):
             print('aborted')
             return False
 
@@ -387,4 +387,25 @@ async def main():
     return all(res.values())
 
 
-sys.exit(0 if asyncio.run(main()) else 1)
+def cli():
+    """Parse argv, discover + match hosts, run the OTA. Sets the module globals main() reads."""
+    global args, hosts
+    args = argp.parse_args()
+    hosts = [(h, 23, n) for h, _, n in discover_scope_servers()]
+    hosts += asyncio.run(scan_nat_async(reachable_only=True))
+    hosts = hosts or fallback_hosts
+    if not hosts:
+        print('no hosts discovered!')
+        sys.exit(1)
+    if args.match:
+        pat = re.compile(args.match)
+        hosts = [h for h in hosts if pat.search(h[2])]
+        if not hosts:
+            print(f'no devices match {args.match!r}')
+            sys.exit(1)
+    print(hosts)
+    sys.exit(0 if asyncio.run(main()) else 1)
+
+
+if __name__ == '__main__':
+    cli()

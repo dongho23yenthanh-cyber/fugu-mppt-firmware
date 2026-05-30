@@ -12,8 +12,10 @@ Core 1 (RT: ADC/MPPT/PWM) is untouched by either — both radios live on core 0.
 
 - Baseline on connect: `WIFI_PS_MIN_MODEM` — modem sleeps between DTIM beacons (~100 ms),
   console/MQTT/OTA stay responsive. (Default was `WIFI_PS_NONE` — radio always on.)
-- Idle > 5 min (not converting: `converter.disabled() || tracker._curPower < 10`, the same
-  test that gates WiFi reconnect): deepen to `WIFI_PS_MAX_MODEM` to cut night standby draw.
+- Idle > 5 min (not converting: `converter.disabled() || tracker._curPower < 10`): deepen to
+  `WIFI_PS_MAX_MODEM` to cut night standby draw. (This `converting` test once also gated WiFi
+  reconnect, but that gate was dropped — RF bring-up adds only ~3 ms RT-loop lag, well under the
+  watchdog; reconnect is now gated only on `ucTemp < 80`.)
 - Back to `MIN_MODEM` the instant PV power returns. `psMode` is reset on the WiFi-up edge
   because a reconnect re-applies the `MIN_MODEM` baseline.
 - Transitions log `WiFi power save: MAX_MODEM (night/idle)` / `MIN_MODEM (active)`.

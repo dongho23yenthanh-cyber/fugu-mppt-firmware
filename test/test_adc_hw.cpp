@@ -10,7 +10,6 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 
-#include <unordered_map>
 #include <string>
 
 #include "conf.h"
@@ -66,11 +65,11 @@ static bool inaWrite(uint8_t reg, uint16_t val) {
 // ---- ADC #1: internal continuous ADC (DMA conv-done ISR path) ----
 void test_internal_adc_continuous_samples() {
     ESP_LOGI(TAG, "[internal] BEGIN");
-    ConfFile sens{std::unordered_map<std::string, std::string>{
+    ConfFile sens{{
         {"esp32adc1_avg", std::to_string(FRY_ADC_AVG)},
         {"esp32adc1_sr", std::to_string(FRY_ADC_SR)},
     }};
-    ConfFile board{std::unordered_map<std::string, std::string>{}};
+    ConfFile board{{}};
 
     ADC_ESP32_Cont adc{sens};
     adc.init(board);

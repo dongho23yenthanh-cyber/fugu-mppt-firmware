@@ -7,7 +7,6 @@
 #include <esp_log.h>
 #include <Arduino.h>
 
-#include <unordered_map>
 #include <string>
 #include <stdexcept>
 
@@ -19,17 +18,18 @@
 static constexpr float kFsw = 39000.f;
 
 static void initConvEx(SynchronousConverter &c, const char *topo, const char *bootRefreshNs) {
-    ConfFile converterConf{std::unordered_map<std::string, std::string>{{"topo", topo}}};
-    ConfFile coilConf{std::unordered_map<std::string, std::string>{{"L0", "50e-6"}}};
-    std::unordered_map<std::string, std::string> board{
-        {"pwm_freq", "39000"},
-        {"pwm_driver_logic", "HiLi"},
-        {"pwm_hi", "1"},
-        {"pwm_li", "2"},
-        {"skip_assert", "1"},
-    };
-    if (bootRefreshNs) board.emplace("boot_refresh_ns", bootRefreshNs);
-    ConfFile boardConf{std::move(board)};
+    ConfFile converterConf{{{"topo", topo}}};
+    ConfFile coilConf{{{"L0", "50e-6"}}};
+    ConfFile boardConf = bootRefreshNs
+        ? ConfFile{{
+              {"pwm_freq", "39000"}, {"pwm_driver_logic", "HiLi"},
+              {"pwm_hi", "1"}, {"pwm_li", "2"}, {"skip_assert", "1"},
+              {"boot_refresh_ns", bootRefreshNs},
+          }}
+        : ConfFile{{
+              {"pwm_freq", "39000"}, {"pwm_driver_logic", "HiLi"},
+              {"pwm_hi", "1"}, {"pwm_li", "2"}, {"skip_assert", "1"},
+          }};
     c.init(converterConf, boardConf, coilConf);
 }
 

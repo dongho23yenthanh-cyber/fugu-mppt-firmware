@@ -6,7 +6,6 @@
 #include <esp_log.h>
 #include <Arduino.h>
 
-#include <unordered_map>
 #include <string>
 #include <cstdio>
 
@@ -14,7 +13,7 @@
 #include "store.h" // mountLFS
 
 static ConfFile makeConf() {
-    return ConfFile{std::unordered_map<std::string, std::string>{
+    return ConfFile{{
         {"dec", "42"},
         {"hex", "0xff"},
         {"bin", "0b101"},

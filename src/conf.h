@@ -5,15 +5,14 @@
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
-#include<unordered_map>
-#include <unordered_set>
+#include <utility> // std::pair
 #include <numeric>
 #include <functional>
 #include <vector>
 #include <limits>
 #include <cmath> // std::isfinite (getFloat warnIfNan branch)
 #include <cstring>
-#include <algorithm> // std::transform
+#include <algorithm> // std::transform / std::remove_if
 #include <esp_log.h>
 
 #include "console.h"
@@ -33,15 +32,44 @@ inline std::string trim(const std::string &s) {
     return s.substr(a, 1 + b - a);
 }
 
+// Conf files are tiny (~10-20 keys), so a flat vector with linear lookup beats a hashtable on both
+// size (no unordered_map/unordered_set template + node allocator pulled into the image) and memory.
 class ConfFile {
-    std::unordered_map<std::string, std::string> _map;
+    using KV = std::pair<std::string, std::string>;
+    using KVList = std::initializer_list<KV>;
+
+    std::vector<KV> _map;
     const char *path;
-    mutable std::unordered_set<std::string> _accessed; // keys any getX/getString/c asked for
+    mutable std::vector<std::string> _accessed; // keys any getX/getString/c asked for
+
+    std::string *find_(const std::string &k) {
+        for (auto &p: _map) if (p.first == k) return &p.second;
+        return nullptr;
+    }
+
+    const std::string *find_(const std::string &k) const {
+        for (auto &p: _map) if (p.first == k) return &p.second;
+        return nullptr;
+    }
+
+    void set_(const std::string &k, const std::string &v) {
+        if (auto *e = find_(k)) *e = v; else _map.emplace_back(k, v);
+    }
+
+    void markAccessed_(const std::string &k) const {
+        for (auto &a: _accessed) if (a == k) return;
+        _accessed.push_back(k);
+    }
+
+    bool wasAccessed_(const std::string &k) const {
+        for (auto &a: _accessed) if (a == k) return true;
+        return false;
+    }
 
 public:
     // In-memory ConfFile, primarily for tests. Skips the file read.
-    explicit ConfFile() : _map({}), path("") {}
-    explicit ConfFile(std::unordered_map<std::string, std::string> map ) : _map(std::move(map)), path("<in-mem>") {}
+    explicit ConfFile() : path("") {}
+    explicit ConfFile(KVList map) : _map(map), path("<in-mem>") {}
 
     explicit ConfFile(const char *path, bool no_warn_if_not_open = false) : path(path) {
         FILE *f = fopen(path, "r");
@@ -68,10 +96,10 @@ public:
                 continue;
             }
             auto k = trim(line.substr(0, ie));
-            if (_map.find(k) != _map.end()) {
+            if (find_(k)) {
                 ESP_LOGW(TAG, "duplicate key %s in file '%s'", k.c_str(), path);
             }
-            _map[k] = trim(line.substr(ie + 1));
+            set_(k, trim(line.substr(ie + 1)));
         }
         fclose(f);
     }
@@ -83,7 +111,7 @@ public:
     // duplicate lines of a key being written are collapsed to one. Genuinely new keys are appended.
     // Returns false on any I/O failure (cannot open / short write / fsync error) instead of
     // aborting — a failed config write must never panic-reboot the device.
-    bool add(const std::unordered_map<std::string, std::string> &values, bool overwrite = false) {
+    bool add(KVList values, bool overwrite = false) {
         // read current file into lines (stripping the trailing newline)
         std::vector<std::string> lines;
         if (FILE *fr = fopen(path, "r")) {
@@ -97,8 +125,15 @@ public:
             fclose(fr);
         }
 
-        std::unordered_map<std::string, bool> written;
-        for (auto &[key, val]: values) written[key] = false;
+        std::vector<std::string> writtenKeys;
+        auto isWritten = [&](const std::string &k) {
+            for (auto &w: writtenKeys) if (w == k) return true;
+            return false;
+        };
+        auto findVal = [&](const std::string &k) -> const std::string * {
+            for (auto &p: values) if (p.first == k) return &p.second;
+            return nullptr;
+        };
 
         std::vector<std::string> out;
         out.reserve(lines.size() + values.size());
@@ -115,8 +150,8 @@ public:
             }
 
             auto key = trim(code.substr(0, ie));
-            auto it = values.find(key);
-            if (it == values.end()) {
+            auto *vp = findVal(key);
+            if (!vp) {
                 out.push_back(line); // a key we're not touching
                 continue;
             }
@@ -124,19 +159,19 @@ public:
             if (!overwrite)
                 throw std::runtime_error("duplicate key: " + key);
 
-            if (written[key]) {
+            if (isWritten(key)) {
                 ESP_LOGW(TAG, "collapsing duplicate key %s in %s", key.c_str(), path);
                 continue; // drop redundant duplicate line
             }
 
-            std::string nl = key + "=" + it->second;
+            std::string nl = key + "=" + *vp;
             if (!comment.empty()) nl += "  " + comment; // keep the inline comment
             out.push_back(nl);
-            written[key] = true;
+            writtenKeys.push_back(key);
         }
 
         for (auto &[key, val]: values)
-            if (!written[key]) out.push_back(key + "=" + val);
+            if (!isWritten(key)) out.push_back(key + "=" + val);
 
         FILE *f = fopen(path, "w");
         if (f == nullptr) {
@@ -162,7 +197,7 @@ public:
 
         fclose(f);
 
-        for (auto &[key, val]: values) _map[key] = val; // keep in-memory view consistent
+        for (auto &[key, val]: values) set_(key, val); // keep in-memory view consistent
         return true;
     }
 
@@ -196,7 +231,8 @@ public:
             out.push_back(line);
         }
 
-        _map.erase(key); // keep in-memory view consistent regardless of file state
+        // keep in-memory view consistent regardless of file state
+        _map.erase(std::remove_if(_map.begin(), _map.end(), [&](const KV &p) { return p.first == key; }), _map.end());
         if (!removed) return false;
 
         FILE *f = fopen(path, "w");
@@ -229,7 +265,7 @@ public:
     // on read). Use only for one-shot writes / append-heavy paths where file growth is acceptable;
     // prefer add() for keys that get rewritten repeatedly (e.g. service enabled/log_level).
     // Returns false on any I/O failure instead of aborting (see add()).
-    bool addFast(const std::unordered_map<std::string, std::string> &values, bool overwrite = false) {
+    bool addFast(KVList values, bool overwrite = false) {
         FILE *f = fopen(path, "a");
         if (f == nullptr) {
             f = fopen(path, "w");
@@ -240,7 +276,7 @@ public:
         }
 
         for (auto &[key, val]: values) {
-            if (_map.find(key) != _map.end()) {
+            if (find_(key)) {
                 if (!overwrite) {
                     fclose(f);
                     throw std::runtime_error("duplicate key: " + key);
@@ -267,7 +303,7 @@ public:
 
         fclose(f);
 
-        for (auto &[key, val]: values) _map[key] = val; // keep in-memory view consistent
+        for (auto &[key, val]: values) set_(key, val); // keep in-memory view consistent
         return true;
     }
 
@@ -276,22 +312,21 @@ public:
     T getX(const std::string &key, T def, const std::function<T(const char *, char **)> &strto_,
            bool noDef = false) const {
         // strto_ error handling https://stackoverflow.com/questions/26080829/detecting-strtol-failure
-        _accessed.insert(key);
-        auto i = _map.find(key);
-        if (i != _map.end()) {
+        markAccessed_(key);
+        if (auto *vp = find_(key)) {
             char *endptr = nullptr;
             errno = 0; // reset
-            T l = strto_(i->second.c_str(), &endptr);
+            T l = strto_(vp->c_str(), &endptr);
             if (errno != 0) {
-                ESP_LOGE(TAG, "%s:%s: strto_(\"%s\") failed: ret=%f, errno=%i", path, key.c_str(), i->second.c_str(),
+                ESP_LOGE(TAG, "%s:%s: strto_(\"%s\") failed: ret=%f, errno=%i", path, key.c_str(), vp->c_str(),
                          (float) l, errno);
-                throw std::runtime_error("strto_ error " + i->second);
+                throw std::runtime_error("strto_ error " + *vp);
             }
             if (*endptr != 0) {
-                ESP_LOGE(TAG, "%s:%s additional chars after strtol(%s): '%s'", path, key.c_str(), i->second.c_str(),
+                ESP_LOGE(TAG, "%s:%s additional chars after strtol(%s): '%s'", path, key.c_str(), vp->c_str(),
                          endptr);
                 //assert(false);
-                throw std::runtime_error("additional chars " + i->second);
+                throw std::runtime_error("additional chars " + *vp);
             }
             return l;
         }
@@ -310,7 +345,7 @@ public:
     std::vector<std::string> keys() const {
         std::vector<std::string> keys{_map.size()};
         std::transform(_map.begin(), _map.end(), keys.begin(),
-                       [](const std::pair<std::string, std::string> &p) { return p.first; });
+                       [](const KV &p) { return p.first; });
         return keys;
     }
 
@@ -362,30 +397,25 @@ public:
     float f(const std::string &key, float def = std::numeric_limits<float>::max()) { return getFloat(key, def); }
 
     const std::string &getString(const std::string &key) const {
-        _accessed.insert(key);
-        auto i = _map.find(key);
-        if (i != _map.end())
-            return i->second;
+        markAccessed_(key);
+        if (auto *vp = find_(key))
+            return *vp;
         throw std::runtime_error("key not found: " + key);
     }
 
     [[nodiscard]] const std::string &getString(const std::string &key, const std::string &def) const {
-        _accessed.insert(key);
-        auto i = _map.find(key);
-        if (i != _map.end()) {
-            return i->second;
-        }
+        markAccessed_(key);
+        if (auto *vp = find_(key))
+            return *vp;
         return def;
         //ESP_LOGE(TAG, "key '%s' not found", key.c_str());
         //assert(false);
     }
 
     const char *c(const std::string &key, const char *def = nullptr) {
-        _accessed.insert(key);
-        auto i = _map.find(key);
-        if (i != _map.end()) {
-            return i->second.c_str();
-        }
+        markAccessed_(key);
+        if (auto *vp = find_(key))
+            return vp->c_str();
         return def;
     }
 
@@ -395,7 +425,7 @@ public:
     // (enabled/log_level read on a separate instance) or confs with hardware-conditional reads.
     void warnUnknownKeys() const {
         for (auto &kv: _map)
-            if (_accessed.find(kv.first) == _accessed.end())
+            if (!wasAccessed_(kv.first))
                 ESP_LOGW(TAG, "%s: unknown key '%s' (ignored)", path, kv.first.c_str());
     }
 

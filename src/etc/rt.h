@@ -1,6 +1,6 @@
 #pragma once
 
-#include <map>
+#include <atomic>
 #include <stdexcept>
 #include <esp_attr.h> // IRAM_ATTR
 #include <esp_cpu.h>  // esp_cpu_get_cycle_count
@@ -49,14 +49,27 @@ esp_err_t esp_intr_dump(FILE *stream); // since idf5.5
 void rtcount_test_cycle_counter();
 
 struct rtcount_stat {
-    unsigned long total{0}, num{0},
+    // total/max/min are in CPU cycles (converted to µs at print time for sub-µs precision)
+    unsigned long long total{0};
+    unsigned long num{0},
             max{0}, max_num{0},
             min{std::numeric_limits<unsigned long>::max()}, min_num{0};
 };
 
-// Single definition lives in rt.cpp; declared extern here so all TUs share one map
-// (a `static` here would give every including TU its own copy and silently un-aggregate stats).
-extern std::unordered_map<const char *, rtcount_stat> rtcount_stats;
+// Fixed, pre-allocated stat table: rtcount() runs on the RT core, so it must never touch the heap.
+// Keys are interned string literals (fixed call sites) -> matched by pointer, appended into this
+// array via an atomic index. No allocation, ever. (The old unordered_map heap-allocated on a
+// first-seen key mid-mppt.update() and tripped a TLSF heap assert.)
+struct rtcount_entry {
+    const char *key;
+    rtcount_stat stat;
+};
+
+constexpr int RTCOUNT_MAX = 64; // distinct labels; excess is dropped (logged once in rtcount_print)
+
+// Single definition lives in rt.cpp; declared extern so all TUs share one table.
+extern rtcount_entry rtcount_table[RTCOUNT_MAX];
+extern std::atomic<int> rtcount_count;
 
 extern volatile bool rtcount_en;
 

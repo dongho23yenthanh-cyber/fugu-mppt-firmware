@@ -4,7 +4,8 @@
 
 volatile bool rtcount_en = true;
 
-std::unordered_map<const char *, rtcount_stat> rtcount_stats{};
+rtcount_entry rtcount_table[RTCOUNT_MAX]{};
+std::atomic<int> rtcount_count{0};
 
 //Linked list of vector descriptions, sorted by cpu.intno value
 vector_desc_t *vector_desc_head = NULL;
@@ -112,24 +113,37 @@ void rtcount(const char *l) {
         //constexpr auto maxT = std::numeric_limits<unsigned long>::max();
         auto t = rtclock_us();
         //auto dt = (t < t0) ? (maxT - t0 + t) : (t - t0);
-        auto dt = (t - t0) / CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ;
+        auto dt = (t - t0); // CPU cycles; converted to µs at print time for sub-µs precision
         //if(dt > maxT/2) dt = maxT - dt;
-        auto f = rtcount_stats.find(l);
-        if (f == rtcount_stats.end()) {
-            rtcount_stats[l] = {};
-            f = rtcount_stats.find(l);
+
+        // pointer-match against the interned label literals (no heap, no strcmp)
+        int n = rtcount_count.load(std::memory_order_acquire);
+        rtcount_stat *stat = nullptr;
+        for (int i = 0; i < n; ++i) {
+            if (rtcount_table[i].key == l) { stat = &rtcount_table[i].stat; break; }
         }
-        auto &stat(f->second);
-        stat.total += dt;
-        if (dt > stat.max) {
-            stat.max = dt;
-            stat.max_num = stat.num;
+        if (!stat) {
+            int idx = rtcount_count.fetch_add(1, std::memory_order_acq_rel);
+            if (idx < RTCOUNT_MAX) {
+                rtcount_table[idx].key = l;
+                rtcount_table[idx].stat = {};
+                stat = &rtcount_table[idx].stat;
+            } else {
+                rtcount_count.store(RTCOUNT_MAX, std::memory_order_release); // cap; drop this label
+            }
         }
-        if (dt < stat.min) {
-            stat.min = dt;
-            stat.min_num = stat.num;
+        if (stat) {
+            stat->total += dt;
+            if (dt > stat->max) {
+                stat->max = dt;
+                stat->max_num = stat->num;
+            }
+            if (dt < stat->min) {
+                stat->min = dt;
+                stat->min_num = stat->num;
+            }
+            ++stat->num;
         }
-        ++stat.num;
     }
 
     t0 = rtclock_us();
@@ -141,23 +155,28 @@ void rtcount_print(bool reset) {
         vTaskDelay(100);
     }
 
-    UART_LOG("rtcount_print :");
-    UART_LOG("%-30s %9s %9s %6s %6s %6s %6s %6s", "key", "num", "tot", "mean", "max", "maxNum", "min", "minNum");
+    constexpr float mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ; // cycles -> µs
 
-    //typedef std::remove_reference<decltype(*rtcount_stats.begin())>::type P;
-    typedef std::pair<const char *, rtcount_stat> P;
-    std::vector<P> sorted(rtcount_stats.begin(), rtcount_stats.end());
-    std::sort(sorted.begin(), sorted.end(), [](const P &a, const P &b) {
-        return a.second.max > b.second.max;
+    UART_LOG("rtcount_print : (µs)");
+    UART_LOG("%-30s %9s %9s %8s %8s %6s %8s %6s", "key", "num", "tot", "mean", "max", "maxNum", "min", "minNum");
+
+    // rtcount_en is false here, so the table is quiescent — safe to sort in place by max desc.
+    int n = rtcount_count.load(std::memory_order_acquire);
+    if (n > RTCOUNT_MAX) n = RTCOUNT_MAX;
+    std::sort(rtcount_table, rtcount_table + n, [](const rtcount_entry &a, const rtcount_entry &b) {
+        return a.stat.max > b.stat.max;
     });
 
-    for (auto [k, stat]: sorted) {
-        UART_LOG("%-30s %9lu %9lu %6lu %6lu %6lu %6lu %6lu", k, stat.num, stat.total, stat.total / stat.num,
-                 stat.max, stat.max_num, stat.min, stat.min_num);
+    for (int i = 0; i < n; ++i) {
+        const auto &k = rtcount_table[i].key;
+        const auto &stat = rtcount_table[i].stat;
+        UART_LOG("%-30s %9lu %9.0f %8.3f %8.3f %6lu %8.3f %6lu", k, stat.num, stat.total / mhz,
+                 (float) stat.total / stat.num / mhz,
+                 stat.max / mhz, stat.max_num, stat.min / mhz, stat.min_num);
     }
     UART_LOG("\n");
     if (reset)
-        rtcount_stats.clear();
+        rtcount_count.store(0, std::memory_order_release);
 
     rtcount_en = true;
 }

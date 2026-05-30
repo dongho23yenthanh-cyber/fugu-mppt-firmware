@@ -32,7 +32,7 @@
 #include "etc/ota.h"
 #endif
 #ifdef WITH_MEASURE_COIL
-#include "measure_coil.h"
+#include "selftest/measure_coil.h"
 #endif
 
 #include "etc/version.h"

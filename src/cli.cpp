@@ -31,7 +31,7 @@
 #include "mppt.h"
 #include "tele/console_ble.h"
 #ifdef WITH_MEASURE_COIL
-#include "measure_coil.h"
+#include "selftest/measure_coil.h"
 #endif
 #include "etc/version.h"
 #include "adc/sampling.h"

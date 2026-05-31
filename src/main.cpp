@@ -727,6 +727,22 @@ static void lfStatusLine(uint32_t nSamples, uint32_t sps, uint32_t dt) {
         nSamples,
         (int16_t) wifiRssi()
     );
+
+    // While idle in START, name the startCondition() clause that's blocking the start
+    // (throttled: on-change, else every 30s). Diagnoses stuck pre-dawn starts from the log.
+    if (mppt.converter.disabled() && !g_app.manualPwm) {
+        const char *reason = mppt.startBlockReason();
+        static const char *lastReason = nullptr;
+        static unsigned long lastLogUs = 0;
+        auto nowUs = wallClockUs();
+        if (reason && (reason != lastReason || nowUs - lastLogUs > 30000000)) {
+            ESP_LOGI("mppt", "START blocked: %s (Vin=%.1f Vout=%.1f ntc=%.0f mcu=%.0f)", reason,
+                     sensors.Vin->ewm.avg.get(), sensors.Vout->ewm.avg.get(),
+                     mppt.ntc.last(), mppt.ucTemp.last());
+            lastReason = reason;
+            lastLogUs = nowUs;
+        }
+    }
 }
 
 // RGB LED color from current converter state (manual / idle / sweep / MPPT / CV / topping).

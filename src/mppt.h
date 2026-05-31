@@ -313,14 +313,21 @@ public:
         return boardPowerSupplyVoltage() < (start ? 9.5f : 9.f);
     }
 
-    [[nodiscard]] bool startCondition() const {
-        return wallClockUs() >= _backoffUntilUs
-               && !(ntc.last() > limits.Temp_derate) && ucTemp.last() < limits.Temp_derate
-               && (converter.boost()
-                       ? sensors.Vin->ewm.avg.get() < sensors.Vout->ewm.avg.get() + 1
-                       : sensors.Vin->ewm.avg.get() > sensors.Vout->ewm.avg.get() + 1)
-               && !boardPowerSupplyUnderVoltage(true) && !sampler.isCalibrating();
+    // First startCondition() clause currently blocking a start, or nullptr if clear.
+    // Single source of truth for startCondition(); also logged while idle in START.
+    [[nodiscard]] const char *startBlockReason() const {
+        if (inBackoff()) return "backoff";
+        if (ntc.last() > limits.Temp_derate || !(ucTemp.last() < limits.Temp_derate)) return "temp";
+        if (!(converter.boost()
+                  ? sensors.Vin->ewm.avg.get() < sensors.Vout->ewm.avg.get() + 1
+                  : sensors.Vin->ewm.avg.get() > sensors.Vout->ewm.avg.get() + 1))
+            return "Vin-Vout";
+        if (boardPowerSupplyUnderVoltage(true)) return "supply-UV";
+        if (sampler.isCalibrating()) return "calibrating";
+        return nullptr;
     }
+
+    [[nodiscard]] bool startCondition() const { return startBlockReason() == nullptr; }
 
     bool protectLf(bool ignoreUV) {
         //auto nowMs = loopWallClockMs();

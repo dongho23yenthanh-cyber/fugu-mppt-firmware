@@ -207,14 +207,43 @@
 </div>
 
 <script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
-<script type="module">
-  // ESP_LOG output is ANSI-coloured. Use rburns/ansi-to-html
-  // (https://github.com/rburns/ansi-to-html/blob/master/lib/ansi_to_html.js) to
-  // turn the SGR escapes into safe <span style="color:..."> markup.
-  // escapeXML:true makes the library escape its input before wrapping it in
-  // colour spans, so the resulting HTML is safe to splice into the log DOM.
-  import Convert from "https://esm.sh/ansi-to-html@0.7.2";
-  window.ansiConvert = new Convert({ newline:false, escapeXML:true });
+<script>
+  // ESP_LOG / sweep-plot output is ANSI-coloured (SGR). Self-contained converter (no CDN/ESM
+  // import, so colouring still works on an offline bench) -> escapes its input and wraps coloured
+  // runs in a single open <span>, kept well-nested so createContextualFragment splices cleanly.
+  // Caller (ulLine) only invokes it when the line actually contains an ESC sequence.
+  (function(){
+    const FG = {  // dark-terminal palette, codes 30-37 (normal) + 90-97 (bright)
+      30:"#555",31:"#e06c75",32:"#98c379",33:"#d19a66",34:"#61afef",35:"#c678dd",36:"#56b6c2",37:"#abb2bf",
+      90:"#777",91:"#e06c75",92:"#98c379",93:"#e5c07b",94:"#61afef",95:"#c678dd",96:"#56b6c2",97:"#ffffff"
+    };
+    const esc = t => t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    window.ansiConvert = { toHtml(s){
+      let out="", open=false, color=null, bold=false, last=0, m;
+      const re=/\x1b\[([0-9;]*)m/g;
+      const apply = () => {
+        if(open){ out+="</span>"; open=false; }
+        if(color===null && !bold) return;
+        out += '<span style="'+(color!==null?"color:"+color+";":"")+(bold?"font-weight:bold;":"")+'">';
+        open=true;
+      };
+      while((m=re.exec(s))){
+        out += esc(s.slice(last, m.index));
+        last = re.lastIndex;
+        for(const c of (m[1]||"0").split(";").map(x => x===""?0:+x)){
+          if(c===0){ color=null; bold=false; }
+          else if(c===1) bold=true;
+          else if(c===22) bold=false;
+          else if(c===39) color=null;
+          else if(FG[c]!==undefined) color=FG[c];
+        }
+        apply();
+      }
+      out += esc(s.slice(last));
+      if(open) out+="</span>";
+      return out;
+    }};
+  })();
 </script>
 <script>
 "use strict";

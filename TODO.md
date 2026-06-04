@@ -11,13 +11,15 @@
   per-section rtcount for the control path (5 PD ctrls, computeSyncRectRatio, fan/digitalWrite).
   this is what drives loopRt to ~64% on a live converter; the sampler path is not the bottleneck.
   * vconv (CONFIG_FUGU_WITH_VCONV + config/lab/vconv_mock) DOES exercise the full control path and
-    is great for *profiling* — but its MPPT is timing-FRAGILE: it's a discrete co-simulated feedback
-    loop, so sub-us perturbations (an extra rtcount label, a different instruction schedule) flip it
-    between converging to MPP (~815W) and wandering to a bad point (~60W, duty pinned near max).
-    deterministic (noise=0) so each boot repeats exactly. => use vconv to read per-section costs, NOT
-    to validate control-behavior changes (a throttle/hoist experiment looked like a regression that
-    was really just sim fragility). validate control changes on fry/flat. profiling lesson: rtcount
-    means are inflated by ADC-ISR preemption; the `min` column is the truer pure-compute figure.
+    is great for *profiling*. Its old timing-FRAGILITY (sub-us perturbations flipping it between
+    MPP ~815W and a ~60W duty-pinned bad point) was a co-sim DESYNC: when the RT loop overran, piled-up
+    ADC notifications collapsed into one wakeup but the plant only advanced ONE dt while the controller
+    thought several samples elapsed. FIXED in 285cb181 — ADC_VConv::hasData() now steps the plant by
+    the coalesced tick count (stepSeconds(dt*ticks)), so plant-time tracks samples-consumed regardless
+    of jitter. Re-verified on 139C: locks 814-815W at Vin~64.6V and advances to slow-P&O, stable. So
+    vconv is now OK for validating control-behavior changes too (still confirm anything risky on
+    fry/flat). profiling lesson: rtcount means are inflated by ADC-ISR preemption; the `min` column is
+    the truer pure-compute figure.
 * ina226 588us conv time timeouts
 * critical commits
   * the esp32 adc fix

@@ -312,15 +312,22 @@ void TelemetryService::flushQueue(const IPAddress &addr) {
         const size_t cap = comp.maxBatchRaw(CONFIG_TCP_MSS);
         static std::string batch;
         std::string frame;
-        while (pointsQ.try_dequeue(frame)) {
-            if (!batch.empty() && batch.size() + frame.size() > cap) {  // batch full -> send, carry frame over
-                sendBinaryBatch(addr, port, comp, batch);                // one full datagram per call
-                batch = std::move(frame);
-                return;
+        try {
+            while (pointsQ.try_dequeue(frame)) {
+                if (!batch.empty() && batch.size() + frame.size() > cap) {  // batch full -> send, carry frame over
+                    sendBinaryBatch(addr, port, comp, batch);                // one full datagram per call
+                    batch = std::move(frame);
+                    return;
+                }
+                batch += frame;
             }
-            batch += frame;
+            // batch not full -> hold for more points
+        } catch (const std::bad_alloc &) {
+            // Heap exhausted (fragmentation during a WiFi flap). Telemetry is non-critical: drop the
+            // batch and free its buffer rather than let the throw escape the task and panic the device.
+            std::string().swap(batch);
+            ESP_LOGW("tele", "flushQueue OOM, dropped batch");
         }
-        // batch not full -> hold for more points
     } else {
         constexpr size_t MTU = CONFIG_TCP_MSS;
         static String msg;

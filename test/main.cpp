@@ -74,6 +74,11 @@ void test_vconv_catchup_equals_uncoalesced();
 void test_vconv_single_step_drops_simtime();
 void test_vconv_hasdata_steps_capped_coalesced_count();
 
+// test_dawn.cpp — replays fry's 2026-05-31 dawn (Voc ramp + idle-START gate timing)
+void test_dawn_vin_gate_clears_fast_and_stays_open();
+void test_dawn_calibration_not_the_blocker();
+void test_dawn_high_voc_panel_only_yields_a_few_watts();
+
 // adc/ina226_conv_time.h + adc/adc.h (AsyncADC contract via ADC_Dummy)
 void test_ina226_convtime_exact_step();
 void test_ina226_convtime_rounds_up_between_steps();
@@ -356,6 +361,11 @@ void setup() {
     RUN_TEST(test_vconv_catchup_equals_uncoalesced);
     RUN_TEST(test_vconv_single_step_drops_simtime);
     RUN_TEST(test_vconv_hasdata_steps_capped_coalesced_count);
+
+    // test_dawn.cpp — 2026-05-31 dawn replay
+    RUN_TEST(test_dawn_vin_gate_clears_fast_and_stays_open);
+    RUN_TEST(test_dawn_calibration_not_the_blocker);
+    RUN_TEST(test_dawn_high_voc_panel_only_yields_a_few_watts);
 
     // adc/ina226_conv_time.h
     RUN_TEST(test_ina226_convtime_exact_step);

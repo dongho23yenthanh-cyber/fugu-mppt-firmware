@@ -22,8 +22,9 @@ idf.py build
 Safety guards (read from the build's sdkconfig.json, see ota_build_flags.py):
 - a no-network build (CONFIG_FUGU_WITH_NETW=n) warns; devices lose Wi-Fi after OTA.
 - a plant-sim build (CONFIG_FUGU_WITH_VCONV=y) warns hard: VCONV swaps the real PWM driver for a
-  simulator (src/buck.h) so a real converter makes 0W while looking alive. Both require an
-  interactive y/N and are refused non-interactively.
+  simulator (src/buck.h) so a real converter makes 0W while looking alive.
+- an uncommitted build (git-describe version ends in '-dirty') warns: the image maps to no commit.
+  All three require an interactive y/N and are refused non-interactively.
 
 """""
 import sys
@@ -332,6 +333,16 @@ async def main():
               'Flashing it to a real converter yields 0W (Vin pinned at Voc) while the device '
               'still looks alive. This is a bench/sim image; do NOT push it to fry/flat.')
 
+    # 'dirty' in the git-describe version => built from a working tree with uncommitted changes.
+    # The natural version-match skip already keeps a rebuild of the *same* dirty version off devices;
+    # we only reach here when this image would actually land (--force, or a device on another
+    # version), so warn loudly: uncommitted firmware can't be reproduced or bisected later.
+    dirty = bool(local) and 'dirty' in local['version']
+    if dirty:
+        print(f'⚠️  UNCOMMITTED BUILD: local image is "{local["version"]}" (git-describe --dirty) — '
+              'built from a working tree with uncommitted changes. Commit or stash first so the '
+              'firmware on the device maps to a real commit.')
+
     if args.dry_run:
         print('dry-run, would update:')
         for _, _, name in to_update:
@@ -351,6 +362,14 @@ async def main():
             print('aborting: plant-sim (VCONV) image, refusing to OTA non-interactively')
             return False
         if input('really OTA a plant-sim build to these devices? [y/N] ').strip().lower() not in ('y', 'yes'):
+            print('aborted')
+            return False
+
+    if dirty:
+        if not sys.stdin.isatty():
+            print('aborting: uncommitted (dirty) image, refusing to OTA non-interactively')
+            return False
+        if input('really OTA an uncommitted (dirty) build? [y/N] ').strip().lower() not in ('y', 'yes'):
             print('aborted')
             return False
 

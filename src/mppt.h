@@ -317,7 +317,10 @@ public:
     // Single source of truth for startCondition(); also logged while idle in START.
     [[nodiscard]] const char *startBlockReason() const {
         if (inBackoff()) return "backoff";
-        if (ntc.last() > limits.Temp_derate || !(ucTemp.last() < limits.Temp_derate)) return "temp";
+        // gate restart at the hard-cutoff knee (Temp_max), not the derate onset: between the
+        // knees the converter must run derated, not stay off (a sweep/backoff above Temp_derate
+        // could never restart until it cooled past the *lower* knee). 3°C re-arm hysteresis.
+        if (ntc.last() > limits.Temp_max - 3 || !(ucTemp.last() < limits.Temp_max - 3)) return "temp";
         if (!(converter.boost()
                   ? sensors.Vin->ewm.avg.get() < sensors.Vout->ewm.avg.get() + 1
                   : sensors.Vin->ewm.avg.get() > sensors.Vout->ewm.avg.get() + 1))

@@ -28,6 +28,7 @@ class ADC_INA226 : public AsyncADC<float> {
     INA226_CONV_TIME convSetting_ = CONV_TIME_1100;
     uint16_t convUs_ = 1100;
     uint32_t alertTimeoutMs_ = 4;
+    uint32_t measuredPairUs_ = 0; // measured CVRF interval (Vbus+I pair); 0 = not measured
 
 public:
 
@@ -93,6 +94,12 @@ public:
     }
 
     float getSamplingRate(uint8_t channel) override {
+#if CONFIG_FUGU_INA226_MEASURED_RATE
+        // A measured rate reflects the chip's real throughput (some parts convert faster than
+        // their nominal conv-time). measuredPairUs_ is the CVRF interval = one Vbus+I pair.
+        if (measuredPairUs_ > 0)
+            return 1e6f / (float) measuredPairUs_;
+#endif
         return ina226SampleRate(convUs_);
     }
 
@@ -178,8 +185,43 @@ public:
         ina226.enableConvReadyAlert();
         ina226.writeRegister(INA226_WE::INA226_CAL_REG, ina226.calVal);
 
+#if CONFIG_FUGU_INA226_MEASURED_RATE
+        measuredPairUs_ = measurePairUs();
+        if (measuredPairUs_)
+            ESP_LOGI("ina22x", "measured %.0f SPS (pair %lu us) vs nominal %.0f SPS",
+                     1e6f / (float) measuredPairUs_, measuredPairUs_, ina226SampleRate(convUs_));
+        else
+            ESP_LOGW("ina22x", "rate measurement timed out, using nominal %.0f SPS", ina226SampleRate(convUs_));
+#endif
+
         return true;
     }
+
+#if CONFIG_FUGU_INA226_MEASURED_RATE
+    // Average n CVRF intervals (one Vbus+I conversion pair each) at the current operational
+    // settings, by polling the alert-driven new_data flag. Returns the mean interval in us, or
+    // 0 on timeout. Blocks ~n*pair_us (tens of ms); only called from init/resetPeripherals.
+    uint32_t measurePairUs(int n = 16) {
+        ina226.readAndClearFlags();
+        new_data = false;
+        uint32_t t = micros();
+        while (!new_data) if (micros() - t > 100000) return 0; // align to a full interval
+        new_data = false;
+        ina226.readAndClearFlags();
+        uint32_t tStart = micros();
+        int got = 0;
+        while (got < n) {
+            if (new_data) {
+                new_data = false;
+                ina226.readAndClearFlags();
+                ++got;
+            } else if (micros() - tStart > (uint32_t) n * 5000 + 100000) {
+                break;
+            }
+        }
+        return got ? (micros() - tStart) / (uint32_t) got : 0;
+    }
+#endif
 
     void deinit() override {
         if (alertPin != 255)

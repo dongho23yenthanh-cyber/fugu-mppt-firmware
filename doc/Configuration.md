@@ -70,6 +70,9 @@ Global keys:
 | `expected_hz`                    | Hz   | int    | 0       | Expected control-loop sample rate (lower-bound check; 0 = off) |
 | `power_conversion_eff`           |      | float  | 0.95    | Assumed converter efficiency for the virtual current sensor    |
 | `ignore_calibration_constraints` |      | bool   | 0       | Bypass ADC calibration sanity constraints                      |
+| `notch_adaptive`                 |      | bool   | 1       | Auto-tune the inverter-ripple notch to the tone measured on Vout (off = fixed at `notch_freq`) |
+| `notch_freq`                     | Hz   | float  | 100     | Notch frequency when not adaptive (2×mains: 100 = 50 Hz, 120 = 60 Hz) |
+| `notch_q`                        |      | float  | 20      | Notch quality factor (bandwidth ≈ `notch_freq`/`notch_q`)      |
 | `esp32adc1_sr`                   | Hz   | int    | —       | Internal ADC1 continuous-mode raw sample rate                  |
 | `esp32adc1_avg`                  |      | int    | —       | Internal ADC1 hardware averaging count per sample              |
 

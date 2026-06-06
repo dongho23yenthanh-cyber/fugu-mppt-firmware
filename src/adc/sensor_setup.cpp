@@ -257,6 +257,15 @@ void setupSensors(const ConfFile &boardConf, const Limits &lim) {
         sensors.Vout = adcSampler.addSensor(vout.adc, vout.params, lim.Vout_max, vout.filtLen); // 60
     }
 
+    // Inverter-ripple notch: adaptive auto-tunes to the measured 2x-line tone on Vout; with
+    // notch_adaptive=0 the notch stays fixed at notch_freq (100 Hz = 50 Hz mains by default).
+    adcSampler.configureNotch(
+        sensConf.getByte("notch_adaptive", 1) != 0,
+        sensConf.f("notch_freq", 100.f),
+        sensConf.f("notch_q", 20.f),
+        -30.f);
+    adcSampler.setRippleSource(sensors.Vout);
+
     adcSampler.ignoreCalibrationConstraints = sensConf.getByte("ignore_calibration_constraints", 0);
     if (adcSampler.ignoreCalibrationConstraints)
         ESP_LOGW("main", "Skipping ADC range and noise checks.");

@@ -18,6 +18,7 @@
 #include "tele/scope.h"
 #include "math/notch.h"
 #include "math/noise.h"
+#include "math/ripple_freq.h"
 
 
 struct LinearTransform {
@@ -142,16 +143,26 @@ struct PhysicalSensor : public Sensor {
           adc(adc) {
     }
 
-    void createNotchFilter(float fs) {
+    float notchFs = 0; // sample rate this sensor's notch was tuned for
+
+    // Tunes (or creates) the notch to f0Hz. Skipped when f0 is above this sensor's Nyquist
+    // (a notch can't be placed there); the caller scales f0 by each sensor's own fs.
+    void retuneNotch(float f0Hz, float Q, float gain) {
+        if (notchFs <= 0) return;
+        float fNorm = f0Hz / notchFs;
+        if (fNorm <= 0 || fNorm >= 0.45f) return;
         try {
-            notchFilter = new NotchFilter();
-            constexpr auto inverterFreq = 50.0f;
-            constexpr auto inverterInputFreq = 2 * inverterFreq; // abs(sin(t))
-            notchFilter->begin(inverterInputFreq / fs);
-            ESP_LOGI("sampling", "%s notch filter fs=%.1fHz f0=%.1fHz", params.teleName.c_str(), fs, inverterInputFreq);
+            if (!notchFilter) notchFilter = new NotchFilter();
+            notchFilter->begin(fNorm, gain, Q); // preserves filter state -> glitch-free retune
         } catch (const std::exception &ex) {
             ESP_LOGE("sampling", "error %s", ex.what());
         }
+    }
+
+    void createNotchFilter(float fs, float f0Hz, float Q, float gain) {
+        notchFs = fs;
+        retuneNotch(f0Hz, Q, gain);
+        ESP_LOGI("sampling", "%s notch fs=%.1fHz f0=%.1fHz Q=%.0f", params.teleName.c_str(), fs, f0Hz, Q);
     }
 };
 
@@ -216,6 +227,37 @@ public:
     std::vector<Sensor *> sensors{}; // physical + virtual sensors
     std::vector<Sensor *> realSensors{}; // physical sensors from all ADCs
     std::vector<VirtualSensor *> virtualSensors{};
+
+    // --- inverter-ripple notch auto-tuning -------------------------------------------------
+    // The 2x-line ripple an inverter draws onto the DC bus corrupts the MPPT power estimate.
+    // A detector watches the strongest-ripple channel (Vout) and retunes every sensor's notch
+    // to the tone it finds, instead of assuming a fixed mains frequency. Runs entirely on the
+    // RT core (detector fed + notches retuned here), so the biquad coeffs are never written
+    // concurrently with filter().
+    bool notchAdaptive = true;
+    float notchFreq = 100.0f;          // active/fixed notch frequency [Hz]
+    float notchQ = 20.0f, notchGain = -30.0f;
+    static constexpr float NOTCH_SNR_MIN = 15.0f; // min peak/mean ratio to trust an estimate
+    RippleFreqDetector<61> rippleDet{};
+    const Sensor *rippleSrc = nullptr; // channel fed to the detector (Vout)
+    float rippleSnr = 0;
+
+    void configureNotch(bool adaptive, float freqHz, float Q, float gain) {
+        notchAdaptive = adaptive;
+        notchFreq = freqHz;
+        notchQ = Q;
+        notchGain = gain;
+    }
+
+    void setRippleSource(const Sensor *s) { rippleSrc = s; }
+
+    [[nodiscard]] float getNotchFreq() const { return notchFreq; }
+    [[nodiscard]] float getRippleSnr() const { return rippleSnr; }
+
+    void retuneNotches(float f0Hz) {
+        for (auto s: realSensors)
+            ((PhysicalSensor *) s)->retuneNotch(f0Hz, notchQ, notchGain);
+    }
 
 
     AdcState &getAdcState(AsyncADC<float> *adc) {
@@ -327,7 +369,16 @@ public:
         for (auto &s: sensors) {
             if (s->isVirtual) continue;
             auto ps = (PhysicalSensor *) s;
-            ps->createNotchFilter(effectiveSampleRate(ps));
+            ps->createNotchFilter(effectiveSampleRate(ps), notchFreq, notchQ, notchGain);
+        }
+
+        if (notchAdaptive && rippleSrc) {
+            float fs = effectiveSampleRate((PhysicalSensor *) rippleSrc);
+            // scan 80..140 Hz (50/60 Hz inverters -> 100/120 Hz, plus off-grid drift); ~0.75 s window
+            uint16_t blockN = (uint16_t) std::min(std::max(fs * 0.75f, 128.f), 1500.f);
+            rippleDet.configure(fs, 80.f, 140.f, blockN);
+            ESP_LOGI("sampling", "ripple notch auto-tune on %s fs=%.0fHz block=%u",
+                     rippleSrc->params.teleName.c_str(), fs, blockN);
         }
     }
 
@@ -430,6 +481,11 @@ public:
 
         sensor->add_sample(v);
         rtcount("adc.update.addSample");
+
+        if (notchAdaptive && sensor == rippleSrc && rippleDet.configured()) {
+            rippleDet.push(sensor->last); // pre-notch value -> full ripple; Goertzel ignores DC
+            rtcount("adc.update.rippleDetect");
+        }
 
         if (onNewSample) {
             onNewSample(*this, *sensor);
@@ -539,6 +595,23 @@ public:
             for (auto &sn: virtualSensors) {
                 sn->add_sample(sn->func());
                 rtcount("adc.update.AddSampleVirtual");
+            }
+        }
+
+        if (notchAdaptive && rippleDet.configured()) {
+            float hz, snr;
+            if (rippleDet.poll(hz, snr)) {
+                rippleSnr = snr;
+                if (snr >= NOTCH_SNR_MIN) {
+                    // slew toward the estimate so a single noisy block can't yank the notch
+                    float target = notchFreq + 0.5f * (hz - notchFreq);
+                    if (fabsf(target - notchFreq) > 0.3f) {
+                        notchFreq = target;
+                        retuneNotches(notchFreq);
+                        ESP_LOGI("sampling", "ripple notch -> %.1fHz (snr=%.0f)", notchFreq, snr);
+                        rtcount("adc.update.retuneNotch");
+                    }
+                }
             }
         }
 

@@ -137,6 +137,14 @@ void test_ascii_multi_series_unequal_length_does_not_crash();
 void test_ascii_multi_series_with_one_empty_renders_other();
 void test_ascii_regression_plot_h_first_bin_nan();
 
+// math/ripple_freq.h — adaptive inverter-ripple notch
+void test_ripple_detects_100hz();
+void test_ripple_detects_120hz();
+void test_ripple_subbin_interpolation();
+void test_ripple_ignores_dc_no_false_positive();
+void test_ripple_detects_real_fry_capture();
+void test_adaptive_notch_beats_fixed_100hz_on_real_data();
+
 // math/statmath.h
 void test_ewma_seeds_on_first_finite();
 void test_ewma_ignores_nan();
@@ -278,6 +286,14 @@ void setup() {
     RUN_TEST(test_ascii_multi_series_unequal_length_does_not_crash);
     RUN_TEST(test_ascii_multi_series_with_one_empty_renders_other);
     RUN_TEST(test_ascii_regression_plot_h_first_bin_nan);
+
+    // math/ripple_freq.h — adaptive inverter-ripple notch (synthetic + real fry capture)
+    RUN_TEST(test_ripple_detects_100hz);
+    RUN_TEST(test_ripple_detects_120hz);
+    RUN_TEST(test_ripple_subbin_interpolation);
+    RUN_TEST(test_ripple_ignores_dc_no_false_positive);
+    RUN_TEST(test_ripple_detects_real_fry_capture);
+    RUN_TEST(test_adaptive_notch_beats_fixed_100hz_on_real_data);
 
     // math/statmath.h — EWMA, median, mean, EWM, integrator
     RUN_TEST(test_ewma_seeds_on_first_finite);

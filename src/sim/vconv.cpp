@@ -17,6 +17,20 @@ void VirtualConverter::stepOneCycle(float T) {
     const uint16_t ctrl = pwm_.pwmCtrl;
     const uint16_t rect = pwm_.pwmRect;
 
+    // Rebuild reciprocals only when an input changes; the steady N-cycle loop then divides nothing
+    // (LX7 has no hw float divide, so each `/` was a software __divsf3). 6 compares << 18 divisions.
+    if (T != cycT_ || pmax != cycPmax_ || l_ != cycL_ || cIn_ != cycCin_ ||
+        cOut_ != cycCout_ || rbat_ != cycRbat_) {
+        cycT_ = T; cycPmax_ = pmax; cycL_ = l_; cycCin_ = cIn_; cycCout_ = cOut_; cycRbat_ = rbat_;
+        invL_    = (l_   > 0.0f) ? 1.0f / l_   : 0.0f;
+        invCin_  = (cIn_ > 0.0f) ? 1.0f / cIn_ : 0.0f;
+        invCout_ = (cOut_> 0.0f) ? 1.0f / cOut_: 0.0f;
+        invT_    = 1.0f / T;
+        aOut_    = T / (rbat_ * cOut_);
+        inv1pAout_ = 1.0f / (1.0f + aOut_);
+        invPmax_ = pmax ? 1.0f / (float) pmax : 0.0f;
+    }
+
     // Spec invariant: pwmCtrl + pwmRect <= pwmMax. Idle while violated; recover
     // as soon as a subsequent update brings the counts back in range.
     if (pmax > 0 && (uint32_t) ctrl + (uint32_t) rect > pmax) {
@@ -38,8 +52,23 @@ void VirtualConverter::stepOneCycle(float T) {
     // when v_bat == 0 (open-circuit preset): a bipolar swing around zero is unphysical.
     float vBatEff = vbat_;
     if (vbatAcAmp_ != 0.0f && vbat_ > 0.0f) {
-        vBatEff += vbatAcAmp_ * vbatAcShapeFn_(vbatAcPhase_);
-        vbatAcPhase_ += kTwoPi * vbatAcFreq_ * T;
+        const float step = kTwoPi * vbatAcFreq_ * T;
+        if (vbatAcShape_ == 0) {
+            // Built-in sine via recursive oscillator — no per-cycle sinf. (Re)seed on freq change.
+            if (step != oscStep_) {
+                oscStep_ = step;
+                rotC_ = std::cos(step); rotS_ = std::sin(step);
+                oscS_ = std::sin(vbatAcPhase_); oscC_ = std::cos(vbatAcPhase_);
+            }
+            vBatEff += vbatAcAmp_ * oscS_;
+            const float ns = oscS_ * rotC_ + oscC_ * rotS_; // rotate (sin,cos) by +step
+            const float nc = oscC_ * rotC_ - oscS_ * rotS_;
+            const float corr = 1.5f - 0.5f * (ns * ns + nc * nc); // cheap renorm toward unit circle
+            oscS_ = ns * corr; oscC_ = nc * corr;
+        } else {
+            vBatEff += vbatAcAmp_ * vbatAcShapeFn_(vbatAcPhase_); // |sin| / custom: keep the call
+        }
+        vbatAcPhase_ += step;
         if (vbatAcPhase_ > kTwoPi) vbatAcPhase_ -= kTwoPi;
         else if (vbatAcPhase_ < -kTwoPi) vbatAcPhase_ += kTwoPi;
     }
@@ -51,9 +80,8 @@ void VirtualConverter::stepOneCycle(float T) {
     constexpr float kVMin = 1e-4f;
     if (vIn_ < kVMin || pmax == 0 || L <= 0.0f) {
         const float Ipv = pvCurrent(vIn_);
-        const float aOut = T / (rbat_ * cOut_);
-        vIn_  += Ipv * T / cIn_;
-        vOut_ = (vOut_ + aOut * vBatEff) / (1.0f + aOut);
+        vIn_  += Ipv * T * invCin_;
+        vOut_ = (vOut_ + aOut_ * vBatEff) * inv1pAout_;
         if (vIn_  < 0.0f) vIn_  = 0.0f;
         if (vOut_ < 0.0f) vOut_ = 0.0f;
         iInAvg_  = 0.0f;
@@ -63,20 +91,20 @@ void VirtualConverter::stepOneCycle(float T) {
         return;
     }
 
-    const float dHS = (float) ctrl / (float) pmax;
-    const float dLS = (float) rect / (float) pmax;
+    const float dHS = (float) ctrl * invPmax_;
+    const float dLS = (float) rect * invPmax_;
     const float tHS = dHS * T;
     const float tLS = dLS * T;
     const float tOff = T - tHS - tLS;
 
     // Phase 1: HS on. dI/dt = (Vin - Vout) / L.
     const float a = iLEnd_;
-    const float b = (tHS > 0.0f) ? (a + (vIn_ - vOut_) / L * tHS) : a;
+    const float b = (tHS > 0.0f) ? (a + (vIn_ - vOut_) * invL_ * tHS) : a;
     const float areaHS = trapArea(a, b, tHS);
 
     // Phase 2: LS on. Signed trapezoid; no mode decision -- firmware picks
     // pwmRect to land near zero, forced-PWM commands past it.
-    const float c = (tLS > 0.0f) ? (b - vOut_ / L * tLS) : b;
+    const float c = (tLS > 0.0f) ? (b - vOut_ * invL_ * tLS) : b;
     const float areaLS = trapArea(b, c, tLS);
 
     // Phase 3: both off. c > 0: LS body diode. c < 0: HS body diode (rev pump).
@@ -84,7 +112,7 @@ void VirtualConverter::stepOneCycle(float T) {
     float areaOff = 0.0f;
     if (tOff > 0.0f) {
         if (c > 0.0f) {
-            const float slope = -vOut_ / L;     // <= 0; zero iff vOut_ == 0
+            const float slope = -vOut_ * invL_;     // <= 0; zero iff vOut_ == 0
             if (slope < 0.0f) {
                 const float tZero = -c / slope;
                 if (tZero < tOff) {
@@ -100,7 +128,7 @@ void VirtualConverter::stepOneCycle(float T) {
                 areaOff = c * tOff;
             }
         } else if (c < 0.0f) {
-            const float slope = (vIn_ - vOut_) / L;
+            const float slope = (vIn_ - vOut_) * invL_;
             if (slope > 0.0f) {
                 const float tZero = -c / slope;
                 if (tZero < tOff) {
@@ -117,8 +145,8 @@ void VirtualConverter::stepOneCycle(float T) {
         }
     }
 
-    iInAvg_  = areaHS / T;
-    iOutAvg_ = (areaHS + areaLS + areaOff) / T;
+    iInAvg_  = areaHS * invT_;
+    iOutAvg_ = (areaHS + areaLS + areaOff) * invT_;
     iLEnd_ = cEnd;
     // DCM := "coil is at zero at cycle end". c!=0 means phase 3 drove it down;
     // a==0 covers the staying-idle case (prior cycle ended at zero too).
@@ -129,10 +157,9 @@ void VirtualConverter::stepOneCycle(float T) {
     // arbitrarily small without crossing the T/(R·C)=2 cliff (short-circuit case).
     //   V_out_new = (V_out + T·I_out_avg/C_out + a·V_bat) / (1 + a),   a = T/(R_bat·C_out)
     const float Ipv  = pvCurrent(vIn_);
-    const float aOut = T / (rbat_ * cOut_);
 
-    vIn_ += (Ipv - iInAvg_) * T / cIn_;
-    vOut_ = (vOut_ + (T * iOutAvg_) / cOut_ + aOut * vBatEff) / (1.0f + aOut);
+    vIn_ += (Ipv - iInAvg_) * T * invCin_;
+    vOut_ = (vOut_ + (T * iOutAvg_) * invCout_ + aOut_ * vBatEff) * inv1pAout_;
 
     if (vIn_ < 0.0f) vIn_ = 0.0f;
     const float vInMax = voc_ * 1.05f;

@@ -349,8 +349,22 @@ cleanly. (The mock has none of this cost, so it's nowhere near the limit at 3 kH
 Lowering `adc_freq` only became possible once `PeriodicTimer::begin()` was fixed (commit 495d317): it had set the
 gptimer `resolution_hz = adc_freq` with `alarm_count = 1`, so the prescaler `src_clk / resolution` overflowed its
 `[2, 65536]` range below ~2.5 kHz (a `timer_ll_set_clock_prescale` assert). It now uses a fixed 1 MHz resolution with
-`alarm_count = 1e6/hz`, so any rate down to a few Hz is valid. **Rule of thumb:** for ripple- or heavy-noise stress
-tests keep `adc_freq` ≤ ~1500; the higher rates are only for plant-fidelity profiling without disturbances.
+`alarm_count = 1e6/hz`, so any rate down to a few Hz is valid.
+
+**`stepOneCycle` was then optimized so high `adc_freq` survives ripple.** Static disasm (xtensa) showed the inner loop
+spent its budget on **18 `__divsf3` software float divisions per cycle** — the LX7 FPU has hardware add/mul/madd but
+**no hardware float divide** (or sqrt), so every `/` is a library call. Two changes (no fixed-point needed — the FPU
+makes add/mul free): (1) **cache reciprocals** — `invL_/invCin_/invCout_/invT_/aOut_/inv1pAout_/invPmax_` are rebuilt
+only when an input changes (a 6-compare guard at the top of `stepOneCycle`), so the steady N-cycle loop divides nothing;
+(2) **recursive sine oscillator** for the built-in inverter ripple — advances `(sin,cos)` by a fixed per-cycle rotation
+(4 mul + 2 add + a cheap renorm) instead of a per-cycle `sinf` (`|sin|`/custom shapes still use the function pointer).
+Per-cycle `__divsf3` dropped 18 → ~0 (only the cold reciprocal-rebuild + the rare DCM `tZero` slope-divide remain) and
+the per-cycle `sinf` is gone. Result: **`adc_freq=3000` + ripple now runs with no TWDT** (was a reboot loop). The PV
+`expf` (1/cycle) is deliberately left as a true `exp` — it's load-bearing for PV-curve / MPP fidelity and was not the
+bottleneck. All 174 host plant tests still pass (tolerance-based, so div→mul and the oscillator are within bounds).
+
+**Rule of thumb:** any `adc_freq` is now fine for ripple stress-tests; the old ≤ ~1500 ceiling is lifted. Still prefer
+the lowest rate that resolves your disturbance (e.g. 1000–1500 for a 100 Hz ripple) — it leaves the most RT headroom.
 
 ### ADC noise
 

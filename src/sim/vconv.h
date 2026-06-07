@@ -74,10 +74,11 @@ public:
     void setBatRipple(float amp, float freq, int shape = 0) {
         vbatAcAmp_ = amp; vbatAcFreq_ = freq; vbatAcShape_ = shape;
         vbatAcShapeFn_ = shapeFromId(shape);
+        oscStep_ = -1.0f; // force sine-oscillator re-seed (freq/shape may have changed)
     }
     // Plug in an arbitrary ripple model (overrides the built-in shape; getVbatAcShape() -> -1).
     void setBatRippleShape(RippleShape fn) {
-        if (fn) { vbatAcShapeFn_ = fn; vbatAcShape_ = -1; }
+        if (fn) { vbatAcShapeFn_ = fn; vbatAcShape_ = -1; oscStep_ = -1.0f; }
     }
     void setPassives(float c_in, float c_out, float l) { cIn_ = c_in; cOut_ = c_out; l_ = l; }
     void setVin(float v)  { vIn_ = v; }
@@ -152,6 +153,20 @@ private:
     float iOutAvg_ = 0.0f;
     bool  dcm_     = false;
     bool  errored_ = false;
+
+    // Cached reciprocals — the LX7 FPU has no hardware float divide, so every `/` is a software
+    // __divsf3 call (~tens of cycles). stepOneCycle runs ~pwmFreq/adc_freq times per ADC sample, so
+    // recomputing per cycle was the dominant cost. These are rebuilt only when an input changes
+    // (see the guard in stepOneCycle); across the steady N-cycle loop every divide becomes a mul.
+    float cycT_ = 0.0f, cycL_ = 0.0f, cycCin_ = 0.0f, cycCout_ = 0.0f, cycRbat_ = 0.0f;
+    uint16_t cycPmax_ = 0xFFFFu;
+    float invL_ = 0.0f, invCin_ = 0.0f, invCout_ = 0.0f, invT_ = 0.0f;
+    float aOut_ = 0.0f, inv1pAout_ = 1.0f, invPmax_ = 0.0f;
+
+    // Recursive sine oscillator for the built-in inverter ripple: advances (sin,cos) of the ripple
+    // phase by a fixed per-cycle rotation (4 mul + 2 add), avoiding a per-cycle sinf. Re-seeded when
+    // the rotation step changes; |sin| / custom shapes still go through the function pointer.
+    float oscS_ = 0.0f, oscC_ = 1.0f, rotS_ = 0.0f, rotC_ = 1.0f, oscStep_ = -1.0f;
 
     void stepOneCycle(float T);
 };

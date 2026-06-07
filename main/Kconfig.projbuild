@@ -63,7 +63,7 @@ config FUGU_WITH_MEASURE_COIL
 
 config FUGU_INA226_MEASURED_RATE
     bool "INA226: report measured conversion rate (not nominal)"
-    default n
+    default y
     help
         ADC_INA226::getSamplingRate() normally returns the nominal rate derived from the
         configured conversion time (1e6 / (2*conv_time_us)). Some INA226 chips (notably
@@ -72,5 +72,6 @@ config FUGU_INA226_MEASURED_RATE
         inverter-ripple notch's reported frequency, the expected_hz loop-rate watchdog).
         When set, getSamplingRate() instead returns a rate measured over several conversions
         at operational settings during init, so it reflects the chip's actual throughput.
+        No-op on boards without an INA226 (the measurement lives in ADC_INA226). Default on.
 
 endmenu

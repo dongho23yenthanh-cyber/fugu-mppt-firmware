@@ -100,3 +100,64 @@ void test_vconv_hasdata_steps_capped_coalesced_count() {
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, refCap.getVin(), g_vconv.getVin());   // matches the 8-tick cap
     TEST_ASSERT_TRUE(g_vconv.getVin() < refFull.getVin() - 0.01f);        // well below uncapped 20
 }
+
+// ---- inverter-ripple disturbance (modelled from the fry 2 kW capture) -----------------------
+// Settle a configured plant, sample V_out at adc_freq, and return the RMS ripple (% of mean) and
+// the 2nd-harmonic / fundamental amplitude ratio. The shape assertions are the regression: a sine
+// (inverter) stays near-tone (tiny 2nd harmonic) while |sin| (rectifier) carries ~20% — matching
+// the capture, where the 2nd harmonic was 0.7% << 20%.
+static void measureRipple(VirtualConverter &c, float freq, float &rmsPct, float &h2ratio) {
+    const float fs = 1.0f / kDt;
+    for (int i = 0; i < 6000; ++i) c.stepSeconds(kDt, 39000);   // settle transients
+    const int N = 4096;
+    static float buf[4096];
+    double mean = 0;
+    for (int i = 0; i < N; ++i) { c.stepSeconds(kDt, 39000); buf[i] = c.getVout(); mean += buf[i]; }
+    mean /= N;
+    auto goertzel = [&](float f) {
+        double re = 0, im = 0;
+        for (int i = 0; i < N; ++i) { double a = 2.0 * M_PI * (double) f * i / fs; re += (buf[i] - mean) * std::cos(a); im -= (buf[i] - mean) * std::sin(a); }
+        return std::sqrt(re * re + im * im);
+    };
+    double rms = 0;
+    for (int i = 0; i < N; ++i) { double d = buf[i] - mean; rms += d * d; }
+    rms = std::sqrt(rms / N);
+    rmsPct = (float) (rms / mean * 100.0);
+    double f1 = goertzel(freq), f2 = goertzel(freq * 2.0f);
+    h2ratio = (f1 > 0.0) ? (float) (f2 / f1) : 0.0f;
+}
+
+// sine ripple (inverter): ~0.6% RMS V_out at the tone, with a negligible 2nd harmonic.
+void test_vconv_inverter_ripple_is_sine() {
+    VirtualConverter c; configActive(c); c.setBatRipple(0.26f, 100.0f, 0);
+    float rms, h2; measureRipple(c, 100.0f, rms, h2);
+    TEST_ASSERT_FLOAT_WITHIN(0.3f, 0.6f, rms);   // ~0.6% RMS like the fry capture (allow 0.3-0.9)
+    TEST_ASSERT_TRUE(h2 < 0.05f);                // pure sine -> 2nd harmonic <5% (capture 0.7%)
+}
+
+// |sin| ripple (rectifier load): must carry the ~20% 2nd harmonic that distinguishes it from sine.
+void test_vconv_rectifier_ripple_has_2nd_harmonic() {
+    VirtualConverter c; configActive(c); c.setBatRipple(0.26f, 100.0f, 1);
+    float rms, h2; measureRipple(c, 100.0f, rms, h2);
+    TEST_ASSERT_TRUE(h2 > 0.10f && h2 < 0.30f);  // full-wave |sin|: ~20% 2nd harmonic
+}
+
+// amp=0 disables the disturbance (clean, deterministic baseline).
+void test_vconv_no_ripple_when_amp_zero() {
+    VirtualConverter c; configActive(c); c.setBatRipple(0.0f, 100.0f, 0);
+    float rms, h2; measureRipple(c, 100.0f, rms, h2);
+    TEST_ASSERT_TRUE(rms < 0.02f);
+}
+
+// Pluggability: a custom ripple model (sin + 0.5*sin(2x) = a deliberate 50% 2nd harmonic) passed
+// via setBatRippleShape() must flow through the plant — proving a new noise model is one free
+// function, no edits to the plant core.
+static float rippleHalfSecondHarmonic(float p) { return std::sin(p) + 0.5f * std::sin(2.0f * p); }
+void test_vconv_pluggable_custom_ripple_shape() {
+    VirtualConverter c; configActive(c);
+    c.setBatRipple(0.26f, 100.0f, 0);              // amp + freq
+    c.setBatRippleShape(rippleHalfSecondHarmonic); // override with the custom model
+    TEST_ASSERT_EQUAL_INT(-1, c.getVbatAcShape()); // marked custom
+    float rms, h2; measureRipple(c, 100.0f, rms, h2);
+    TEST_ASSERT_TRUE(h2 > 0.35f && h2 < 0.65f);    // custom 50% 2nd harmonic reproduced at V_out
+}

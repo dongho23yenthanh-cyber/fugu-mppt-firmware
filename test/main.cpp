@@ -73,6 +73,10 @@ void test_vconv_waitcount_returns_burst_count();
 void test_vconv_catchup_equals_uncoalesced();
 void test_vconv_single_step_drops_simtime();
 void test_vconv_hasdata_steps_capped_coalesced_count();
+void test_vconv_inverter_ripple_is_sine();
+void test_vconv_rectifier_ripple_has_2nd_harmonic();
+void test_vconv_no_ripple_when_amp_zero();
+void test_vconv_pluggable_custom_ripple_shape();
 
 // test_dawn.cpp — replays fry's 2026-05-31 dawn (Voc ramp + idle-START gate timing)
 void test_dawn_vin_gate_clears_fast_and_stays_open();
@@ -377,6 +381,10 @@ void setup() {
     RUN_TEST(test_vconv_catchup_equals_uncoalesced);
     RUN_TEST(test_vconv_single_step_drops_simtime);
     RUN_TEST(test_vconv_hasdata_steps_capped_coalesced_count);
+    RUN_TEST(test_vconv_inverter_ripple_is_sine);
+    RUN_TEST(test_vconv_rectifier_ripple_has_2nd_harmonic);
+    RUN_TEST(test_vconv_no_ripple_when_amp_zero);
+    RUN_TEST(test_vconv_pluggable_custom_ripple_shape);
 
     // test_dawn.cpp — 2026-05-31 dawn replay
     RUN_TEST(test_dawn_vin_gate_clears_fast_and_stays_open);

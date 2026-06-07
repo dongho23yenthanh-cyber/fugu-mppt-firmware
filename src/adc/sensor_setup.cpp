@@ -69,7 +69,8 @@ static void configureVirtualConverter() {
     g_vconv.setPv(isc, voc, k);
 
     g_vconv.setBat(vc.f("v_bat", 28.0f), vc.f("r_bat", 0.05f));
-    g_vconv.setBatRipple(vc.f("vbat_ac_amp", 0.0f), vc.f("vbat_ac_freq", 100.0f));
+    g_vconv.setBatRipple(vc.f("vbat_ac_amp", 0.0f), vc.f("vbat_ac_freq", 100.0f),
+                         (int) vc.getByte("vbat_ac_shape", 0));
 
     ConfFile coil{"/littlefs/conf/coil.conf"};
     float L0 = coil.f("L0", 50e-6f);

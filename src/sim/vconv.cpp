@@ -38,7 +38,7 @@ void VirtualConverter::stepOneCycle(float T) {
     // when v_bat == 0 (open-circuit preset): a bipolar swing around zero is unphysical.
     float vBatEff = vbat_;
     if (vbatAcAmp_ != 0.0f && vbat_ > 0.0f) {
-        vBatEff += vbatAcAmp_ * std::sin(vbatAcPhase_);
+        vBatEff += vbatAcAmp_ * vbatAcShapeFn_(vbatAcPhase_);
         vbatAcPhase_ += kTwoPi * vbatAcFreq_ * T;
         if (vbatAcPhase_ > kTwoPi) vbatAcPhase_ -= kTwoPi;
         else if (vbatAcPhase_ < -kTwoPi) vbatAcPhase_ += kTwoPi;

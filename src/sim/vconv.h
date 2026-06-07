@@ -54,7 +54,31 @@ public:
         // realistic short impedance and keeps the math finite.
         rbat_ = (rbat < 1e-6f) ? 1e-6f : rbat;
     }
-    void setBatRipple(float amp, float freq) { vbatAcAmp_ = amp; vbatAcFreq_ = freq; }
+    // Pluggable V_bat ripple shape: maps phase [0,2pi) -> a zero-mean waveform in ~[-1,1], scaled
+    // by vbat_ac_amp. Add a new noise model by writing one of these (anywhere) and passing it to
+    // setBatRippleShape(); for conf/runtime selection by integer id, also list it in shapeFromId().
+    using RippleShape = float (*)(float phase);
+    static float shapeSine(float phase) { return std::sin(phase); }                 // inverter (cos 2*line)
+    static float shapeAbsSin(float phase) {                                          // rectifier load |sin|
+        return 2.0f * (std::fabs(std::sin(phase * 0.5f)) - 0.63661977f);            // zero-mean, ~20% 2nd harm
+    }
+    static RippleShape shapeFromId(int id) {
+        switch (id) {
+            case 1:  return &VirtualConverter::shapeAbsSin;
+            default: return &VirtualConverter::shapeSine;
+        }
+    }
+
+    // shape: built-in id (0 = sine inverter, 1 = |sin| rectifier). For a custom model use
+    // setBatRippleShape() instead.
+    void setBatRipple(float amp, float freq, int shape = 0) {
+        vbatAcAmp_ = amp; vbatAcFreq_ = freq; vbatAcShape_ = shape;
+        vbatAcShapeFn_ = shapeFromId(shape);
+    }
+    // Plug in an arbitrary ripple model (overrides the built-in shape; getVbatAcShape() -> -1).
+    void setBatRippleShape(RippleShape fn) {
+        if (fn) { vbatAcShapeFn_ = fn; vbatAcShape_ = -1; }
+    }
     void setPassives(float c_in, float c_out, float l) { cIn_ = c_in; cOut_ = c_out; l_ = l; }
     void setVin(float v)  { vIn_ = v; }
     void setVout(float v) { vOut_ = v; }
@@ -71,6 +95,7 @@ public:
     [[nodiscard]] float getL()    const { return l_; }
     [[nodiscard]] float getVbatAcAmp()  const { return vbatAcAmp_; }
     [[nodiscard]] float getVbatAcFreq() const { return vbatAcFreq_; }
+    [[nodiscard]] int   getVbatAcShape() const { return vbatAcShape_; }
 
     void setPwm(const PwmState &s) { pwm_ = s; }
     [[nodiscard]] const PwmState &getPwm() const { return pwm_; }
@@ -111,6 +136,8 @@ private:
     float rbat_ = 0.05f;
     float vbatAcAmp_  = 0.0f;
     float vbatAcFreq_ = 100.0f;
+    int   vbatAcShape_ = 0; // built-in id (0=sine, 1=|sin|); -1 = custom plugged via setBatRippleShape
+    RippleShape vbatAcShapeFn_ = &VirtualConverter::shapeSine;
     float vbatAcPhase_ = 0.0f;
     float cIn_  = 470e-6f;
     float cOut_ = 470e-6f;

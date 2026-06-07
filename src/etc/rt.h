@@ -167,15 +167,24 @@ public:
      * @param cb timer alarm callback. returns true if a higher prio task has been woken (e.g. when notifying other tasks)
      * @param arg
      */
-    void begin(uint32_t hz, bool cb(void *), void *arg) {
-        this->hz = hz;
+    void begin(uint32_t requestedHz, bool cb(void *), void *arg) {
         callback = cb;
         this->arg = arg;
+
+        // Fixed 1 MHz timer resolution; the period comes from alarm_count, not the resolution.
+        // (resolution_hz = requestedHz with alarm_count = 1 overflowed the gptimer prescaler
+        // src_clk/resolution for low rates -> timer_ll divider assert; e.g. <~2.5 kHz failed.)
+        // A 1 MHz resolution keeps the prescaler a small valid divider for any source clock, so
+        // any sample rate (down to a few Hz) is configurable. alarm_count = 1e6/requestedHz.
+        constexpr uint32_t RES_HZ = 1000000;
+        uint32_t alarmCount = requestedHz ? RES_HZ / requestedHz : RES_HZ;
+        if (alarmCount < 1) alarmCount = 1;
+        this->hz = RES_HZ / alarmCount; // actual achieved rate (quantized to 1e6/N)
 
         gptimer_config_t timer_config = {
             .clk_src = GPTIMER_CLK_SRC_DEFAULT, // APB = 80 MHz
             .direction = GPTIMER_COUNT_UP,
-            .resolution_hz = hz, //
+            .resolution_hz = RES_HZ, // 1 MHz ticks
             .intr_priority = 0, // GPTIMER_ALLOW_INTR_PRIORITY_MASK
             .flags = {
                 .intr_shared = 0, .allow_pd = 0, .backup_before_sleep = 0, // backup_before_sleep is deprecated
@@ -193,7 +202,7 @@ public:
 
         ESP_ERROR_CHECK(gptimer_enable(gptimer));
         gptimer_alarm_config_t alarm_config1 = {
-            .alarm_count = 1, // period = 1/hz
+            .alarm_count = alarmCount, // period = alarmCount / RES_HZ = 1/hz
             .reload_count = 0,
             .flags = {.auto_reload_on_alarm = 1},
         };

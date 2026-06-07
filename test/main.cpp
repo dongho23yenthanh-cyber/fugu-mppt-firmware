@@ -75,6 +75,7 @@ void test_vconv_single_step_drops_simtime();
 void test_vconv_hasdata_steps_capped_coalesced_count();
 void test_vconv_inverter_ripple_is_sine();
 void test_vconv_rectifier_ripple_has_2nd_harmonic();
+void test_vconv_spiky_ripple_is_harmonic_rich();
 void test_vconv_no_ripple_when_amp_zero();
 void test_vconv_pluggable_custom_ripple_shape();
 
@@ -383,6 +384,7 @@ void setup() {
     RUN_TEST(test_vconv_hasdata_steps_capped_coalesced_count);
     RUN_TEST(test_vconv_inverter_ripple_is_sine);
     RUN_TEST(test_vconv_rectifier_ripple_has_2nd_harmonic);
+    RUN_TEST(test_vconv_spiky_ripple_is_harmonic_rich);
     RUN_TEST(test_vconv_no_ripple_when_amp_zero);
     RUN_TEST(test_vconv_pluggable_custom_ripple_shape);
 

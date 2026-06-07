@@ -62,15 +62,24 @@ public:
     static float shapeAbsSin(float phase) {                                          // rectifier load |sin|
         return 2.0f * (std::fabs(std::sin(phase * 0.5f)) - 0.63661977f);            // zero-mean, ~20% 2nd harm
     }
+    // Cheap-inverter spike train: a narrow current pulse once per cycle (crest ~3, ~20% duty),
+    // harmonic-rich so it aliases past Nyquist when sampled — models the nasty China-inverter load
+    // whose pulses corrupt the current estimate. ((1+cos)/2)^8 via 3 squarings (no exp), zero-mean.
+    static float shapeSpiky(float phase) {
+        float u = 0.5f * (1.0f + std::cos(phase));
+        u *= u; u *= u; u *= u;                          // u^8 -> narrow peak
+        return (u - 0.196381f) * 1.244370f;              // zero-mean, peak +1, trough ~-0.244
+    }
     static RippleShape shapeFromId(int id) {
         switch (id) {
             case 1:  return &VirtualConverter::shapeAbsSin;
+            case 2:  return &VirtualConverter::shapeSpiky;
             default: return &VirtualConverter::shapeSine;
         }
     }
 
-    // shape: built-in id (0 = sine inverter, 1 = |sin| rectifier). For a custom model use
-    // setBatRippleShape() instead.
+    // shape: built-in id (0 = sine inverter, 1 = |sin| rectifier, 2 = spiky China-inverter pulse).
+    // For a custom model use setBatRippleShape() instead.
     void setBatRipple(float amp, float freq, int shape = 0) {
         vbatAcAmp_ = amp; vbatAcFreq_ = freq; vbatAcShape_ = shape;
         vbatAcShapeFn_ = shapeFromId(shape);

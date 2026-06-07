@@ -565,6 +565,47 @@ void testT_mains_ripple() {
                 amp_obs, amp_expected, omega * R * C);
 }
 
+// ----- U: Spiky China-inverter ripple shape -----------------------------------
+//
+// shape id 2 (shapeSpiky) is a narrow per-cycle pulse — harmonic-rich, high crest
+// factor, unlike the smooth sine (id 0). Drive it through the no-converter RC path
+// (like testT) and confirm the transferred V_out ripple is far peakier than a sine
+// of equal amplitude: crest(spiky) >> crest(sine) ~ 1.41.
+void testU_spiky_ripple() {
+    section("U: Spiky ripple shape transfer");
+    const float R = 0.05f, C = 470e-6f, f = 300.0f, amp = 1.0f;
+    auto crest = [&](int shape) {
+        VirtualConverter v;
+        v.setPv(8.0f, 40.0f, 0.8f);
+        v.setPassives(1e-3f, C, kL);
+        v.setBat(20.0f, R);
+        v.setVin(40.0f); v.setVout(20.0f);
+        v.setPwm(mkPwm(0, 0));
+        v.setBatRipple(amp, f, shape);
+        for (int i = 0; i < 5000; ++i) v.stepSeconds(kT, kFreq);
+        std::vector<float> s; s.reserve(4000);
+        double mean = 0;
+        for (int i = 0; i < 4000; ++i) { v.stepSeconds(kT, kFreq); s.push_back(v.getVout()); mean += v.getVout(); }
+        mean /= s.size();
+        double sq = 0, pk = 0;
+        for (float x : s) { double d = x - mean; sq += d * d; if (std::fabs(d) > pk) pk = std::fabs(d); }
+        return (float) (pk / std::sqrt(sq / s.size()));   // crest factor of the AC part
+    };
+    const float cSine = crest(0), cSpiky = crest(2);
+    std::printf("  U: crest sine=%.2f spiky=%.2f\n", cSine, cSpiky);
+    EXPECT(cSine < 1.6f);          // sine ~1.41
+    EXPECT(cSpiky > 2.0f);         // narrow pulse -> high crest
+    EXPECT(cSpiky > cSine + 0.5f); // strictly peakier
+    // Shape is zero-mean (no DC injection): mean V_out stays at V_bat within the RC ripple.
+    VirtualConverter z;
+    z.setPv(8.0f, 40.0f, 0.8f); z.setPassives(1e-3f, C, kL); z.setBat(20.0f, R);
+    z.setVin(40.0f); z.setVout(20.0f); z.setPwm(mkPwm(0, 0));
+    z.setBatRipple(1.0f, f, 2);
+    double m = 0; const int M = 8000;
+    for (int i = 0; i < M; ++i) { z.stepSeconds(kT, kFreq); m += z.getVout(); }
+    EXPECT_NEAR(m / M, 20.0f, 0.05f);
+}
+
 } // namespace
 
 int main() {
@@ -589,6 +630,7 @@ int main() {
     testR_dcm_voltsec();
     testS_degenerate();
     testT_mains_ripple();
+    testU_spiky_ripple();
 
     std::printf("\nvconv-test: %d/%d passed\n", g_run - g_fail, g_run);
     return g_fail == 0 ? 0 : 1;

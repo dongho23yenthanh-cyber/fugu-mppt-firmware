@@ -142,6 +142,15 @@ void test_vconv_rectifier_ripple_has_2nd_harmonic() {
     TEST_ASSERT_TRUE(h2 > 0.10f && h2 < 0.30f);  // full-wave |sin|: ~20% 2nd harmonic
 }
 
+// spiky ripple (cheap China inverter): a narrow per-cycle current pulse, harmonic-rich. Its 2nd
+// harmonic dominates over |sin| and sine — the signature that its energy spreads up toward Nyquist
+// and aliases when sampled (the case that corrupts the current estimate).
+void test_vconv_spiky_ripple_is_harmonic_rich() {
+    VirtualConverter c; configActive(c); c.setBatRipple(0.26f, 100.0f, 2);
+    float rms, h2; measureRipple(c, 100.0f, rms, h2);
+    TEST_ASSERT_TRUE(h2 > 0.5f);                  // ((1+cos)/2)^8 -> h2/h1 ~0.70, peakier than |sin|
+}
+
 // amp=0 disables the disturbance (clean, deterministic baseline).
 void test_vconv_no_ripple_when_amp_zero() {
     VirtualConverter c; configActive(c); c.setBatRipple(0.0f, 100.0f, 0);

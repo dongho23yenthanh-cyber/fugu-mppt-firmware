@@ -359,9 +359,12 @@ only when an input changes (a 6-compare guard at the top of `stepOneCycle`), so 
 (2) **recursive sine oscillator** for the built-in inverter ripple — advances `(sin,cos)` by a fixed per-cycle rotation
 (4 mul + 2 add + a cheap renorm) instead of a per-cycle `sinf` (`|sin|`/custom shapes still use the function pointer).
 Per-cycle `__divsf3` dropped 18 → ~0 (only the cold reciprocal-rebuild + the rare DCM `tZero` slope-divide remain) and
-the per-cycle `sinf` is gone. Result: **`adc_freq=3000` + ripple now runs with no TWDT** (was a reboot loop). The PV
-`expf` (1/cycle) is deliberately left as a true `exp` — it's load-bearing for PV-curve / MPP fidelity and was not the
-bottleneck. All 174 host plant tests still pass (tolerance-based, so div→mul and the oscillator are within bounds).
+the per-cycle `sinf` is gone. **Measured on an ESP32-S3** (`stepSeconds` at a CCM op-point, ripple on, `adc_freq=3000`,
+N=13 cycles/sample, 20 k calls): **123.8 → 61.8 µs/call (9.52 → 4.75 µs/cycle) ≈ 2.0× faster.** That ~2× is what takes
+`adc_freq=3000` + ripple from a per-sample overrun (TWDT reboot loop) to comfortably inside the 333 µs tick budget. The
+PV `expf` (1/cycle) is deliberately left as a true `exp` — it's load-bearing for PV-curve / MPP fidelity and wasn't the
+bottleneck (removing only the divides + `sinf` already got the 2×). All 174 host plant tests still pass (tolerance-based,
+so div→mul and the oscillator stay within bounds).
 
 **Rule of thumb:** any `adc_freq` is now fine for ripple stress-tests; the old ≤ ~1500 ceiling is lifted. Still prefer
 the lowest rate that resolves your disturbance (e.g. 1000–1500 for a 100 Hz ripple) — it leaves the most RT headroom.

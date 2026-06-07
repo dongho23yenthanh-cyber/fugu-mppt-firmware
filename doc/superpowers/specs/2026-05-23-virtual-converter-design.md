@@ -366,8 +366,9 @@ PV `expf` (1/cycle) is deliberately left as a true `exp` — it's load-bearing f
 bottleneck (removing only the divides + `sinf` already got the 2×). All 174 host plant tests still pass (tolerance-based,
 so div→mul and the oscillator stay within bounds).
 
-**Rule of thumb:** any `adc_freq` is now fine for ripple stress-tests; the old ≤ ~1500 ceiling is lifted. Still prefer
-the lowest rate that resolves your disturbance (e.g. 1000–1500 for a 100 Hz ripple) — it leaves the most RT headroom.
+**Default:** `vconv_mock` keeps `adc_freq=3000` — the old ≤ ~1500 ceiling for ripple stress-tests is lifted, so the
+higher-fidelity rate now runs the inverter-ripple case without a TWDT and there's no reason to drop it. Only go lower if
+you add much heavier per-sample work (e.g. several noisy channels) and the loop starts overrunning again.
 
 ### ADC noise
 

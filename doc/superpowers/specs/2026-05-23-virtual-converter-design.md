@@ -328,6 +328,30 @@ into a multi-ms compute spike. The earlier single-`dt`-per-wakeup behavior silen
 the MPPT loop flip convergence basins under sub-µs timing perturbations — vconv is for **profiling**, not control-
 behavior validation (validate control changes on real hardware).
 
+### Sample rate & RT budget (why high `adc_freq` + ripple/noise can Task-WDT)
+
+vconv's per-ADC-sample cost is **~13–40× the mock's**. `ADC_Fake` emits one `sinf`; `ADC_VConv` runs the full plant at
+switching resolution — `N = round(pwmFreq / adc_freq)` `stepOneCycle()` calls per sample (~13 at `adc_freq=3000`,
+`pwmFreq=39 kHz`), plus the ripple `sin` *inside each* of those cycles, plus Box-Muller noise (`log+sqrt+sin+cos`) in
+`getSample()` when `noise_*>0`.
+
+The RT loop only blocks (letting the idle task run) when **no timer tick is pending**. If processing one sample — plant
++ ripple/noise + the per-sample notch/MPPT work the loop does anyway — takes longer than the tick period (`1/adc_freq`,
+= 333 µs at 3 kHz), the next tick has already fired by the time it finishes, so there's *always* a pending tick: the
+loop never yields → `IDLE` starves → the Task-WDT trips and the firmware reboots. The coalesced-tick catch-up keeps
+sim-time correct under this, but it can't create idle time. Observed: at `adc_freq=3000`, plant-only fits the 333 µs
+budget (tracks MPP fine), but enabling the inverter ripple (`vbat_ac_amp`) + `noise_vout` adds enough transcendentals to
+push past it → **TWDT reboot loop**. The total plant work/s is unchanged by `adc_freq` (it always simulates every
+39 kHz cycle); what lowering `adc_freq` buys is **slack** — the *fixed* per-sample overhead (notch/MPPT/getSample)
+amortizes over a longer window, so the loop finishes early and blocks. `adc_freq=1000` runs the same ripple stress-test
+cleanly. (The mock has none of this cost, so it's nowhere near the limit at 3 kHz.)
+
+Lowering `adc_freq` only became possible once `PeriodicTimer::begin()` was fixed (commit 495d317): it had set the
+gptimer `resolution_hz = adc_freq` with `alarm_count = 1`, so the prescaler `src_clk / resolution` overflowed its
+`[2, 65536]` range below ~2.5 kHz (a `timer_ll_set_clock_prescale` assert). It now uses a fixed 1 MHz resolution with
+`alarm_count = 1e6/hz`, so any rate down to a few Hz is valid. **Rule of thumb:** for ripple- or heavy-noise stress
+tests keep `adc_freq` ≤ ~1500; the higher rates are only for plant-fidelity profiling without disturbances.
+
 ### ADC noise
 
 `ADC_VConv::getSample(ch)` adds zero-mean Gaussian noise per channel *after* fetching the deterministic plant value,

@@ -68,6 +68,14 @@ struct Sensor {
     RunningMedian5<float> med3{}; // filter burst noise
     AdaptiveNoiseFilter anf{};
     inline static bool anfEnabled = false; // diagnostics-only; kept out of the RT path unless `anf on`
+    // Decision-based ("glitch-safe") median: the unconditional median-of-5 rejects sparse glitches
+    // but UNDER-READS a current that draws dense periodic pulses (a cheap inverter), discarding real
+    // charge -> ~5% low power. When despikeK > 0 the sample passes through unchanged unless it is an
+    // extreme outlier (|v-median| > despikeK * running mean-deviation), so the recurring load pulses
+    // reach the mean (unbiased) while genuine impulse glitches are still clipped. See conf `despike`.
+    inline static float despikeK = 0;               // outlier threshold in robust-scale units; 0 = off
+    float despikeScale = 0;                         // EWM of |v-median|, the robust scale
+    uint32_t despikeTrips = 0;                      // cumulative clips (diagnostic + WARN)
     EWM<false, float> ewm; // filter residual noise
     MeanAccumulator calibBuffer{}; // for offset calibration
 
@@ -90,6 +98,7 @@ struct Sensor {
         previous = NAN;
         numSamples = 0;
         med3.reset();
+        despikeScale = 0;
         ewm.reset();
         if (resetCalibration && calibrationAvg != 0) {
             ESP_LOGI("sensor", "%s reset calibration", params.teleName.c_str());
@@ -117,7 +126,18 @@ struct Sensor {
         lastRaw = x;
 
         if (notchFilter)notchFilter->filter(&last, &v, 1);
-        v = med3.next(v);
+        float m = med3.next(v); // always feed the median window so it tracks the signal
+        if (despikeK > 0.f) {
+            float dev = fabsf(v - m);
+            if (despikeScale > 0.f && dev > despikeK * despikeScale) {
+                v = m; // extreme outlier (glitch) -> clip; recurring load pulses pass through
+                ++despikeTrips;
+            }
+            // update robust scale AFTER the decision so an outlier can't lift its own threshold
+            despikeScale = (despikeScale > 0.f) ? (despikeScale + 0.095f * (dev - despikeScale)) : dev;
+        } else {
+            v = m; // legacy: unconditional median
+        }
         ewm.add(v);
         if (anfEnabled) anf.add(v);
 
@@ -250,6 +270,29 @@ public:
     }
 
     void setRippleSource(const Sensor *s) { rippleSrc = s; }
+
+    // Glitch-safe (decision-based) median. k<=0 keeps the legacy unconditional median-of-5; k>0
+    // enables it with that outlier threshold (in running-mean-deviation units, ~8 is sensible).
+    void configureDespike(float k) { Sensor::despikeK = (k > 0.f) ? k : 0.f; }
+
+    // Rate-limited WARN so the console always shows when the de-spiker is clipping outliers, without
+    // flooding the RT path. Called once per update(); reports clips accumulated over each window.
+    uint32_t despikeWarnDiv_ = 0, despikeTripsPrev_ = 0;
+    void despikeWarnTick() {
+        if (Sensor::despikeK <= 0.f || ++despikeWarnDiv_ < 2048) return;
+        despikeWarnDiv_ = 0;
+        uint32_t total = 0, worst = 0;
+        const Sensor *worstS = nullptr;
+        for (auto s: realSensors) {
+            total += s->despikeTrips;
+            if (s->despikeTrips > worst) { worst = s->despikeTrips; worstS = s; }
+        }
+        uint32_t delta = total - despikeTripsPrev_;
+        despikeTripsPrev_ = total;
+        if (delta)
+            ESP_LOGW("sampling", "despike clipped %u outlier sample(s) (k=%.1f, mostly %s)",
+                     delta, Sensor::despikeK, worstS ? worstS->params.teleName.c_str() : "?");
+    }
 
     [[nodiscard]] float getNotchFreq() const { return notchFreq; }
     [[nodiscard]] float getRippleSnr() const { return rippleSnr; }
@@ -614,6 +657,8 @@ public:
                 }
             }
         }
+
+        despikeWarnTick();
 
         return res;
     }

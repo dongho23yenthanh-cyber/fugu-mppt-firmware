@@ -267,6 +267,10 @@ void setupSensors(const ConfFile &boardConf, const Limits &lim) {
         -30.f);
     adcSampler.setRippleSource(sensors.Vout);
 
+    // Glitch-safe median: pass dense load pulses through (unbiased current) but still clip impulse
+    // glitches. despike = outlier threshold (0 = off -> legacy unconditional median; ~8 to enable).
+    adcSampler.configureDespike(sensConf.f("despike", 0.f));
+
     adcSampler.ignoreCalibrationConstraints = sensConf.getByte("ignore_calibration_constraints", 0);
     if (adcSampler.ignoreCalibrationConstraints)
         ESP_LOGW("main", "Skipping ADC range and noise checks.");

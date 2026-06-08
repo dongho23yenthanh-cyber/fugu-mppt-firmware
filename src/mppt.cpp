@@ -315,9 +315,13 @@ void MpptController::updateCV() {
         auto dt_us = nowUs - lastUs;
         auto fp = cv * (1.f / 10000.f) * (float) converter.pwmCtrlMax * (float) dt_us * 1e-6f * 25.f * 2.f;
 
-        if (converter.getCtrlOnPwmCnt() < 160) {
+        // Low-duty gate: slow the loop at very short Ctrl on-times (low/no-load). Thresholds are
+        // on-times in ns so they stay invariant to PWM resolution/frequency (counts = ns*fsw*pwmMax).
+        const auto onCnt = converter.getCtrlOnPwmCnt();
+        const float tickRate = converter.getPwmTickRate();
+        if (onCnt < pwmCountsFromNs(2000.f, tickRate)) {
             fp *= 0.01f;
-        } else if (converter.getCtrlOnPwmCnt() < 200) {
+        } else if (onCnt < pwmCountsFromNs(2500.f, tickRate)) {
             fp *= 0.04f;
         } else {
             fp *= 10.0f;

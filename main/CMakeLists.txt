@@ -134,6 +134,13 @@ if ($ENV{TEST_ADC_HW})
     component_compile_definitions("TEST_ADC_HW=1")
 endif ()
 
+# FUGU_FORCE_BFLOW_OFF: bench-safety override that keeps the backflow/panel switch open
+# (BackflowDriver::enable() forced false) so battery current can't enter the converter
+# while testing a new gate-driver path. Off by default.
+if ($ENV{FUGU_FORCE_BFLOW_OFF})
+    component_compile_definitions("FUGU_FORCE_BFLOW_OFF=1")
+endif ()
+
 if (WITH_BLE)
     component_compile_definitions("WITH_BLE=1")
 endif ()

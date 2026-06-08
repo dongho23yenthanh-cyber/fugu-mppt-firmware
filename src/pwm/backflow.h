@@ -33,6 +33,12 @@ public:
     }
 
     void enable(bool enable) {
+#ifdef FUGU_FORCE_BFLOW_OFF
+        // Bench-safety override: keep the panel/backflow switch open so battery current
+        // cannot flow into the converter while testing. The MPPT loop re-drives this
+        // every tick, so a runtime `bf 0` can't hold; this is the only reliable hold.
+        enable = false;
+#endif
         if (panelEN) {
             digitalWrite(panelEN, !!enable);
         } else if (panelSD) {

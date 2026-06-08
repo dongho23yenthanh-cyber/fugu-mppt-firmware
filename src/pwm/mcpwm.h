@@ -61,7 +61,8 @@ class MCPWM_SyncLeg {
 
 public:
     const char *name = "mcpwm";
-    uint16_t pwmMax    = 0;   // = period_ticks (same role as LEDC pwmMax)
+    uint16_t pwmMax     = 0;   // commandable span: period_ticks (InEn) or period_ticks-dtTicks (HiLi)
+    uint16_t periodTicks = 0;  // true timer period; phase math must use this, not pwmMax
 
     mcpwm_oper_handle_t  oper()  const { return oper_; }
     mcpwm_gen_handle_t   genHS() const { return genHS_; }
@@ -78,7 +79,8 @@ public:
                  group, (unsigned) freq, pinHS, pinLS, (unsigned) dtTicks, enLogic, (unsigned) fixedTicks);
         PwmTiming t = fixedTicks ? PwmTiming{freq * fixedTicks, fixedTicks, freq}
                                  : bestTiming(freq);
-        pwmMax = (uint16_t) t.period_ticks;
+        pwmMax      = (uint16_t) t.period_ticks;
+        periodTicks = (uint16_t) t.period_ticks;
 
         mcpwm_timer_config_t tc = {
             .group_id      = group,
@@ -101,8 +103,11 @@ public:
         };
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpHS_));
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpLS_));
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpHS_, pwmMax / 4));
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpLS_, pwmMax / 2));
+        // Boot at duty 0: cmp=0 makes HS/LS/EN all stay low out of reset, so gates
+        // can't toggle before the first protected pwmPerturb. (The converter also
+        // forceShutdown()s right after start; this closes the start()->force window.)
+        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpHS_, 0));
+        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpLS_, 0));
 
         mcpwm_generator_config_t gHS = {.gen_gpio_num = pinHS, .flags = {}};
         mcpwm_generator_config_t gLS = {.gen_gpio_num = pinLS, .flags = {}};
@@ -224,7 +229,8 @@ public:
             for (int i = 1; i < N; ++i) {
                 mcpwm_timer_sync_phase_config_t pc = {
                     .sync_src    = sync_,
-                    .count_value = (uint32_t) ((uint32_t) pwmMax * i / N),
+                    // phase is a fraction of the true timer period, not the dt-reduced pwmMax
+                    .count_value = (uint32_t) ((uint32_t) legs_[0].periodTicks * i / N),
                     .direction   = MCPWM_TIMER_DIRECTION_UP,
                 };
                 ESP_ERROR_CHECK(mcpwm_timer_set_phase_on_sync(legs_[i].timer(), &pc));

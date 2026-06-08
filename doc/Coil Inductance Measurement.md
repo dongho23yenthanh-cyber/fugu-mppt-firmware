@@ -227,13 +227,13 @@ a spawned non-RT-core task):
 
 ```
 measure-coil l0 [steps] [dwell_ms] [apply]     # the §5 inductance sweep
-measure-coil ls [hs]    [dwell_ms] [apply]     # the §6 LS-timing / rect_offset sweep
+measure-coil ls [hs]    [dwell_ms] [apply]     # the §6 LS-timing / rect_offset_ns sweep
 ```
 
 It reads `Vin`/`Vout`/`Iout` directly from each sensor's `ewm.avg` (the same DC average the host
 medians off the `sensor avg` line), uses `pwmMaxDriver()` for the exact PWM period (no
 `MinDutyCycleLS` reconstruction), and applies the identical formula, `Iout` floor, and median/IQR.
-`apply` writes `coil.conf::L0` (next boot) or `rect_offset` (also live). The result is the *physical*
+`apply` writes `coil.conf::L0` (next boot) or `rect_offset_ns` (also live). The result is the *physical*
 inductance, same as the script. Validated against the script on `flat` to within ~2 % (≈50 µH).
 For a tight result use many small steps (the i-max abort otherwise leaves only the low end of the
 band sampled).
@@ -255,7 +255,7 @@ So `Iout` — and the `L` derived from it — is least biased when LS turns off 
 crossing, the peak of an LS sweep at fixed duty; measuring at or near that per-point optimum removes
 the SR-timing oscillation. **That peak calibrates *timing*, not `L`** (at the optimum
 `t2/t1 = (Vin−Vout)/Vout = 1/M − 1 = rectCtrlRatio(M)`, with `L` cancelling out). The `--ls-sweep`
-peak-bracketing and the `coil.conf::rect_offset` dead-time calibration it drives (`--apply`) are
+peak-bracketing and the `coil.conf::rect_offset_ns` dead-time calibration it drives (`--apply`) are
 rectifier-timing concerns, covered with the timing theory in
 [Diode Emulation.md](Diode%20Emulation.md) — a companion to the inductance measurement, not a
 substitute.

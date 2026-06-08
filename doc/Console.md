@@ -107,7 +107,7 @@ These override the running charger parameters only; use `set-config charger.conf
 | `mppt` | Switch back to MPP tracking mode (only valid while in manual PWM mode). |
 | `sweep` | Start a global MPP scan / search. |
 | `speed <float>` | Set tracking speed scale, range 0–10 (default 1.0). |
-| `measure-coil l0\|ls [steps\|hs] [dwell_ms] [apply]` | Measure the coil on-device by driving a DCM sweep (takes over manual PWM, restores MPPT when done). `l0` sweeps duty and reports the inductance (median over the DCM band); `ls` holds HS and sweeps the low-side count to find the `rect_offset` timing. `apply` writes the result to `coil.conf`. Needs `Vin > Vout` (sun/headroom). Port of `etc/measure_coil.py`; see [Coil Inductance Measurement](Coil%20Inductance%20Measurement.md). |
+| `measure-coil l0\|ls [steps\|hs] [dwell_ms] [apply]` | Measure the coil on-device by driving a DCM sweep (takes over manual PWM, restores MPPT when done). `l0` sweeps duty and reports the inductance (median over the DCM band); `ls` holds HS and sweeps the low-side count to find the `rect_offset_ns` timing. `apply` writes the result to `coil.conf`. Needs `Vin > Vout` (sun/headroom). Port of `etc/measure_coil.py`; see [Coil Inductance Measurement](Coil%20Inductance%20Measurement.md). |
 
 The following commands require manual PWM mode:
 

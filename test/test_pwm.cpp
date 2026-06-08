@@ -970,6 +970,165 @@ void test_mcpwm_interleaved_phase() {
     TEST_ASSERT_FLOAT_WITHIN(50.0f, expected_ns, mean_dt_ns);
 }
 
+// Test 13. Boot-safe: out of init() the comparators are 0, so HS/LS must stay LOW
+// with no edges *before any setHsOff/setLsOff is commanded*. Regression guard for the
+// startup gate-toggle bug (init used to seed cmpHS=pwmMax/4, cmpLS=pwmMax/2, which on
+// InEn boards switches the half-bridge before MPPT/protection runs). forceShutdown()
+// (which the converter issues right after start()) must keep it low too.
+void test_mcpwm_boot_safe_low() {
+    McpwmLegRig rig;
+    rig.init(kFsw, /*dtTicks*/0, /*enLogic*/false, /*capture_ls*/true);
+    // NOTE: deliberately do NOT setHsOff/setLsOff — observe the init defaults.
+    rig.rearm();
+    vTaskDelay(pdMS_TO_TICKS(20));   // ~780 periods at 39 kHz
+
+    uint32_t hs_ev = 0, ls_ev = 0;
+    for (uint32_t i = 0; i < g_head; ++i) {
+        if (g_ring[i].chan_id == kMcpwmHsChanId) ++hs_ev;
+        if (g_ring[i].chan_id == kMcpwmLsChanId) ++ls_ev;
+    }
+    int hs_high = 0, ls_high = 0;
+    for (int p = 0; p < 100; ++p) {
+        if (digitalRead(kHsPin)) ++hs_high;
+        if (digitalRead(kLsPin)) ++ls_high;
+        esp_rom_delay_us(50);
+    }
+    ESP_LOGI(TAG_PWM, "Test 13 boot-safe: HS ev=%u LS ev=%u | HS high=%d/100 LS high=%d/100",
+             (unsigned)hs_ev, (unsigned)ls_ev, hs_high, ls_high);
+    TEST_ASSERT_EQUAL_UINT32(0, hs_ev);
+    TEST_ASSERT_EQUAL_UINT32(0, ls_ev);
+    TEST_ASSERT_EQUAL_INT(0, hs_high);
+    TEST_ASSERT_EQUAL_INT(0, ls_high);
+
+    // forceShutdown on top must remain low (mirrors converter init order).
+    rig.leg.forceShutdown();
+    rig.rearm();
+    vTaskDelay(pdMS_TO_TICKS(10));
+    uint32_t ev_after = 0;
+    for (uint32_t i = 0; i < g_head; ++i)
+        if (g_ring[i].chan_id == kMcpwmHsChanId || g_ring[i].chan_id == kMcpwmLsChanId) ++ev_after;
+    TEST_ASSERT_EQUAL_UINT32(0, ev_after);
+}
+
+// Test 14. InEn (enLogic) re-enable after forceShutdown. Mirrors the converter
+// disable()/pwmPerturb() sequence on a board with no SD pin: forceShutdown + park
+// comparators at 0, then write a new (low) duty and clearForce(). Switching must
+// resume at the NEW duty — not stay latched LOW (the InEn permanent-latch bug) and
+// not flash the stale pre-disable duty. enLogic: IN=HS gen, EN=LS gen.
+void test_mcpwm_enlogic_reenable() {
+    constexpr uint32_t N_REENABLE = 128;
+    McpwmLegRig rig;
+    rig.init(kFsw, /*dtTicks*/0, /*enLogic*/true, /*capture_ls*/true);
+    uint16_t cmpHS = rig.leg.pwmMax / 2;          // IN 50%
+    uint16_t cmpLS = (uint16_t)(rig.leg.pwmMax * 3 / 4);  // EN 75%
+    rig.leg.setHsOff(cmpHS);
+    rig.leg.setLsOff(cmpLS);
+    vTaskDelay(2);
+    rig.rearm();
+    TEST_ASSERT_TRUE_MESSAGE(wait_events(64, 150, /*diag*/-1),
+                             "Test 14 sanity: enLogic leg not toggling pre-disable");
+
+    // disable(): force low + park comparators at 0.
+    rig.leg.forceShutdown();
+    rig.leg.setHsOff(0);
+    rig.leg.setLsOff(0);
+    rig.rearm();
+    vTaskDelay(pdMS_TO_TICKS(10));
+    uint32_t ev_disabled = 0;
+    for (uint32_t i = 0; i < g_head; ++i)
+        if (g_ring[i].chan_id == kMcpwmHsChanId || g_ring[i].chan_id == kMcpwmLsChanId) ++ev_disabled;
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, ev_disabled, "Test 14: gates toggled while disabled");
+
+    // re-enable(): write new low duty, then clearForce (order from pwmPerturb).
+    uint16_t cmpHS2 = rig.leg.pwmMax / 4;         // smaller IN on re-enable
+    uint16_t cmpLS2 = rig.leg.pwmMax / 2;
+    rig.leg.setHsOff(cmpHS2);
+    rig.leg.setLsOff(cmpLS2);
+    rig.leg.clearForce();
+    rig.rearm();
+    TEST_ASSERT_TRUE_MESSAGE(wait_events(N_REENABLE * 2, 200, /*diag*/-1),
+                             "Test 14: leg did not resume after clearForce (InEn latch bug?)");
+
+    // Verify resumed HS width matches the NEW duty, not the stale one.
+    uint64_t sum_w = 0, sum_p = 0; uint32_t n_w = 0, n_p = 0;
+    analyse_pulse_width(kMcpwmHsChanId, N_REENABLE, sum_w, n_w);
+    analyse_period     (kMcpwmHsChanId, N_REENABLE, sum_p, n_p);
+    TEST_ASSERT_GREATER_THAN_UINT32(0, n_w);
+    TEST_ASSERT_GREATER_THAN_UINT32(0, n_p);
+    float measured_duty = ((float)sum_w / n_w) / ((float)sum_p / n_p);
+    float expected_duty = (float)cmpHS2 / (float)rig.leg.pwmMax;
+    ESP_LOGI(TAG_PWM, "Test 14 reenable: measured D=%.4f expected D=%.4f", measured_duty, expected_duty);
+    TEST_ASSERT_FLOAT_WITHIN(0.02f, expected_duty, measured_duty);
+}
+
+// Test 15. Interleaved phase with dead-time. Same as Test 12 but dtTicks!=0, where
+// pwmMax = period_ticks − dtTicks. The phase offset must be period_ticks/2 (true timer
+// period), not pwmMax/2. With dtTicks=32 the bug would shift leg-1 by ~100 ns — outside
+// the ±50 ns window.
+void test_mcpwm_interleaved_phase_deadtime() {
+    MCPWM_Converter<2> conv;
+    const int pinHS[2] = {kHsPin,    PWM_HS_PIN_2};
+    const int pinLS[2] = {kLsPin,    PWM_LS_PIN_2};
+    conv.init(0, kFsw, pinHS, pinLS, /*dtTicks*/kDtTestTicks, /*enLogic*/false, /*fixedTicks*/0);
+    conv.setHsOff(conv.pwmMax / 2);
+    vTaskDelay(2);
+
+    CapTimer captimer(0);
+    CapChan  cap0(captimer, pinHS[0], kMcpwmHsChanId,  /*io_loop_back*/false);
+    ESP_ERROR_CHECK(gpio_set_direction((gpio_num_t)pinHS[0], GPIO_MODE_INPUT_OUTPUT));
+    esp_rom_gpio_connect_out_signal(pinHS[0], PWM0_OUT0A_IDX, false, false);
+    CapChan  cap1(captimer, pinHS[1], kMcpwmHs1ChanId, /*io_loop_back*/false);
+    ESP_ERROR_CHECK(gpio_set_direction((gpio_num_t)pinHS[1], GPIO_MODE_INPUT_OUTPUT));
+    esp_rom_gpio_connect_out_signal(pinHS[1], PWM0_OUT1A_IDX, false, false);
+
+    rearm_ring({&cap0, &cap1});
+    constexpr uint32_t N_pairs = 256;
+    TEST_ASSERT_TRUE_MESSAGE(wait_events(N_pairs * 4, 250, /*diag*/-1),
+                             "Test 15: CAP ring did not fill (both legs running?)");
+
+    uint64_t sum_dt = 0; uint32_t n = 0;
+    bool waiting_for_leg1 = false; uint32_t leg0_rise_ts = 0;
+    for (uint32_t i = 0; i < g_head && n < N_pairs; ++i) {
+        if (!g_ring[i].pos) continue;
+        if (g_ring[i].chan_id == kMcpwmHsChanId) {
+            leg0_rise_ts = g_ring[i].ts; waiting_for_leg1 = true;
+        } else if (g_ring[i].chan_id == kMcpwmHs1ChanId && waiting_for_leg1) {
+            sum_dt += (g_ring[i].ts - leg0_rise_ts); ++n; waiting_for_leg1 = false;
+        }
+    }
+    float mean_dt_ns = n ? (float)sum_dt / n * kNsPerTick : 0.f;
+    PwmTiming t = bestTiming(kFsw);
+    float expected_ns = (1e9f / (float)t.actual_freq) / 2.0f;
+    ESP_LOGI(TAG_PWM, "Test 15 N=2 dt=%u phase: n=%u mean=%.1f ns (expected %.1f ns)",
+             (unsigned)kDtTestTicks, (unsigned)n, mean_dt_ns, expected_ns);
+    TEST_ASSERT_GREATER_OR_EQUAL_UINT32(N_pairs / 2, n);
+    TEST_ASSERT_FLOAT_WITHIN(50.0f, expected_ns, mean_dt_ns);
+}
+
+// Test 16. rect_offset_ns <-> counts conversion is resolution-invariant (pure math, no HW).
+// The hardware rect offset is a fixed TIME; the same ns must map to the right comparator count
+// at any tick rate (counts/sec = fsw*pwmMax) and round-trip back. Guards the coil.conf migration
+// from count-based rect_offset to time-based rect_offset_ns.
+void test_rect_offset_ns_conversion() {
+    const float ledcTick  = 39000.0f * 2048.0f;   // LEDC 11-bit @ 39 kHz  -> 79.87 MHz
+    const float mcpwmTick = 39000.0f * 4103.0f;   // MCPWM bestTiming @ 39 kHz -> 160.0 MHz
+    const float ns = 950.0f;                       // ~fixed gate-drive/MOSFET turn-off delay
+
+    int ledcCt  = rectOffsetCountsFromNs(ns, ledcTick);
+    int mcpwmCt = rectOffsetCountsFromNs(ns, mcpwmTick);
+    ESP_LOGI(TAG_PWM, "Test 16: %.0f ns -> %d ct (LEDC) / %d ct (MCPWM)", ns, ledcCt, mcpwmCt);
+    TEST_ASSERT_INT_WITHIN(1, 76,  ledcCt);        // 950 ns * 79.87 MHz = 75.9
+    TEST_ASSERT_INT_WITHIN(1, 152, mcpwmCt);       // 950 ns * 160.0 MHz = 152.0
+    TEST_ASSERT_INT_WITHIN(2, ledcCt * 2, mcpwmCt);// same time -> ~2x counts at 2x resolution
+
+    // Round-trip within one count's worth of time.
+    float back = rectOffsetNsFromCounts(mcpwmCt, mcpwmTick);
+    TEST_ASSERT_FLOAT_WITHIN(1e9f / mcpwmTick, ns, back);
+
+    TEST_ASSERT_EQUAL_INT(0, rectOffsetCountsFromNs(0.0f, mcpwmTick));   // zero -> zero
+    TEST_ASSERT_TRUE(rectOffsetCountsFromNs(-950.0f, mcpwmTick) < 0);    // sign preserved
+}
+
 // Scope target. Holds each duty for several seconds, prints sync markers on the
 // UART so etc/pico_pwm_duty.py can trigger PicoScope capture per dwell and measure
 // pulse-width / duty externally. Covers the D=0.05/0.10/0.90/0.95 endpoints that

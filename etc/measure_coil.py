@@ -377,16 +377,20 @@ def ls_sweep(con, tap, hs, pwm_max, fsw, args):
         if not (0 < pk < len(ys) - 1):
             print("  --apply skipped: peak at a sweep edge (never rolled over); widen --ls-hi")
             return
-        cur = round(float(get_conf(con, "coil.conf", "rect_offset") or 0))
+        cur = get_conf(con, "coil.conf", "rect_offset_ns") or "0"
         # rect_offset is added to the offset-free firmware formula (pwmCtrl*rectCtrlRatio == ideal_ls),
         # so the target is absolute: don't fold in cur or the applied auto_ls (the latter is perturbed
         # by reverse-current pullback / transients and misreads as the min-LS floor).
         lim = pwm_max // 8
         new_off = max(-lim, min(lim, round(ls_peak - ideal_ls - args.apply_margin)))
-        print(f"  --apply: coil.conf rect_offset {cur} -> {new_off}  "
-              f"(peak-ideal {ls_peak - ideal_ls:+.0f} ct - margin {args.apply_margin} ct; effective next boot)")
-        safe_command(con, f"set-config coil.conf rect_offset {new_off}")
-        print(f"  readback rect_offset = {get_conf(con, 'coil.conf', 'rect_offset')}")
+        # Store as a time (ns) so the calibration is independent of PWM resolution: counts/sec = fsw*pwmMax.
+        tick_rate = fsw * pwm_max
+        new_ns = round(new_off / tick_rate * 1e9)
+        print(f"  --apply: coil.conf rect_offset_ns {cur} -> {new_ns}  "
+              f"({new_off} ct @ {tick_rate / 1e6:.0f} MHz tick; peak-ideal {ls_peak - ideal_ls:+.0f} ct"
+              f" - margin {args.apply_margin} ct; effective next boot)")
+        safe_command(con, f"set-config coil.conf rect_offset_ns {new_ns}")
+        print(f"  readback rect_offset_ns = {get_conf(con, 'coil.conf', 'rect_offset_ns')}")
 
 
 def main():
@@ -414,7 +418,7 @@ def main():
     ap.add_argument("--ls-lo", type=float, default=0.5, help="[--ls-sweep] start LS / ideal_LS")
     ap.add_argument("--ls-hi", type=float, default=1.4, help="[--ls-sweep] end LS / ideal_LS")
     ap.add_argument("--apply", action="store_true",
-                    help="[--ls-sweep] write the measured offset to coil.conf::rect_offset (effective next boot)")
+                    help="[--ls-sweep] write the measured offset to coil.conf::rect_offset_ns (effective next boot)")
     ap.add_argument("--apply-margin", type=int, default=12,
                     help="[--ls-sweep --apply] counts to keep below the Iout peak (reverse-current safety)")
     ap.add_argument("--restore", choices=["mppt", "off"], default="mppt",

@@ -31,6 +31,7 @@ using PwmDriver = PWM_Mock;
 #include "conf.h"
 #include "util.h"
 #include "logging.h"
+#include "pwm/mcpwm_timing.h"   // rectOffset{Counts,Ns} helpers (no hardware deps)
 
 /**
  * Synchronous buck or boost converter
@@ -150,10 +151,15 @@ public:
 
     void setRectOnOffset(int o) { rectOnOffset = (int16_t) o; } // DCM LS dead-time offset, counts
 
+    // PWM counts per second = fsw * pwmMax (same tick-rate basis as boot_refresh_ns). Used to
+    // convert the physical rect_offset_ns <-> comparator counts independent of driver resolution.
+    [[nodiscard]] float getPwmTickRate() const { return (float) pwmFrequency * (float) pwmDriver.pwmMax; }
+
     // Emitted from init() (boot serial) and re-fired once MQTT is up (so it lands in the MQTT/telnet
     // log too — init() runs during setup(), before those sinks exist).
     void logConfig() const {
-        ESP_LOGI("converter", "Coil L0=%.1f µH rect_offset=%d", coilL0 * 1e6f, rectOnOffset);
+        ESP_LOGI("converter", "Coil L0=%.1f µH rect_offset=%.0f ns (%d ct)",
+                 coilL0 * 1e6f, rectOffsetNsFromCounts(rectOnOffset, getPwmTickRate()), rectOnOffset);
     }
 
     [[nodiscard]] float voltageRatio() const { return outInVoltageRatio; } // M
@@ -192,9 +198,8 @@ public:
 
         coilL0 = coilConf.getFloat("L0");
         const float L0 = coilL0;
-        rectOnOffset = (int16_t) coilConf.getLong("rect_offset", 0);
-
-        logConfig();
+        // rectOnOffset is derived from coil.conf::rect_offset_ns after the driver is up (needs pwmMax
+        // for the ns->counts conversion); see the end of init().
 
         pwmFrequency = boardConf.getLong("pwm_freq"); //39000; //  converter switching frequency
         assert_throw(pwmFrequency > 5e3 && pwmFrequency < 5e5, "");
@@ -249,9 +254,12 @@ public:
 #if WITH_MCPWM
         // bestTiming picks the max period_ticks the hardware can give us at pwmFrequency
         // (highest src clock + integer prescaler, 16-bit period cap). See doc/mcpwm-sync-buck-driver.md.
-        // rect_offset is stored in counts and must be re-measured when migrating from LEDC.
+        // rect_offset is stored as a time (rect_offset_ns) and converted to counts below, so it
+        // survives the resolution change from LEDC without re-measuring.
         uint32_t resolutionHz = bestTiming(pwmFrequency).resolution_hz;
-        uint32_t dtTicks = (uint32_t) std::lround(
+        // InEn drivers do dead-time in the gate-driver chip, so the MCPWM dt submodule
+        // must stay off (pwm_deadtime_ns is documented as ignored for InEn).
+        uint32_t dtTicks = pwmEnLogic ? 0u : (uint32_t) std::lround(
             boardConf.getFloat("pwm_deadtime_ns", 0.f) * 1e-9f * (float) resolutionHz);
         pwmDriver.init(0, pwmFrequency, pinCtrl, pinRect, dtTicks, pwmEnLogic);
         uint8_t faultPin = boardConf.getByte("pwm_fault_pin", 255);
@@ -260,6 +268,10 @@ public:
             faultBrake.bindLeg(pwmDriver.oper(), pwmDriver.genHS(), pwmDriver.genLS());
         }
         pwmDriver.start();
+        // Boot latched-low, consistent with the disabled() state (pwmCtrl==0). The first
+        // protected pwmPerturb(+) clears the force. Without this, InEn boards (no pwm_sd)
+        // would switch the half-bridge before MPPT/protection runs.
+        pwmDriver.forceShutdown();
 #else
         pwmDriver.init_pwm(pwmCh_Ctrl, pinCtrl, pwmFrequency);
         pwmDriver.init_pwm(pwmCh_Rect, pinRect, pwmFrequency);
@@ -284,6 +296,12 @@ public:
 
         ESP_LOGI("converter", "drv=%s f=%lu boost=%d pwmMax=%hu minLS=%hu minHS=%hu maxHS=%hu",
                  pwmDriver.name, pwmFrequency, isBoost, pwmDriver.pwmMax, pwmRectMin, pwmCtrlMin, pwmCtrlMax);
+
+        // rect_offset_ns is the fixed gate-drive/MOSFET turn-off delay; convert to counts the same
+        // way boot_refresh_ns is handled (ns -> counts via the tick rate), so the calibration is
+        // invariant to PWM resolution and fsw. Default 0 (no offset) when unset.
+        rectOnOffset = (int16_t) rectOffsetCountsFromNs(coilConf.getFloat("rect_offset_ns", 0.f), getPwmTickRate());
+        logConfig();
     }
 
     void computePwmRectMax() {
@@ -315,14 +333,10 @@ public:
     }
 
     void pwmPerturb(int16_t direction) {
-        if (unlikely(disabled() and direction > 0 and pinSd != 255)) {
+        bool enabling = unlikely(disabled() and direction > 0);
+        if (enabling) {
             UART_LOG("Converter enabled");
-            digitalWrite(pinSd, 0);
-#if WITH_MCPWM
-            // disable() latched the gens LOW via forceShutdown; release them now so the
-            // generator actions resume driving the pins.
-            pwmDriver.clearForce();
-#endif
+            if (pinSd != 255) digitalWrite(pinSd, 0);
         }
 
         pwmCtrl = constrain(pwmCtrl + direction, pwmCtrlMin, pwmCtrlMax);
@@ -369,6 +383,12 @@ public:
         // The largerDecrease/direction ordering dance is only needed for LEDC's two-write update.
         pwmDriver.setHsOff(pwmCtrl);
         pwmDriver.setLsOff(pwmCtrl + pwmRect);
+        if (enabling) {
+            // Comparators now hold the new (low) duty; release the force latch so the
+            // gens resume. Ungated by pinSd: InEn/no-SD boards must clear force too, else
+            // they stay latched LOW after the first disable() and can never re-enable.
+            pwmDriver.clearForce();
+        }
         (void) largerDecrease;
 #else
         if (largerDecrease) {
@@ -440,6 +460,10 @@ public:
         if (pinSd != 255)digitalWrite(pinSd, 1);
 #if WITH_MCPWM
         pwmDriver.forceShutdown();
+        // Park the comparators at 0 too: when the gens are later un-forced, the latched
+        // pre-disable duty cannot resume for one period before pwmPerturb rewrites them.
+        pwmDriver.setHsOff(0);
+        pwmDriver.setLsOff(0);
 #else
         pwmDriver.stop(pwmCh_Ctrl, 0);
         pwmDriver.stop(pwmCh_Rect, 0);

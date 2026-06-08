@@ -107,7 +107,7 @@ much steeper than the rising slope and small mistakes in the rising-slope estima
 amplified). The controller needs a wider margin at high `M` — better to turn LS off
 *slightly early* (pay a tiny body-diode `V_f` loss) than late (reverse current).
 
-## Hardware delay (`rect_offset`)
+## Hardware delay (`rect_offset_ns`)
 
 The formula above gives the *ideal* zero-crossing time. In hardware a constant delay
 sits between the commanded LS-off count and the moment the FET actually stops
@@ -115,15 +115,17 @@ conducting: gate-driver propagation, FET turn-off, switch-node decay. This delay
 
 - **per board** — gate driver part, FET selection, layout parasitics;
 - **independent of `M`** — it's a fixed propagation time, not a ratio;
-- **independent of `L`** — same reason the ideal time was.
+- **independent of `L`** — same reason the ideal time was;
+- **a fixed time** — nanoseconds, set by the gate-drive circuit and MOSFET, not by the PWM.
 
-It's stored in `coil.conf::rect_offset` as **PWM counts**, added to the DCM LS count at
-boot (`>0` = LS off later, toward the zero crossing). Counts, not nanoseconds, means
-**the value is only valid at the PWM resolution it was measured at** — change `pwm_freq`
-or the timer source clock and you must rescale or re-measure. With the LEDC-equivalent
-2048 counts/period at 39 kHz, one count ≈ 12.5 ns; under MCPWM `bestTiming` at 39 kHz
-(~4103 counts/period from a 160 MHz source clock), one count ≈ 6.25 ns, so the same
-physical delay doubles in counts.
+Because it's a fixed *time*, it's stored in `coil.conf::rect_offset_ns` as **nanoseconds**
+and converted to counts at boot (`ns·1e-9·fsw·pwmMax`, the same tick-rate basis as
+`boot_refresh_ns`); `>0` = LS off later, toward the zero crossing. Storing the time, not
+counts, makes the calibration **invariant to the PWM resolution and `pwm_freq`** — the
+same physical delay maps to the right count on any driver. (Concretely: at the LEDC-equivalent
+2048 counts/period at 39 kHz one count ≈ 12.5 ns, while MCPWM `bestTiming` gives ~4103
+counts/period from a 160 MHz source clock, ≈ 6.25 ns/count — so a fixed delay would *double*
+in counts between the two, which is exactly the breakage the ns form avoids.)
 
 ### Measuring it
 
@@ -149,10 +151,11 @@ Hold a steep-edge HS duty in DCM and sweep LS on-time up from zero. `I_out`
 The body-diode side is a broad plateau — turning LS off early just hands conduction
 back to the diode, a small `V_f` loss, no cliff. The informative feature is the sharp
 reverse-current edge just past the peak. The offset between the peak and the firmware's
-predicted point `rectCtrlRatio(M)·pwmCtrl` is `rect_offset`.
+predicted point `rectCtrlRatio(M)·pwmCtrl` is the hardware offset.
 
-`etc/measure_coil.py --ls-sweep --hs N` brackets the peak. `--apply` writes
-`peak − ideal − --apply-margin` (default 12 counts) into `coil.conf::rect_offset`. Use
+`measure-coil ls [hs]` (on-device) or `etc/measure_coil.py --ls-sweep --hs N` brackets the
+peak. `--apply` computes `peak − ideal − --apply-margin` (default 12 counts), converts it to
+time, and writes `coil.conf::rect_offset_ns`. Use
 a steep-edge HS where the peak is genuinely locatable; flat plateaus yield no reliable
 peak. Field values: `fry` +100, `flat` +57 counts (at LEDC 12.5 ns/tick) — different
 boards, different gate-driver / FET combinations, as expected for an `L`- and
@@ -201,7 +204,7 @@ switch — efficiency loss plus an anti-boost effect that can lift `V_in`.
 Early: body diode conducts the remainder. Pure `V_f · I` loss, bounded, no instability.
 
 The asymmetry is why the controller always biases toward the safe (early) side and why
-`rect_offset` is applied with a margin.
+`rect_offset_ns` is applied with a margin.
 
 # Boost converter
 

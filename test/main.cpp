@@ -208,6 +208,10 @@ void test_mcpwm_d1_hs_high();
 void test_mcpwm_glitch_free_duty_step();
 void test_mcpwm_ost_brake_latches();
 void test_mcpwm_interleaved_phase();
+void test_mcpwm_boot_safe_low();
+void test_mcpwm_enlogic_reenable();
+void test_mcpwm_interleaved_phase_deadtime();
+void test_rect_offset_ns_conversion();
 void test_mcpwm_endpoint_duty_scope();
 
 // tracker.h — perturb&observe MPPT
@@ -430,6 +434,10 @@ void setup() {
     RUN_TEST(test_mcpwm_glitch_free_duty_step);
     RUN_TEST(test_mcpwm_ost_brake_latches);
     RUN_TEST(test_mcpwm_interleaved_phase);
+    RUN_TEST(test_mcpwm_interleaved_phase_deadtime);
+    RUN_TEST(test_rect_offset_ns_conversion);
+    RUN_TEST(test_mcpwm_boot_safe_low);
+    RUN_TEST(test_mcpwm_enlogic_reenable);
     RUN_TEST(test_mcpwm_endpoint_duty_scope);
 #endif // WITH_MCPWM
 

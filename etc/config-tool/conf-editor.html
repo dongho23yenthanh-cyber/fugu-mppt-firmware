@@ -313,7 +313,7 @@ const META = {
 
   // coil.conf
   L0:{unit:"H",desc:"Coil inductance (for ripple-current computation)",type:"float"},
-  rect_offset:{unit:"count",desc:"DCM low-side turn-off offset (dead-time/gate-delay comp; >0 = LS off later). See measure_coil.py --ls-sweep",type:"int"},
+  rect_offset_ns:{unit:"ns",desc:"DCM low-side turn-off delay (gate-drive/MOSFET dead-time comp; >0 = LS off later). Stored as time so it survives a PWM-resolution change. See measure-coil ls --apply",type:"float"},
 
   // converter.conf
   topo:{unit:"",desc:"Converter topology: buck or boost",type:"enum"},
@@ -405,7 +405,7 @@ const FILE_KEYS = {
     "ignore_calibration_constraints","notch_adaptive","notch_freq","notch_q","ntc_ch","power_conversion_eff"],
   "limits.conf":["iin_max","iout_max","iout_short","p_max","reverse_current_paranoia",
     "temp_derate","temp_max","vin_max","vin_min","vout_max"],
-  "coil.conf":["L0","rect_offset"],
+  "coil.conf":["L0","rect_offset_ns"],
   "converter.conf":["forced_pwm","topo"],
   "charger.conf":["bat_c","cv_eoc","cv_float","ibat_max","recharge_dod","tail_c_rate","vout_max",
     "vout_max_fallback"],
@@ -432,8 +432,8 @@ const TYPE_KEYS = {
     "led_simple","notch_adaptive","ntc_ch","panel_en","panel_sd","pwm_en","pwm_fault_active_high","pwm_fault_pin",
     "pwm_hi","pwm_in","pwm_li","pwm_sd","reverse_current_paranoia","skip_assert"]),
   long: new Set(["adc_fake_freq","ble_passkey","esp32adc1_avg","esp32adc1_sr","i2c_freq",
-    "i2c_scl","ina22x_conv_time_us","led_WS2812","led_WS2812B","pwm_freq","rect_offset","sprofiler_hz","switch_delay"]),
-  float: new Set(["L0","bat_c","boot_refresh_ns","cv_eoc","cv_float","ibat_max","iin_max",
+    "i2c_scl","ina22x_conv_time_us","led_WS2812","led_WS2812B","pwm_freq","sprofiler_hz","switch_delay"]),
+  float: new Set(["L0","bat_c","boot_refresh_ns","cv_eoc","cv_float","ibat_max","iin_max","rect_offset_ns",
     "ina22x_range","ina22x_resistor","iout_max","iout_short","notch_freq","notch_q","p_max","power_conversion_eff",
     "pwm_deadtime_ns","recharge_dod","sweep_speed","tail_c_rate","target_duty_cycle","temp_derate","temp_max",
     "vin_max","vin_min","vout_max","vout_max_fallback"]),
@@ -460,7 +460,7 @@ const DEFAULTS = {
   // limits.conf
   "reverse_current_paranoia":"1","temp_max":"90.0",
   // coil.conf
-  "rect_offset":"0",
+  "rect_offset_ns":"0",
   // converter.conf
   "forced_pwm":"0","topo":"\"buck\"",
   // charger.conf

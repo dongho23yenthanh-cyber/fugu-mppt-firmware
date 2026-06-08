@@ -230,11 +230,15 @@ static void sweepLs(const MeasArgs &a) {
         if (!(pk > 0 && pk < n - 1)) { UART_LOG("  apply skipped: peak at sweep edge; widen sweep"); return; }
         int lim = pwmMax / 8;
         int new_off = constrain((int) lroundf(ls_peak - ideal_ls - 12.0f), -lim, lim);
+        converter.setRectOnOffset(new_off);   // live (counts)
+        // Persist as a time so the calibration survives a driver-resolution change.
+        float ns = rectOffsetNsFromCounts(new_off, converter.getPwmTickRate());
         char buf[16];
-        snprintf(buf, sizeof(buf), "%d", new_off);
-        measWriteConf("rect_offset", buf);
-        converter.setRectOnOffset(new_off);
-        UART_LOG("  applied coil.conf rect_offset=%d (effective now + next boot)", new_off);
+        snprintf(buf, sizeof(buf), "%.0f", ns);
+        ConfFile conf{"/littlefs/conf/coil.conf"};
+        conf.remove("rect_offset");           // drop any legacy count-based key
+        conf.add({{"rect_offset_ns", buf}}, true);
+        UART_LOG("  applied coil.conf rect_offset_ns=%s (%d ct, effective now + next boot)", buf, new_off);
     }
 }
 

@@ -242,7 +242,7 @@ void MpptController::update() {
 
         // constrain the buck step, this will slow down control for lower loop rates:
         // this causes very slow load response time, but works well when battery is connected
-        fp = constrain(fp, -(float) converter.getCtrlOnPwmCnt(), 16.0f);
+        fp = constrain(fp, -(float) converter.getCtrlOnPwmCnt(), 16.0f * (float) converter.pwmCtrlMax / 2000.f);
         converter.pwmPerturbFractional(fp);
 
         if (controlValue < -80 and fp < -0.01 and converter.getCtrlOnPwmCnt() > converter.getCtrlOnPwmMin()) {
@@ -340,7 +340,7 @@ void MpptController::updateCV() {
                 fp = 0;
         }*/
 
-        fp = constrain(fp, -(float) converter.getCtrlOnPwmCnt(), 16.0f);
+        fp = constrain(fp, -(float) converter.getCtrlOnPwmCnt(), 16.0f * (float) converter.pwmCtrlMax / 2000.f);
         converter.pwmPerturbFractional(fp);
 
         rtcount("mppt.update.pwm");

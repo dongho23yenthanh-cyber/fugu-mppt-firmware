@@ -10,7 +10,7 @@ y = pd.read_csv('vin1.csv')['0']
 #y2 = pd.read_csv('vin.csv')['0']
 #y3 = pd.read_csv('iout_50hz_inverter_noise.csv')['0']
 #y3 = pd.read_csv('../vout_filt.csv')['0']
-y3 = pd.read_csv('../china-inverter-1kw-load/iout.csv')['0']
+y3 = pd.read_csv('../data/china-inverter-1kw-load/iout.csv')['0']
 
 y3 = pd.read_csv('../data/pv8A-inv500W/iout.csv')['0']
 y3 = pd.read_csv('../data/var-inverter/iout_452hz.csv')['0']

@@ -167,8 +167,10 @@ void MpptController::update() {
             // so it actually controls speed near P/I/V limits, not just far from them
             controlValue = std::min(limitingControlValue * (sweepSpeed * 0.25f / 5.0f), sweepSpeed);
 
-            // capture MPP during sweep, this will be our target afterward
-            if (power_smooth > maxPowerPoint.power) {
+            // capture MPP during sweep, this will be our target afterward.
+            // Ignore sub-SweepMinPower samples so a marginal-light sweep can't "peak" at a
+            // near-max-duty phantom (dawn cold-start) and strand the converter there.
+            if (power_smooth > maxPowerPoint.power && power_smooth >= SweepMinPower) {
                 maxPowerPoint.power = power_smooth;
                 maxPowerPoint.dutyCycle = converter.getCtrlOnPwmCnt();
                 maxPowerPoint.voltage = sensors.Vin->med3.get();

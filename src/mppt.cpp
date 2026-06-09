@@ -1,5 +1,6 @@
 #include "mppt.h"
 
+#include "app_state.h"        // g_app.maxLoopLag (peak RT-loop lag for telemetry)
 #include "tele/telemetry.h"   // makeTelePoint / TelePoint (text or binary wire, build-time)
 
 
@@ -69,6 +70,7 @@ void MpptController::update() {
     bool batteryFull = bool(charger.termCond) || ctrlState.mode == MpptControlMode::CV;
     if (!_sweeping && !batteryFull && !inBackoff() && (nowUs - sampler.getTimeLastCalibrationUs()) > (30 * 60000000)) {
         ESP_LOGI("mppt", "periodic sweep & sensor calibration");
+        g_app.maxLoopLag = 0; // restart the lag window so telemetry tracks per-sweep peak, not all-time
         startSweep();
         rtcount("mppt.update.startSweep");
         return;
@@ -167,8 +169,10 @@ void MpptController::update() {
             // so it actually controls speed near P/I/V limits, not just far from them
             controlValue = std::min(limitingControlValue * (sweepSpeed * 0.25f / 5.0f), sweepSpeed);
 
-            // capture MPP during sweep, this will be our target afterward
-            if (power_smooth > maxPowerPoint.power) {
+            // capture MPP during sweep, this will be our target afterward.
+            // Ignore sub-SweepMinPower samples so a marginal-light sweep can't "peak" at a
+            // near-max-duty phantom (dawn cold-start) and strand the converter there.
+            if (power_smooth > maxPowerPoint.power && power_smooth >= SweepMinPower) {
                 maxPowerPoint.power = power_smooth;
                 maxPowerPoint.dutyCycle = converter.getCtrlOnPwmCnt();
                 maxPowerPoint.voltage = sensors.Vin->med3.get();
@@ -242,7 +246,7 @@ void MpptController::update() {
 
         // constrain the buck step, this will slow down control for lower loop rates:
         // this causes very slow load response time, but works well when battery is connected
-        fp = constrain(fp, -(float) converter.getCtrlOnPwmCnt(), 16.0f);
+        fp = constrain(fp, -(float) converter.getCtrlOnPwmCnt(), 16.0f * (float) converter.pwmCtrlMax / 2000.f);
         converter.pwmPerturbFractional(fp);
 
         if (controlValue < -80 and fp < -0.01 and converter.getCtrlOnPwmCnt() > converter.getCtrlOnPwmMin()) {
@@ -315,9 +319,13 @@ void MpptController::updateCV() {
         auto dt_us = nowUs - lastUs;
         auto fp = cv * (1.f / 10000.f) * (float) converter.pwmCtrlMax * (float) dt_us * 1e-6f * 25.f * 2.f;
 
-        if (converter.getCtrlOnPwmCnt() < 160) {
+        // Low-duty gate: slow the loop at very short Ctrl on-times (low/no-load). Thresholds are
+        // on-times in ns so they stay invariant to PWM resolution/frequency (counts = ns*fsw*pwmMax).
+        const auto onCnt = converter.getCtrlOnPwmCnt();
+        const float tickRate = converter.getPwmTickRate();
+        if (onCnt < pwmCountsFromNs(2000.f, tickRate)) {
             fp *= 0.01f;
-        } else if (converter.getCtrlOnPwmCnt() < 200) {
+        } else if (onCnt < pwmCountsFromNs(2500.f, tickRate)) {
             fp *= 0.04f;
         } else {
             fp *= 10.0f;
@@ -340,7 +348,7 @@ void MpptController::updateCV() {
                 fp = 0;
         }*/
 
-        fp = constrain(fp, -(float) converter.getCtrlOnPwmCnt(), 16.0f);
+        fp = constrain(fp, -(float) converter.getCtrlOnPwmCnt(), 16.0f * (float) converter.pwmCtrlMax / 2000.f);
         converter.pwmPerturbFractional(fp);
 
         rtcount("mppt.update.pwm");
@@ -459,6 +467,7 @@ void MpptController::telemetry() {
     if ((_teleNumPoints % 40) == 0) {
         point.addField("mcu_temp", ucTemp.last(), 1); // TODO to frequent
         point.addField("ntc_temp", ntc.last(), 1); // TODO to frequent
+        point.addField("lag", (int) g_app.maxLoopLag); // peak RT-loop lag (µs), resets on rt-stats
     }
 
     point.addField("pwm_duty", converter.getCtrlOnPwmCnt());

@@ -189,6 +189,12 @@ private:
         uint16_t dutyCycle = 0;
     } maxPowerPoint; // MPP during sweep
 
+    // A sweep only commits its captured MPP as the operating target above this power. In marginal
+    // light (e.g. a dawn cold-start sweep) the "peak" is just noise at near-max duty; committing it
+    // strands the converter there until it's driven to the opposite rail. Below it: no target, fall
+    // back to normal MPPT / the next periodic re-sweep. MPPT still harvests sub-threshold light.
+    static constexpr float SweepMinPower = 5.0f; // W
+
     Plot sweepPlot{};
 
     unsigned long lastTimeProtectPassed = 0;
@@ -635,6 +641,18 @@ public:
      */
     void _stopSweep(MpptControlMode controlMode, int limIdx, CVP *limCtrl) {
         _sweeping = false;
+
+        if (maxPowerPoint.power < SweepMinPower) {
+            // Marginal light: no real MPP found. Don't commit a phantom target (would strand the
+            // converter at near-max duty). Drop the target and back off briefly; the converter then
+            // resumes via normal MPPT / the next periodic re-sweep once there's real power.
+            targetDutyCycle = 0;
+            ESP_LOGI("mppt", "Stop sweep: no MPP (best %.2fW < %.1fW), backing off", maxPowerPoint.power,
+                     SweepMinPower);
+            shutdownDcdc("sweep-no-mpp", 30);
+            return;
+        }
+
         targetDutyCycle = maxPowerPoint.dutyCycle;
 
         ESP_LOGI("mppt",

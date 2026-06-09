@@ -13,11 +13,14 @@ Before any `idf.py` invocation, source ESP-IDF into the shell. The repo ships a 
 . ./idf-export.sh          # sources ../../esp/idf5.5/export.sh, sets IDF_TARGET=esp32s3, autodetects $ESPPORT
 idf.py set-target esp32s3  # only needed once per build dir
 idf.py build               # feature flags live in Kconfig now (CONFIG_FUGU_WITH_*, idf.py menuconfig -> "Fugu MPPT firmware"): BLE/NETW default on, NETTOOLS/MCPWM/VCONV/SPROFILER/MEASURE_COIL off (NETTOOLS depends on NETW). The old WITH_* env vars are rejected. Binary telemetry is a tele.conf setting, not a build flag
-idf.py -p $ESPPORT flash monitor
+idf.py -p $ESPPORT app-flash
+./etc/fugu_console.py -p ESPPORT # see cli docs, it supports --stdin and -c
 ```
 
 `idf.py flash`/`app-flash` automatically archive the build ELF for later coredump symbolication (via the project's
 `idf_ext.py`). Name the device with `FUGU_DEVICE=<name> idf.py flash` or `./flash.sh <name>` (see "ELF archive" below).
+
+Default build target is `esp32s3`, for `esp32` target use another build dir: `idf.py -B build-esp32`.
 
 The top-level `CMakeLists.txt` invokes `littlefs_create_partition_image(... FLASH_IN_PROJECT)` so the **board config (
 currently `config/lab/wokwi_mock`) is flashed together with the firmware**. To target a different board, either edit
@@ -31,7 +34,7 @@ configured.
 `etc/ota.py` discovers devices (scope-server broadcast + NAT-router scan, falls back to `fallback_hosts`), serves
 `build/fugu-firmware.bin` on :9000 with a URL built from *this* host's IP as the device sees it (so it works through the
 NAT router), sends `ota <url>` to each, then prints a before/after version table. Run it from the repo root
-(`PYTHONPATH=./ python3 etc/ota.py`, or just `./ota.sh` to build first). Flags:
+(`PYTHONPATH=./ .venv/bin/python3 etc/ota.py`, or just `./ota.sh` to build first). Flags:
 
 - `-m REGEX` / `--match` — target only devices whose hostname matches (e.g. `-m flat` for a single board). **Always
   scope with `-m` when you don't intend to update every discovered device.**
@@ -276,11 +279,14 @@ You can connect to devices:
 
 When connected to the 192.168.1.x network, these devices might be behind a NAT router:
 
-| hostname | IP          | telnet reachable via |
-|----------|-------------|----------------------|
-| fry      | 192.168.4.2 | 192.168.1.231:232    |
-| flat     | 192.168.4.3 | 192.168.1.231:233    |
+| IP          | telnet reachable via |
+|-------------|----------------------|
+| 192.168.4.2 | 192.168.1.231:232    |
+| 192.168.4.3 | 192.168.1.231:233    |
+| 192.168.4.4 | 192.168.1.231:234    |
+| 192.168.4.5 | 192.168.1.231:235    |
 
+IP addresses can change (not static), so always confirm the hostname in the telnet banner.
 Check etc/nat.env for up-to-date addresses.
 
 **IMPORTANT: fry & flat are both real power converters connected to solar panels and a battery.
@@ -319,3 +325,10 @@ You can find battery data in InfluxDB with `batmon()` in
 - The devices print every error (or panic) on the console. Any error with the ADC like `E (9378) main: ADC error`
   is critical and you must report it. After a panic the device stores a coredump, which you can retrieve with the
   `coredump` command.
+- When doing bisect to find a bad commit, work on a shadow repo: create a sub-folder '_shadow_XYZ' and copy the git
+  index there and checkout
+
+
+# Python Interpreter
+
+use `.venv/bin/python3`. It already has `numpy` and `pandas`. If anything is missing, install through `pip`.

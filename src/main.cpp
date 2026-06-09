@@ -691,22 +691,23 @@ static void lfWatchdog(unsigned long nowUs, uint32_t dt, uint32_t sps, uint32_t 
 // and brief start transients via the sustained timeout.
 static void lfStuckWatchdog(unsigned long nowUs) {
     static unsigned long stuckSinceUs = 0;
-    constexpr uint16_t FLOOR_MARGIN = 64;                 // counts above pwmCtrlMin still "at floor"
-    constexpr unsigned long TIMEOUT_US = 120ul * 1000000ul;
+    constexpr unsigned long TIMEOUT_US = 150ul * 1000000ul;
 
-    bool atFloor = !converter.disabled()
-                   && converter.getCtrlOnPwmCnt() <= (uint16_t) (converter.getCtrlOnPwmMin() + FLOOR_MARGIN);
+    // "Dead in clear sun": near-zero output despite ample input headroom. Covers all observed
+    // lockups — the CV-floor latch (shared-pack EOC feedback), the Vin-OV/limit-corruption backoff
+    // loop (converter cycling, not steadily at the floor), and stalled sweeps. A reboot reliably
+    // recovers all of them (re-reads conf, reseeds charger pin/cal state). Gated against night
+    // (no headroom), calibration, manual PWM and brief transients (sustained timeout).
     bool headroom = sensors.Vin && sensors.Vout
-                    && sensors.Vin->ewm.avg.get() > sensors.Vout->ewm.avg.get() + 5.0f;
+                    && sensors.Vin->ewm.avg.get() > sensors.Vout->ewm.avg.get() + 8.0f;
     bool noPower = sensors.Iout && fabsf(sensors.Iout->ewm.avg.get()) < 0.3f;
-    bool stuck = atFloor && headroom && noPower
-                 && !mppt.isSweeping() && !adcSampler.isCalibrating() && !g_app.manualPwm;
+    bool stuck = headroom && noPower && !adcSampler.isCalibrating() && !g_app.manualPwm;
 
     if (!stuck) { stuckSinceUs = 0; return; }
     if (!stuckSinceUs) { stuckSinceUs = nowUs; return; }
     if ((nowUs - stuckSinceUs) < TIMEOUT_US) return;
 
-    ESP_LOGE("main", "Stuck at PWM floor %us (D=%u Vin=%.1f Vout=%.1f Iout=%.2f), restarting",
+    ESP_LOGE("main", "No output %us despite headroom (D=%u Vin=%.1f Vout=%.1f Iout=%.2f), restarting",
              (unsigned) ((nowUs - stuckSinceUs) / 1000000ul), converter.getCtrlOnPwmCnt(),
              sensors.Vin->ewm.avg.get(), sensors.Vout->ewm.avg.get(), sensors.Iout->ewm.avg.get());
     vTaskDelay(pdMS_TO_TICKS(200)); // let the log reach MQTT/telnet before the reboot

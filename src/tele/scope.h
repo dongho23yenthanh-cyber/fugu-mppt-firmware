@@ -231,8 +231,16 @@ public:
 
     bool netLoop() {
         notification.subscribe();
+        // Defensive: out-of-range buffer state would index outside buf[]/bufPos[] into the adjacent
+        // .bss (the global mppt object). Reset rather than scribble.
+        if (bufSel >= BufNum || bufPos[0] > BufSize || bufPos[1] > BufSize) {
+            bufSel = 0; bufPos[0] = bufPos[1] = 0; return false;
+        }
         if (notification.wait(1)) {
-            auto bufSelSend = (bufSel - 1) % BufNum;
+            // Proper modular decrement: bufSel is uint8_t (promoted to int), so (bufSel - 1) % BufNum
+            // is -1 (not BufNum-1) when bufSel==0 — that indexed buf[-1]/bufPos[-1] into the mppt
+            // .bss object, scribbling scope sample words over charger/bflow/limits (the corruption).
+            uint8_t bufSelSend = (uint8_t) ((bufSel + BufNum - 1) % BufNum);
             auto sent = client.write((uint8_t *) buf[bufSelSend], (size_t) (bufPos[bufSelSend]));
             bufPos[bufSelSend] = 0;
             bytesSent += sent;

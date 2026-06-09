@@ -406,11 +406,33 @@ async def main():
     return all(res.values())
 
 
+def discover_scope_hosts(match=None, attempts=4, timeout=3, min_attempts=2):
+    """mDNS _scope._tcp browse, retried + accumulated. A power-saved/weak/flapping node
+    (e.g. flat, which lives directly on the LAN and is only findable via mDNS) routinely
+    misses a single 1 s window, so give it several wider ones. Stops early once a --match
+    target shows up, or — no match — once results go stable after min_attempts.
+    Returns [(host, 23, name)] (telnet port, matching the rest of ota.py)."""
+    pat = re.compile(match) if match else None
+    seen = {}
+    for i in range(attempts):
+        before = len(seen)
+        for h, _port, name in discover_scope_servers(timeout=timeout):
+            name = name.rstrip('.')                       # mDNS server name → bare hostname
+            if name.endswith('.local'):
+                name = name[:-len('.local')]
+            seen[(h, name)] = (h, 23, name)
+        if pat and any(pat.search(n) for _, _, n in seen.values()):
+            break
+        if not pat and i + 1 >= min_attempts and len(seen) == before and seen:
+            break
+    return list(seen.values())
+
+
 def cli():
     """Parse argv, discover + match hosts, run the OTA. Sets the module globals main() reads."""
     global args, hosts
     args = argp.parse_args()
-    hosts = [(h, 23, n) for h, _, n in discover_scope_servers()]
+    hosts = discover_scope_hosts(match=args.match)
     hosts += asyncio.run(scan_nat_async(reachable_only=True))
     hosts = hosts or fallback_hosts
     if not hosts:

@@ -40,9 +40,6 @@ struct Tracker {
 
     MPP maxPowerPoint;
 
-    std::array<EWMA_N<80>, 2048> pwmPowerTable{};
-    std::array<unsigned long, 2048> pwmTimeTable{};
-
     float dP = NAN;
 
     bool slowMode = false;
@@ -70,13 +67,6 @@ struct Tracker {
         //_powerBuf.add(slowMode ? avgPower.get() : powerSample);
         _powerBuf.add(powerSample);
         _vinBuf.add(vin);
-
-
-        if (now - pwmTimeTable[dutyCycle] > 1000 * 60) {
-            pwmPowerTable[dutyCycle].reset();
-        }
-        pwmTimeTable[dutyCycle] = now;
-        pwmPowerTable[dutyCycle].add(powerSample);
 
         if ((float) (now - _time) > (1000.f / frequency)) {
             _time = now;

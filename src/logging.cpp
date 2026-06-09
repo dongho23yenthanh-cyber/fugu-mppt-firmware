@@ -52,10 +52,17 @@ static void bootLogCapture(const char *str, int len) {
     if (strnstr(str, ") mqtt:", len)) return;
     portENTER_CRITICAL(&logCbMux);
     if (s_bootLogOpen) {
-        size_t room = sizeof(s_bootLog) - s_bootLogLen;
-        if ((size_t) len > room) { len = (int) room; s_bootLogOpen = false; } // fill remainder, then close
-        memcpy(s_bootLog + s_bootLogLen, str, len);
-        s_bootLogLen += len;
+        // Hard guard: if s_bootLogLen is ever out of range (corrupted by an external wild write),
+        // the room/`s_bootLog + s_bootLogLen` math would scribble a log line at a wild address —
+        // observed clobbering the adjacent global `mppt` .bss object. Bail instead of amplifying.
+        if (s_bootLogLen > sizeof(s_bootLog)) {
+            s_bootLogOpen = false;
+        } else {
+            size_t room = sizeof(s_bootLog) - s_bootLogLen;
+            if ((size_t) len > room) { len = (int) room; s_bootLogOpen = false; } // fill remainder, then close
+            memcpy(s_bootLog + s_bootLogLen, str, len);
+            s_bootLogLen += len;
+        }
     }
     portEXIT_CRITICAL(&logCbMux);
 }

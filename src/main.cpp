@@ -683,6 +683,36 @@ static void lfWatchdog(unsigned long nowUs, uint32_t dt, uint32_t sps, uint32_t 
     stopAndBackoff(4);
 }
 
+// Stuck-at-floor watchdog. flat intermittently backs off to the PWM floor in CV and never climbs
+// out despite full input headroom (Vin>>Vout) and ~0 output power — a pre-existing fault (seen on
+// the known-good image; fry on the same pack never hits it; root cause still open). A clean reboot
+// reliably recovers it (a re-sweep does not — the limiting controller re-pins the floor). So reboot
+// if the floor+headroom+no-power condition persists. Gated against night/sweep/calibration/manual
+// and brief start transients via the sustained timeout.
+static void lfStuckWatchdog(unsigned long nowUs) {
+    static unsigned long stuckSinceUs = 0;
+    constexpr uint16_t FLOOR_MARGIN = 64;                 // counts above pwmCtrlMin still "at floor"
+    constexpr unsigned long TIMEOUT_US = 120ul * 1000000ul;
+
+    bool atFloor = !converter.disabled()
+                   && converter.getCtrlOnPwmCnt() <= (uint16_t) (converter.getCtrlOnPwmMin() + FLOOR_MARGIN);
+    bool headroom = sensors.Vin && sensors.Vout
+                    && sensors.Vin->ewm.avg.get() > sensors.Vout->ewm.avg.get() + 5.0f;
+    bool noPower = sensors.Iout && fabsf(sensors.Iout->ewm.avg.get()) < 0.3f;
+    bool stuck = atFloor && headroom && noPower
+                 && !mppt.isSweeping() && !adcSampler.isCalibrating() && !g_app.manualPwm;
+
+    if (!stuck) { stuckSinceUs = 0; return; }
+    if (!stuckSinceUs) { stuckSinceUs = nowUs; return; }
+    if ((nowUs - stuckSinceUs) < TIMEOUT_US) return;
+
+    ESP_LOGE("main", "Stuck at PWM floor %us (D=%u Vin=%.1f Vout=%.1f Iout=%.2f), restarting",
+             (unsigned) ((nowUs - stuckSinceUs) / 1000000ul), converter.getCtrlOnPwmCnt(),
+             sensors.Vin->ewm.avg.get(), sensors.Vout->ewm.avg.get(), sensors.Iout->ewm.avg.get());
+    vTaskDelay(pdMS_TO_TICKS(200)); // let the log reach MQTT/telnet before the reboot
+    esp_restart();
+}
+
 // Low-frequency control reads (RT-adjacent, not in the ADC fast path): NTC + chip temp,
 // charger termination state, and the thermal-cap WiFi cutoff.
 static void lfControl() {
@@ -776,6 +806,7 @@ void loopLF(const unsigned long &nowUs) {
     uint32_t sps = (dt > 20000) ? (uint64_t) (nSamples - lastNSamples) * 1000000llu / dt : 0;
 
     lfWatchdog(nowUs, dt, sps, nSamples);
+    lfStuckWatchdog(nowUs);
     lfControl();
     lfMarkOtaValid();
 #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH

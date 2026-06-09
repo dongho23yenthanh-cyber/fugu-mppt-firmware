@@ -691,20 +691,33 @@ static void lfWatchdog(unsigned long nowUs, uint32_t dt, uint32_t sps, uint32_t 
 // and brief start transients via the sustained timeout.
 static void lfStuckWatchdog(unsigned long nowUs) {
     static unsigned long stuckSinceUs = 0;
-    constexpr unsigned long TIMEOUT_US = 150ul * 1000000ul;
+    static bool triedRelease = false;
+    constexpr unsigned long RELEASE_US = 30ul * 1000000ul;   // try in-place latch release first
+    constexpr unsigned long TIMEOUT_US = 150ul * 1000000ul;  // then reboot (e.g. limit corruption)
 
     // "Dead in clear sun": near-zero output despite ample input headroom. Covers all observed
     // lockups — the CV-floor latch (shared-pack EOC feedback), the Vin-OV/limit-corruption backoff
-    // loop (converter cycling, not steadily at the floor), and stalled sweeps. A reboot reliably
-    // recovers all of them (re-reads conf, reseeds charger pin/cal state). Gated against night
-    // (no headroom), calibration, manual PWM and brief transients (sustained timeout).
+    // loop (converter cycling, not steadily at the floor), and stalled sweeps. The authority gate
+    // should now prevent the CV-floor latch; this stays a backstop. Gated against night (no
+    // headroom), calibration, manual PWM and brief transients (sustained timeout).
     bool headroom = sensors.Vin && sensors.Vout
                     && sensors.Vin->ewm.avg.get() > sensors.Vout->ewm.avg.get() + 8.0f;
     bool noPower = sensors.Iout && fabsf(sensors.Iout->ewm.avg.get()) < 0.3f;
     bool stuck = headroom && noPower && !adcSampler.isCalibrating() && !g_app.manualPwm;
 
-    if (!stuck) { stuckSinceUs = 0; return; }
+    if (!stuck) { stuckSinceUs = 0; triedRelease = false; return; }
     if (!stuckSinceUs) { stuckSinceUs = nowUs; return; }
+
+    // Stage 1: in-place CV-floor latch release (no reboot). If it cleared a latch, let MPPT climb.
+    if (!triedRelease && (nowUs - stuckSinceUs) >= RELEASE_US) {
+        triedRelease = true;
+        if (mppt.releaseCvFloorLatch("stuck watchdog")) {
+            ESP_LOGW("main", "stuck watchdog: released CV-floor latch in place, retrying");
+            return;
+        }
+    }
+
+    // Stage 2: release didn't help (or nothing to release) → reboot (clears limit corruption etc).
     if ((nowUs - stuckSinceUs) < TIMEOUT_US) return;
 
     ESP_LOGE("main", "No output %us despite headroom (D=%u Vin=%.1f Vout=%.1f Iout=%.2f), restarting",
@@ -722,8 +735,20 @@ static void lfControl() {
 #endif
     mppt.ntc.read();
     mppt.ucTemp.read();
-    if (sensors.Vout)
-        mppt.charger.update(sensors.Vout->ewm.avg.get(), sensors.Iout->ewm.avg.get());
+    if (sensors.Vout && sensors.Iout) {
+        const float vout = sensors.Vout->ewm.avg.get();
+        const float iout = sensors.Iout->ewm.avg.get();
+        // EOC vpack_pin feedback must only run when this converter actually drives Vout. On a shared
+        // bus held up by another charger, a floored converter has no authority and would otherwise
+        // latch vpack_pin down (the stuck-at-floor lockup). Require real duty + output current.
+        uint16_t pwmMargin = mppt.converter.pwmCtrlMax / 256;
+        if (pwmMargin < 8) pwmMargin = 8;
+        const uint16_t minAuthorityPwm = mppt.converter.getCtrlOnPwmMin() + pwmMargin;
+        const bool voutAuthority = !mppt.converter.disabled()
+                                   && mppt.converter.getCtrlOnPwmCnt() > minAuthorityPwm
+                                   && std::isfinite(iout) && iout > 0.5f;
+        mppt.charger.update(vout, iout, voutAuthority);
+    }
     wifiShutdownIfHot(mppt.ucTemp.last());
 }
 

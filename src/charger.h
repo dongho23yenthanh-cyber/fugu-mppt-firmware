@@ -229,7 +229,7 @@ public:
         ioutLim = NAN;
     }
 
-    void _updatePackVoltagePinning(float vbat = INFINITY) {
+    void _updatePackVoltagePinning(bool voutAuthority = true, float vbat = INFINITY) {
         // Pack-voltage-pinning regimes (first match wins):
         //   1) EOC feedback — cells above v_eoc: closed loop on vcell_high → v_eoc.
         //      Doubles as the over-target corrector during terminated float; pulls
@@ -253,6 +253,11 @@ public:
         bool nowTerm = bool(termCond);
         auto nowUs = wallClockUs();
 
+        // No authority over the (shared) bus — floored / ~0 output: don't ratchet vpack_pin down or
+        // hold a float setpoint (we have no plant response). Release the pin upward so this converter
+        // keeps a real target and can climb; the controlling converter still regulates the bus.
+        if (!voutAuthority && batDataOk) { releaseVoutPinning("no Vout authority"); return; }
+
         if (nowTerm != _wasTerminated) {
             float from = std::isfinite(vpack_pin) ? vpack_pin : params.Vbat_fallback;
             float to = nowTerm ? params.Vbat_fallback : params.Vbat_max;
@@ -263,7 +268,7 @@ public:
             _wasTerminated = nowTerm;
         }
 
-        bool eocFeedback = batDataOk && batSt.vcell_high >= v_eoc && !(balancingMode && nowTerm);
+        bool eocFeedback = voutAuthority && batDataOk && batSt.vcell_high >= v_eoc && !(balancingMode && nowTerm);
 
         if (eocFeedback) {
             // Integrate the cell-overvoltage error into vpack_pin itself; drives
@@ -352,10 +357,30 @@ public:
             });
     }
 
-    void update(float vout, float iout) {
+    void update(float vout, float iout, bool voutAuthority = true) {
         batSt.update(vout, iout);
         _updateTermination();
-        _updatePackVoltagePinning();
+        _updatePackVoltagePinning(voutAuthority);
+    }
+
+    // Release the EOC vpack_pin latch upward (Vbat_fallback, else Vbat_max) and clear the filter/glide
+    // state. Used when this converter has no authority over a (shared) bus so it stops targeting a
+    // ratcheted-down Vout, and as the in-place recovery for a CV-floor lockup. Returns true if moved.
+    bool releaseVoutPinning(const char *why = nullptr) {
+        float target = (std::isfinite(params.Vbat_fallback) && params.Vbat_fallback >= 0.f)
+                       ? params.Vbat_fallback : params.Vbat_max;
+        bool changed = !std::isfinite(vpack_pin) || fabsf(vpack_pin - target) > 0.01f
+                       || _fallbackGlide.active() || _floatGlide.active();
+        float prev = vpack_pin;
+        vpack_pin = target;
+        ioutLim = NAN;
+        _vPinFilt.reset();
+        _fallbackGlide.reset();
+        _floatGlide.reset();
+        if (changed)
+            ESP_LOGW("charger", "release Vout pinning%s%s%s: %.3f -> %.3f",
+                     why ? " [" : "", why ? why : "", why ? "]" : "", prev, target);
+        return changed;
     }
 
     [[nodiscard]] float Vout_max() const {

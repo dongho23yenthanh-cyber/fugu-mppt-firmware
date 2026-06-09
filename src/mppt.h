@@ -300,6 +300,20 @@ public:
     // intent isn't silently absorbed by a stale trip timer.
     void clearBackoff() { _backoffUntilUs = 0; }
 
+    // Break a CV-floor lockup in place (no reboot): release the charger's Vout pinning and reset the
+    // Vout controller + limit/target state so normal MPPT can climb again. Returns true if the
+    // charger pin actually moved (i.e. there was a latch to clear).
+    bool releaseCvFloorLatch(const char *why) {
+        bool changed = charger.releaseVoutPinning(why);
+        VoutController.reset();
+        ctrlState._limiting = false;
+        ctrlState.limIdx = 15;
+        if (ctrlState.mode == MpptControlMode::CV) ctrlState.mode = MpptControlMode::None;
+        targetDutyCycle = 0;
+        clearBackoff();
+        return changed;
+    }
+
     [[nodiscard]] bool inBackoff() const { return wallClockUs() < _backoffUntilUs; }
 
     [[nodiscard]] float boardPowerSupplyVoltage() const {

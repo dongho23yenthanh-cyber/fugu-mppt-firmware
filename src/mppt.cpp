@@ -1,5 +1,6 @@
 #include "mppt.h"
 
+#include "app_state.h"        // g_app.maxLoopLag (peak RT-loop lag for telemetry)
 #include "tele/telemetry.h"   // makeTelePoint / TelePoint (text or binary wire, build-time)
 
 
@@ -69,6 +70,7 @@ void MpptController::update() {
     bool batteryFull = bool(charger.termCond) || ctrlState.mode == MpptControlMode::CV;
     if (!_sweeping && !batteryFull && !inBackoff() && (nowUs - sampler.getTimeLastCalibrationUs()) > (30 * 60000000)) {
         ESP_LOGI("mppt", "periodic sweep & sensor calibration");
+        g_app.maxLoopLag = 0; // restart the lag window so telemetry tracks per-sweep peak, not all-time
         startSweep();
         rtcount("mppt.update.startSweep");
         return;
@@ -465,6 +467,7 @@ void MpptController::telemetry() {
     if ((_teleNumPoints % 40) == 0) {
         point.addField("mcu_temp", ucTemp.last(), 1); // TODO to frequent
         point.addField("ntc_temp", ntc.last(), 1); // TODO to frequent
+        point.addField("lag", (int) g_app.maxLoopLag); // peak RT-loop lag (µs), resets on rt-stats
     }
 
     point.addField("pwm_duty", converter.getCtrlOnPwmCnt());

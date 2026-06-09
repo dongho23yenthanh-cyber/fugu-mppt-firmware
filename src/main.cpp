@@ -703,7 +703,11 @@ static void lfStuckWatchdog(unsigned long nowUs) {
     bool headroom = sensors.Vin && sensors.Vout
                     && sensors.Vin->ewm.avg.get() > sensors.Vout->ewm.avg.get() + 8.0f;
     bool noPower = sensors.Iout && fabsf(sensors.Iout->ewm.avg.get()) < 0.3f;
-    bool stuck = headroom && noPower && !adcSampler.isCalibrating() && !g_app.manualPwm;
+    // NOTE: do not gate on !adcSampler.isCalibrating() — a corruption/Vin-OV loop repeatedly
+    // re-runs ADC calibration (resetPeripherals), which would keep resetting the stuck-timer and
+    // defeat this watchdog. A legitimate calibration is far shorter than TIMEOUT_US, so the
+    // sustained timer already excludes it.
+    bool stuck = headroom && noPower && !g_app.manualPwm;
 
     if (!stuck) { stuckSinceUs = 0; triedRelease = false; return; }
     if (!stuckSinceUs) { stuckSinceUs = nowUs; return; }

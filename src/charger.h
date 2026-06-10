@@ -368,12 +368,14 @@ public:
         _updatePackVoltagePinning(voutAuthority);
     }
 
-    // Release the EOC vpack_pin latch upward (Vbat_fallback, else Vbat_max) and clear the filter/glide
-    // state. Used when this converter has no authority over a (shared) bus so it stops targeting a
-    // ratcheted-down Vout, and as the in-place recovery for a CV-floor lockup. Returns true if moved.
+    // Release the EOC vpack_pin latch upward to Vbat_max and clear the filter/glide state. Used when
+    // this converter has no authority over a (shared) bus so it stops targeting a ratcheted-down Vout
+    // and can climb back to re-take the bus, and as the in-place recovery for a CV-floor lockup. Cells
+    // are still monitored on these paths, so the EOC feedback / termination re-clamp once it climbs;
+    // releasing to Vbat_fallback (≈ the resting pack voltage on a shared bus) would instead pin it at
+    // the bus voltage and throttle a battery that isn't full. Returns true if moved.
     bool releaseVoutPinning(const char *why = nullptr) {
-        float target = (std::isfinite(params.Vbat_fallback) && params.Vbat_fallback >= 0.f)
-                       ? params.Vbat_fallback : params.Vbat_max;
+        float target = std::isfinite(params.Vbat_max) ? params.Vbat_max : params.Vbat_fallback;
         bool changed = !std::isfinite(vpack_pin) || fabsf(vpack_pin - target) > 0.01f
                        || _fallbackGlide.active() || _floatGlide.active();
         float prev = vpack_pin;

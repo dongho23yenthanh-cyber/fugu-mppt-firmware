@@ -321,3 +321,21 @@ void test_mqtt_empty_payload_is_safe() {
     TEST_ASSERT_EQUAL_FLOAT(0.0f, charger.batSt.coulombCounter.ahSinceFull()); // ibat untouched
 }
 
+// releaseVoutPinning must release the pack-voltage pin UP to Vbat_max (so a converter that lost
+// authority on a shared bus can climb back and re-take it), NOT down to Vbat_fallback — which would
+// pin it at the resting bus voltage and throttle a battery that isn't full.
+void test_release_vout_pinning_goes_to_vbat_max() {
+    BatteryCharger charger;
+    charger.params = makeLfpParams();   // Vbat_max=14.6, Vbat_fallback=13.4
+    loopWallClockUs_ = 1'000'000;
+
+    // No BMS cell data -> the charger pins Vout down to Vbat_fallback.
+    charger.update(13.4f, 0.0f, /*voutAuthority*/ true);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, charger.params.Vbat_fallback, charger.Vout_max());
+
+    // Release must move the target UP to Vbat_max, not leave it at the fallback.
+    bool changed = charger.releaseVoutPinning("test");
+    TEST_ASSERT_TRUE(changed);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, charger.params.Vbat_max, charger.Vout_max());
+}
+

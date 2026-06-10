@@ -261,6 +261,8 @@ void test_telnet_command_is_deferred_then_runs_on_drain();
 void test_telnet_blank_command_is_dropped();
 // test_charger.cpp — empty MQTT payload survives all three BMS callbacks (#7 attack path)
 void test_mqtt_empty_payload_is_safe();
+// test_charger.cpp — releaseVoutPinning releases the Vout pin UP to Vbat_max, not down to fallback
+void test_release_vout_pinning_goes_to_vbat_max();
 
 void setup() {
 #ifdef TEST_ADC_HW
@@ -400,6 +402,7 @@ void setup() {
     RUN_TEST(test_strntof_parses_nul_terminated);
     RUN_TEST(test_strntof_parses_unterminated_slice);
     RUN_TEST(test_mqtt_empty_payload_is_safe);
+    RUN_TEST(test_release_vout_pinning_goes_to_vbat_max);
     RUN_TEST(test_nvs_readstring_roundtrips_long_value);
     RUN_TEST(test_nvs_readstring_short_and_missing);
     RUN_TEST(test_telnet_command_is_deferred_then_runs_on_drain);

@@ -49,3 +49,8 @@ private:
 };
 
 inline TelnetService telnetService;
+
+// Enqueue a telnet command line for deferred execution on loopNetwork_task (process_queued_tasks),
+// rather than running handleCommand inline inside the ESPTelnet input callback (UAF on teardown
+// commands). Implemented in telnet_service.cpp; exposed for the defer-not-inline regression test.
+void telnetDispatchCommandAsync(const char *line);

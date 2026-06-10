@@ -11,6 +11,22 @@
 
 extern unsigned long lastTimeOutUs;
 
+void telnetDispatchCommandAsync(const char *line) {
+    // Defer to loopNetwork_task (where process_queued_tasks runs). Running handleCommand inline
+    // inside the ESPTelnet input callback lets a teardown command (wifi off, svc off telnet,
+    // restart) stop/destroy this same ESPTelnet from within its own callback -> UAF. Mirror the
+    // MQTT cmd_input path. The OK/ERR confirmation rides the log mux (telnet is a sink via
+    // set_logging_telnet), so the deferred task no longer touches the telnet object.
+    std::string cmd(line);
+    enqueue_task([cmd]() {
+        String inp(cmd.c_str());
+        inp.trim();
+        if (!inp.length()) return;
+        bool ok = handleCommand(inp);
+        UART_LOG("%s: %s", ok ? "OK" : "ERR", inp.c_str());
+    });
+}
+
 void TelnetService::closeConnection() {
     if (telnet.isConnected()) {
         telnet.flush();
@@ -56,10 +72,7 @@ void TelnetService::setupTelnet() {
             t.flush();
             t.disconnectClient();
         } else {
-            // Telnet feeds whole lines straight to handleCommand (not via loopConsole), so emit the
-            // OK/ERR confirmation here the way loopConsole does for UART/USB/BLE.
-            bool ok = handleCommand(str);
-            t.println(String(ok ? "OK: " : "ERR: ") + str);
+            telnetDispatchCommandAsync(str.c_str());
         }
     });
 

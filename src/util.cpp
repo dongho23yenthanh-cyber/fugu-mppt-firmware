@@ -1,5 +1,6 @@
 #include "util.h"
 #include <Wire.h>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -52,10 +53,14 @@ void scan_i2c() {
 }
 
 float strntof(const char *dat, int len) {
+    if (len <= 0)                          // empty payload (e.g. retained-clear): dat[-1] would be OOB
+        return NAN;
     if (dat[len - 1] == '\0')
         return strtof(dat, nullptr);
     // add NUL termination
     char *str = strndup(dat, len);
+    if (!str)
+        return NAN;
     float f = strtof(str, nullptr);
     free(str);
     return f;

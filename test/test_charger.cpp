@@ -298,3 +298,26 @@ void test_mqtt_ibat_lim_rejects_nan() {
     TEST_ASSERT_EQUAL_FLOAT(initial, charger.params.Ibat_lim);
 }
 
+// A zero-length payload (e.g. a retained-message clear) used to read dat[-1] inside strntof (OOB).
+// All three BMS callbacks must now survive it and leave state untouched.
+void test_mqtt_empty_payload_is_safe() {
+    BatteryCharger charger;
+    charger.params = makeLfpParams();
+    const float limInit = charger.params.Ibat_lim;
+
+    ConfFile mqttConf{{
+        {"cell_voltages_max_topic", "test/vcell"},
+        {"ibat_topic", "test/ibat"},
+        {"ibat_lim_topic", "test/ibatlim"},
+    }};
+    charger.beginMqtt(mqttConf);
+
+    MQTT._invokeForTest("test/vcell", "", 0);
+    MQTT._invokeForTest("test/ibat", "", 0);
+    MQTT._invokeForTest("test/ibatlim", "", 0);
+
+    TEST_ASSERT_FALSE(charger.batSt.haveValidCellVoltage());        // NAN vcell not treated as valid
+    TEST_ASSERT_EQUAL_FLOAT(limInit, charger.params.Ibat_lim);      // empty ignored, limit unchanged
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, charger.batSt.coulombCounter.ahSinceFull()); // ibat untouched
+}
+

@@ -32,14 +32,20 @@ public:
     }
 
     std::string readString(const std::string &key, const std::string &defaultValue) {
-        auto constexpr maxLen = 64;
-        char buf[64];
-        size_t len = maxLen;
-        auto err = nvs_get_str(my_handle, key.c_str(), buf, &len);
+        // Query the stored length first, then size exactly. A fixed buffer aborts the device
+        // (ESP_ERR_NVS_INVALID_LENGTH -> ESP_ERROR_CHECK) on any value >= the buffer, which a
+        // user-settable key (e.g. an over-long hostname) would turn into a permanent boot loop.
+        size_t len = 0;
+        auto err = nvs_get_str(my_handle, key.c_str(), nullptr, &len);
         if (err == ESP_ERR_NVS_NOT_FOUND)
             return defaultValue;
         ESP_ERROR_CHECK(err);
-        return buf;
+        if (len <= 1)
+            return {};
+        std::string out(len - 1, '\0'); // len counts the NUL; data()[len-1] is the writable terminator
+        err = nvs_get_str(my_handle, key.c_str(), out.data(), &len);
+        ESP_ERROR_CHECK(err);
+        return out;
     }
 
     void close() {

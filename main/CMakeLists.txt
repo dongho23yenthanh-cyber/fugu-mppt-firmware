@@ -11,6 +11,7 @@ if ($ENV{RUN_TESTS})
             "../test/test_pd_control.cpp"
             "../test/test_buck.cpp"
             "../test/test_conf.cpp"
+            "../test/test_security.cpp"
             "../test/test_pwm.cpp"
             "../test/test_ina226.cpp"
             "../test/test_adc_hw.cpp"

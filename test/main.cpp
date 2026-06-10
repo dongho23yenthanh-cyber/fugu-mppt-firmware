@@ -32,7 +32,24 @@ MpptController mppt{s_adcSampler, s_sensors, s_converter, s_lcd};
 // RT/ADC path (temperature.h, mppt) reaches the scope streamer through this pointer; null = off.
 Scope *scope = nullptr;
 
-bool handleCommand(const String &) { return false; }
+// More main.cpp-owned globals the netw objects reference: g_app (mode flags, via mppt.telemetry())
+// and lastTimeOutUs (telnet onConnect). test_security.cpp pulls telnet_service.cpp into the link,
+// so define them here too (same swap as nvs/mppt above).
+#include "app_state.h"
+AppState g_app{};
+unsigned long lastTimeOutUs = 0;
+
+// Instrumented stub: test_security.cpp asserts the telnet command path DEFERS handleCommand (via
+// enqueue_task) instead of running it inline (the UAF fix). Record calls so the test can observe
+// that the command runs only after process_queued_tasks(), and with the expected (trimmed) text.
+int g_handleCommandCalls = 0;
+String g_lastHandleCommand;
+
+bool handleCommand(const String &s) {
+    ++g_handleCommandCalls;
+    g_lastHandleCommand = s;
+    return false;
+}
 
 // Mirror of src/main.cpp's shim: arduino-esp32 WiFiGeneric.cpp calls esp_netif_create_default_wifi_ap()
 // unconditionally, but esp_wifi only defines it under CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y (we keep it off).
@@ -234,6 +251,17 @@ void test_conf_remove_drops_line_and_keeps_rest();
 void test_conf_remove_strips_inline_comment_too();
 void test_conf_remove_missing_key_returns_false();
 
+// test_security.cpp — strntof OOB (#7), NVS readString boot-loop (#8), telnet defer/UAF (#9)
+void test_strntof_empty_returns_nan_no_oob();
+void test_strntof_parses_nul_terminated();
+void test_strntof_parses_unterminated_slice();
+void test_nvs_readstring_roundtrips_long_value();
+void test_nvs_readstring_short_and_missing();
+void test_telnet_command_is_deferred_then_runs_on_drain();
+void test_telnet_blank_command_is_dropped();
+// test_charger.cpp — empty MQTT payload survives all three BMS callbacks (#7 attack path)
+void test_mqtt_empty_payload_is_safe();
+
 void setup() {
 #ifdef TEST_ADC_HW
     // Safe to flash onto a live converter: force both gate-driver inputs low (fry pwm_hi=21,
@@ -366,6 +394,16 @@ void setup() {
     RUN_TEST(test_conf_remove_drops_line_and_keeps_rest);
     RUN_TEST(test_conf_remove_strips_inline_comment_too);
     RUN_TEST(test_conf_remove_missing_key_returns_false);
+
+    // security/robustness fixes: strntof OOB (#7), NVS readString boot-loop (#8), telnet defer (#9)
+    RUN_TEST(test_strntof_empty_returns_nan_no_oob);
+    RUN_TEST(test_strntof_parses_nul_terminated);
+    RUN_TEST(test_strntof_parses_unterminated_slice);
+    RUN_TEST(test_mqtt_empty_payload_is_safe);
+    RUN_TEST(test_nvs_readstring_roundtrips_long_value);
+    RUN_TEST(test_nvs_readstring_short_and_missing);
+    RUN_TEST(test_telnet_command_is_deferred_then_runs_on_drain);
+    RUN_TEST(test_telnet_blank_command_is_dropped);
 
     RUN_TEST(test_float16);
 

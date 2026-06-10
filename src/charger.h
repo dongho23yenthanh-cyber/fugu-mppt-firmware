@@ -340,7 +340,12 @@ public:
         topic = mqttConf.getString("ibat_topic", "");
         if (!topic.empty())
             MQTT.subscribeTopic(topic, [&](const char *dat, int len) {
-                batSt.updateBatCurrent(strntof(dat, len));
+                float i = strntof(dat, len);
+                if (!std::isfinite(i)) {
+                    LOG_VALUE_IGNORED("charger", "Ibat", len, dat);
+                    return;
+                }
+                batSt.updateBatCurrent(i);
             });
 
         topic = mqttConf.getString("ibat_lim_topic", "");

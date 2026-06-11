@@ -467,10 +467,24 @@ static void cmdOta(cmd *c) {
     auto url = Command(c).getArg(0).getValue();
     if (url.length() == 0)
         CMD_FAIL_RETURN("ota: expected url");
-    stopAndBackoff(10);
-    adcSampler.halted = true; // disable ADC reading
+
+    // Stop power conversion and let the stage de-energize BEFORE downloading. OTA flash
+    // writes briefly stall the RT loop and draw erase-current spikes; at full power that
+    // reset the device mid-transfer (doing `dc 0` by hand first was the reliable workaround).
+    // Latch manual mode (also disables the !manualPwm-gated watchdogs) and ramp the converter
+    // to 0, then wait for it to actually disable so the supply is settled when flashing begins.
+    g_app.manualPwm = true;
+    mppt.setTargetDutyCycle(0); // graceful ramp-down, then converter.disable()
+    for (int i = 0; i < 100 && !converter.disabled(); ++i) delay(100); // <=10s for the ramp
+    delay(500);                 // let the output coil/caps de-energize
+    adcSampler.halted = true;   // disable ADC reading
+
     bool ok = doOta(url.c_str()); // reboots on success and never returns
+
+    // OTA failed — resume normal operation (mirror cmdMppt).
     adcSampler.halted = false;
+    converter.setManualRect(-1);
+    g_app.manualPwm = false;
     if (!ok)
         CMD_FAIL_RETURN("ota: update failed");
 }

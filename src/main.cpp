@@ -689,11 +689,17 @@ static void lfWatchdog(unsigned long nowUs, uint32_t dt, uint32_t sps, uint32_t 
 // reliably recovers it (a re-sweep does not — the limiting controller re-pins the floor). So reboot
 // if the floor+headroom+no-power condition persists. Gated against night/sweep/calibration/manual
 // and brief start transients via the sustained timeout.
-static void lfStuckWatchdog(unsigned long nowUs) {
-    static unsigned long stuckSinceUs = 0;
+// TODO(remove): this whole watchdog is a stopgap for an unresolved CV-floor/limit lockup. Once the
+// root cause is fixed it should go — it has no place rebooting a healthy converter. The 2h timeout
+// keeps it from firing on the normal low-power dawn ramp (Vin>>Vout, Iout<0.3A is legit then).
+// Uses esp_timer_get_time() (monotonic 64-bit µs) — the shared wall clock is 32-bit micros() and
+// wraps every ~71min, too short to time a 2h interval.
+static void lfStuckWatchdog() {
+    static int64_t stuckSinceUs = 0;
     static bool triedRelease = false;
-    constexpr unsigned long RELEASE_US = 30ul * 1000000ul;   // try in-place latch release first
-    constexpr unsigned long TIMEOUT_US = 150ul * 1000000ul;  // then reboot (e.g. limit corruption)
+    constexpr int64_t RELEASE_US = 30ll * 1000000ll;          // try in-place latch release first
+    constexpr int64_t TIMEOUT_US = 2ll * 3600ll * 1000000ll;  // then reboot (e.g. limit corruption)
+    const int64_t nowUs = esp_timer_get_time();
 
     // "Dead in clear sun": near-zero output despite ample input headroom. Covers all observed
     // lockups — the CV-floor latch (shared-pack EOC feedback), the Vin-OV/limit-corruption backoff
@@ -836,7 +842,7 @@ void loopLF(const unsigned long &nowUs) {
     uint32_t sps = (dt > 20000) ? (uint64_t) (nSamples - lastNSamples) * 1000000llu / dt : 0;
 
     lfWatchdog(nowUs, dt, sps, nSamples);
-    lfStuckWatchdog(nowUs);
+    lfStuckWatchdog();
     lfControl();
     lfMarkOtaValid();
 #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH

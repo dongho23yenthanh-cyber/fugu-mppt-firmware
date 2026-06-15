@@ -713,7 +713,7 @@ static void lfStuckWatchdog() {
     // re-runs ADC calibration (resetPeripherals), which would keep resetting the stuck-timer and
     // defeat this watchdog. A legitimate calibration is far shorter than TIMEOUT_US, so the
     // sustained timer already excludes it.
-    bool stuck = headroom && noPower && !g_app.manualPwm;
+    bool stuck = headroom && noPower && !g_app.manualPwm && !bool(mppt.charger.termCond);
 
     if (!stuck) { stuckSinceUs = 0; triedRelease = false; return; }
     if (!stuckSinceUs) { stuckSinceUs = nowUs; return; }

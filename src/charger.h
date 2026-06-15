@@ -16,6 +16,9 @@ struct BatChargerParams {
 
     float cv_min = NAN; // "float" where the termination line starts @Ibat=0 (LFP: 3.37V, LFP_longevity: 3.325V)
     float cv_eoc = NAN; // termination line ending (LFP_longevity: 3.5V @ Ibat = tail_c_rate * Cbat)
+    float cv_ceiling = NAN; // [V] hard per-cell ceiling: latch termination if the highest cell reaches this,
+    // regardless of charge current. Backstops cv_eoc on imbalanced packs (one cell runs away while current
+    // is still high). Stay well below the BMS over-voltage cut-off. Default cv_eoc + 0.05.
     float tail_c_rate = 0.05f; // [1/h] ratio of EOC tail current to capacity.
     // ^ LFP: 0.05. NCR (Sanyo NCR18650GA, 67mA on 3500mAh): ~0.02. EVE INR18650: 0.033. Higher = safer (terminates later).
     float recharge_dod = 0.20f; // DoD-since-EoC to release termination. LFP  ~0.20. See doc/Termination.md.
@@ -25,11 +28,13 @@ struct BatChargerParams {
         cv_eoc = chargerConf.getFloat("cv_eoc", 3.5f);
         cv_min = chargerConf.getFloat("cv_float", 3.325);
         assert_throw(cv_eoc >= cv_min, "");
+        cv_ceiling = chargerConf.getFloat("cv_ceiling", cv_eoc + 0.05f);
+        assert_throw(cv_ceiling >= cv_eoc, "cv_ceiling must be >= cv_eoc");
         auto n_cells = (uint8_t) floorf(Vbat_max / cv_eoc);
         float vout_fallback = n_cells * cv_min;
         Vbat_fallback = chargerConf.getFloat("vout_max_fallback", vout_fallback);
-        ESP_LOGI("charger", "N_cells=%u (Vbat_max=%.2f / cv_eoc=%.3f), Vbat_fallback=%.3fV",
-                 (unsigned) n_cells, Vbat_max, cv_eoc, Vbat_fallback);
+        ESP_LOGI("charger", "N_cells=%u (Vbat_max=%.2f / cv_eoc=%.3f), Vbat_fallback=%.3fV cv_ceiling=%.3fV",
+                 (unsigned) n_cells, Vbat_max, cv_eoc, Vbat_fallback, cv_ceiling);
 
         Ibat_lim = chargerConf.getFloat("ibat_max", 20.f, true); // note: iout = ibat + iload
         Cbat = chargerConf.getFloat("bat_c", NAN, true); // larger->"safer" value, doesn't overcharge small bats
@@ -96,11 +101,13 @@ class Li_ChgTerminationCondition {
      */
 
     static constexpr uint8_t VFLOOR_STREAK_REQ = 4; // consecutive sub-threshold BMS frames to release on voltage
+    static constexpr uint8_t VCEIL_STREAK_REQ = 2; // consecutive over-ceiling frames to latch (ignore 1-frame I·R spikes)
 
     const BatChargerParams &p;
     bool terminated = false;
     float _v_term;
     uint8_t _vfloorStreak = 0; // sustained sub-threshold counter (transient I·R sag → 1-frame dips, ignore)
+    uint8_t _ceilStreak = 0; // sustained over-ceiling counter (transient charge I·R spike → 1-frame, ignore)
 
 public:
     [[nodiscard]] float v_term() const { return _v_term; }
@@ -117,6 +124,7 @@ public:
         terminated = false;
         _v_term = p.cv_min;
         _vfloorStreak = 0;
+        _ceilStreak = 0;
     }
 
     bool update(float vcell_high, float ibat, float ahSinceFull) {
@@ -127,9 +135,27 @@ public:
         float vo = ibat * r;
         _v_term = fminf(p.cv_min + fmaxf(0.f, vo), p.cv_eoc); // don't go beyond cv_eoc to avoid BMS cut-off
         float iBatFloor = -p.tail_c_rate * p.Cbat * 0.02f;
-        if (!terminated and ibat > iBatFloor and vcell_high > p.cv_min + vo) {
+
+        // Hard per-cell ceiling backstop. The normal trigger below compares against the *uncapped* line
+        // cv_min + ibat·r, which exceeds cv_eoc whenever ibat > tail_c_rate·Cbat (the tail current). While
+        // that much current flows the strongest cell can be driven well past cv_eoc before the line drops to
+        // meet it — on an imbalanced pack one cell runs toward the BMS over-voltage cut-off. This latches
+        // termination once the highest cell holds at/above cv_ceiling, current-independent; a short streak
+        // rejects a one-frame charge-current I·R spike.
+        bool ceilingLatch = false;
+        if (!terminated and std::isfinite(p.cv_ceiling) and vcell_high >= p.cv_ceiling) {
+            if (++_ceilStreak >= VCEIL_STREAK_REQ) ceilingLatch = true;
+        } else {
+            _ceilStreak = 0;
+        }
+
+        if (!terminated and (ceilingLatch or (ibat > iBatFloor and vcell_high > p.cv_min + vo))) {
             terminated = true;
             _vfloorStreak = 0;
+            _ceilStreak = 0;
+            if (ceilingLatch)
+                ESP_LOGW("charger", "Termination latched on cell ceiling: vcHigh(%.3f) >= cv_ceiling(%.3f) @ iBat=%.2f",
+                         vcell_high, p.cv_ceiling, ibat);
         } else if (terminated and shouldRelease(vcell_high, ahSinceFull)) {
             terminated = false;
         }

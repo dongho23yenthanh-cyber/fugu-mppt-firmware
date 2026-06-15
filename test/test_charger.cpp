@@ -344,10 +344,14 @@ void test_release_vout_pinning_goes_to_vbat_max() {
 // must keep pulling vpack_pin below the nominal float floor (Vbat_fallback) by up to
 // params.vout_offset_max, so a full pack stops being trickle-charged despite the Vout offset.
 static void driveEocFeedback(BatteryCharger &charger, float vcellHigh, int frames) {
+    // termCond.v_term() is cv_min only after _updateTermination runs; reset() seeds it now so v_eoc
+    // isn't NaN-> cv_eoc before the ibat smoothing warms up.
+    charger.termCond.reset();
     for (int i = 0; i < frames; ++i) {
         loopWallClockUs_ += 1'000'000;        // a fresh BMS frame each iteration (advances vcell_high_t)
         charger.batSt.setVcellHigh(vcellHigh);
-        charger.update(charger.params.Vbat_fallback, 0.0f, /*voutAuthority*/ true);
+        charger.batSt.updateBatCurrent(0.1f); // small +ibat: warms smoothing, latches termination (v_term~cv_min)
+        charger.update(charger.params.Vbat_fallback, 0.1f, /*voutAuthority*/ true);
     }
 }
 
@@ -374,5 +378,17 @@ void test_eoc_floor_zero_offset_stops_at_fallback() {
     driveEocFeedback(charger, charger.params.cv_min + 0.10f, 200);
 
     TEST_ASSERT_FLOAT_WITHIN(0.05f, charger.params.Vbat_fallback, charger.Vout_max());
+}
+
+// The float floor tracks vout_offset_max: a 0.3 V budget floors 0.3 V below Vbat_fallback.
+void test_eoc_floor_scales_with_offset() {
+    BatteryCharger charger;
+    charger.params = makeLfpParams();
+    charger.params.vout_offset_max = 0.3f;
+    loopWallClockUs_ = 1'000'000;
+
+    driveEocFeedback(charger, charger.params.cv_min + 0.10f, 200);
+
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, charger.params.Vbat_fallback - 0.3f, charger.Vout_max());
 }
 

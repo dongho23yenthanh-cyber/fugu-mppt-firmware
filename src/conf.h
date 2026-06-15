@@ -71,6 +71,9 @@ public:
     explicit ConfFile() : path("") {}
     explicit ConfFile(KVList map) : _map(map), path("<in-mem>") {}
 
+    // Set/overwrite a key in memory (does not persist). Handy for tests building a conf incrementally.
+    void set(const std::string &k, const std::string &v) { set_(k, v); }
+
     explicit ConfFile(const char *path, bool no_warn_if_not_open = false) : path(path) {
         FILE *f = fopen(path, "r");
         if (!f) {

@@ -209,6 +209,8 @@ void test_boost_bootstrap_min_is_zero();
 void test_boost_ratio_clamped_above_unity();
 #if defined(HAVE_MCPWM) && defined(HAVE_LEGACY)
 void test_buck_pwm_driver_runtime_select();
+void test_pwm_driver_defaults_to_ledc();
+void test_pwm_driver_invalid_throws();
 #endif
 
 // pwm — measurement-rig self-test (doc/pwm-test-spec1.md)
@@ -269,6 +271,7 @@ void test_release_vout_pinning_goes_to_vbat_max();
 // test_charger.cpp — EOC float floor drops below Vbat_fallback by vout_offset_max to absorb a Vout offset
 void test_eoc_floor_allows_vout_offset_correction();
 void test_eoc_floor_zero_offset_stops_at_fallback();
+void test_eoc_floor_scales_with_offset();
 
 void setup() {
 #ifdef TEST_ADC_HW
@@ -392,6 +395,8 @@ void setup() {
     RUN_TEST(test_boost_ratio_clamped_above_unity);
 #if defined(HAVE_MCPWM) && defined(HAVE_LEGACY)
     RUN_TEST(test_buck_pwm_driver_runtime_select);
+    RUN_TEST(test_pwm_driver_defaults_to_ledc);
+    RUN_TEST(test_pwm_driver_invalid_throws);
 #endif
 
     // conf.h — ConfFile getters
@@ -414,6 +419,7 @@ void setup() {
     RUN_TEST(test_release_vout_pinning_goes_to_vbat_max);
     RUN_TEST(test_eoc_floor_allows_vout_offset_correction);
     RUN_TEST(test_eoc_floor_zero_offset_stops_at_fallback);
+    RUN_TEST(test_eoc_floor_scales_with_offset);
     RUN_TEST(test_nvs_readstring_roundtrips_long_value);
     RUN_TEST(test_nvs_readstring_short_and_missing);
     RUN_TEST(test_telnet_command_is_deferred_then_runs_on_drain);

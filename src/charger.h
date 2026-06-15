@@ -19,8 +19,9 @@ struct BatChargerParams {
     float cv_ceiling = NAN; // [V] hard per-cell ceiling: latch termination if the highest cell reaches this,
     // regardless of charge current. Backstops cv_eoc on imbalanced packs (one cell runs away while current
     // is still high). Stay well below the BMS over-voltage cut-off. Default cv_eoc + 0.05.
+    uint8_t n_cells = 0; // number of series cells, inferred from Vbat_max / cv_eoc
     float tail_c_rate = 0.05f; // [1/h] ratio of EOC tail current to capacity.
-    // ^ LFP: 0.05. NCR (Sanyo NCR18650GA, 67mA on 3500mAh): ~0.02. EVE INR18650: 0.033. Higher = safer (terminates later).
+    // ^ LFP: 0.05. NCR (Sanyo NCR18650GA, 67mA on 3500mAh): ~0.02. EVE INR18650: 0.033. Higher = safer (terminates earlier).
     float recharge_dod = 0.20f; // DoD-since-EoC to release termination. LFP  ~0.20. See doc/Termination.md.
     float vout_offset_max = 0.6f; // [V] worst-case Vout-sensor error to tolerate during terminated float.
     // The EOC feedback loop drives the highest cell (BMS, accurate) down to its target by lowering vpack_pin;
@@ -32,10 +33,12 @@ struct BatChargerParams {
         Vbat_max = chargerConf.getFloat("vout_max", NAN, true);
         cv_eoc = chargerConf.getFloat("cv_eoc", 3.5f);
         cv_min = chargerConf.getFloat("cv_float", 3.325);
-        assert_throw(cv_eoc >= cv_min, "");
+        assert_throw(cv_eoc >= cv_min, "cv_eoc must be >= cv_min");
         cv_ceiling = chargerConf.getFloat("cv_ceiling", cv_eoc + 0.05f);
         assert_throw(cv_ceiling >= cv_eoc, "cv_ceiling must be >= cv_eoc");
-        auto n_cells = (uint8_t) floorf(Vbat_max / cv_eoc);
+        assert_throw(std::isfinite(Vbat_max) && Vbat_max > 0, "vout_max must be a positive finite voltage");
+        n_cells = (uint8_t) floorf(Vbat_max / cv_eoc);
+        assert_throw(n_cells > 0, "vout_max must be >= cv_eoc (could not determine cell count)");
         float vout_fallback = n_cells * cv_min;
         Vbat_fallback = chargerConf.getFloat("vout_max_fallback", vout_fallback);
         ESP_LOGI("charger", "N_cells=%u (Vbat_max=%.2f / cv_eoc=%.3f), Vbat_fallback=%.3fV cv_ceiling=%.3fV",
@@ -43,6 +46,7 @@ struct BatChargerParams {
 
         Ibat_lim = chargerConf.getFloat("ibat_max", 20.f, true); // note: iout = ibat + iload
         Cbat = chargerConf.getFloat("bat_c", NAN, true); // larger->"safer" value, doesn't overcharge small bats
+        assert_throw(std::isfinite(Cbat) && Cbat > 0.f, "bat_c must be a positive finite capacity");
         tail_c_rate = chargerConf.getFloat("tail_c_rate", 0.05f);
         assert_throw(tail_c_rate > 0.f, "tail_c_rate must be > 0");
         recharge_dod = chargerConf.getFloat("recharge_dod", 0.20f);
@@ -59,7 +63,6 @@ struct BatteryState {
     volatile unsigned long vcell_high_t = 0; // timestamp of highest cell voltage
 
     EWMA<volatile float, float> vout_avg{60}; // time-averaged pack voltage
-    MeanAccumulator iout_mean{}; // out current (this charger); loop-task only, not shared
     CoulombCounter coulombCounter{}; // Ah-since-last-full tracker, used for recharge hysteresis
 
     void setVcellHigh(const float &vcell_high_) {
@@ -84,12 +87,9 @@ struct BatteryState {
     // consumer (loop task): NAN until smoothing is warm
     [[nodiscard]] float ibatSmoothed() const { return _ibatSmoothed.load(std::memory_order_relaxed); }
 
-    void update(float vout, float iout) {
+    void update(float vout, float /*iout*/) {
         vout_avg.add(vout);
-        // note: iout = ibat + iload
-        //if (iout > params.Ibat_lim * 0.005f)
-        if (isfinite(iout))iout_mean.add(iout);
-        else iout_mean.clear();
+        // note: iout = ibat + iload, but only BMS-reported ibat is used for termination
     }
 
 private:
@@ -166,7 +166,7 @@ public:
         } else if (terminated and shouldRelease(vcell_high, ahSinceFull)) {
             terminated = false;
         }
-        ESP_LOGI("charger", "term %u (iBat=%.2f vcHigh=%.3f vcTerm=%.3f vcD=%.3f ahSF=%.2f)",
+        ESP_LOGD("charger", "term %u (iBat=%.2f vcHigh=%.3f vcTerm=%.3f vcD=%.3f ahSF=%.2f)",
                  terminated, ibat, vcell_high, _v_term, _v_term - vcell_high, ahSinceFull);
         return terminated;
     }
@@ -240,16 +240,13 @@ public:
 
 
     void _updateTermination() {
-        constexpr auto MEAN_NUM = 8;
-
-        // cheap gates first; iout_mean paces this (loop-task only). ibat is the
-        // cross-task value but it's a plain lock-free atomic load now.
-        if (batSt.iout_mean.num < MEAN_NUM) return;
+        // Gate on the battery-current snapshot from the BMS/MQTT producer. It is
+        // already smoothed over IBAT_MIN_SAMPLES there; no need to pace on the
+        // converter's own iout (which is ibat + iload and cannot be used alone).
         if (!batSt.haveValidCellVoltage()) return;
 
         float ibat = batSt.ibatSmoothed();
         if (!std::isfinite(ibat)) return; // smoothing not warm yet
-        (void) batSt.iout_mean.pop(); // unused, still pop to keep the accumulator bounded
 
         bool wasTerm = bool(termCond);
         termCond.update(batSt.vcell_high, ibat, batSt.coulombCounter.ahSinceFull());
@@ -281,16 +278,36 @@ public:
 
         // never go beyond cv_eoc — a "dumb" BMS may cut us off at 3.65V and cause
         // a voltage transient
-        float v_eoc = fmin(params.cv_eoc, termCond.v_term());
+        float v_eoc = fminf(params.cv_eoc, termCond.v_term());
 
         bool batDataOk = batSt.haveValidCellVoltage() and std::isfinite(params.Cbat);
         bool nowTerm = bool(termCond);
         auto nowUs = wallClockUs();
 
-        // No authority over the (shared) bus — floored / ~0 output: don't ratchet vpack_pin down or
-        // hold a float setpoint (we have no plant response). Release the pin upward so this converter
-        // keeps a real target and can climb; the controlling converter still regulates the bus.
-        if (!voutAuthority && batDataOk) { releaseVoutPinning("no Vout authority"); return; }
+        // No authority over the (shared) bus — floored / ~0 output, no plant response.
+        if (!voutAuthority && batDataOk) {
+            if (nowTerm) {
+                // Terminated/full pack: yield LOW. Climbing to Vbat_max here would push current into a
+                // full pack and limit-cycle against the EOC re-clamp (sibling converter already holds the
+                // bus and regulates termination). Pin at the EOC float floor so this converter targets the
+                // resting full-pack voltage and sits at ~0 current; it re-takes the bus once termination
+                // releases (recharge) via the branch below.
+                float floor = params.Vbat_fallback - params.vout_offset_max;
+                if (std::isnan(vpack_pin) || vpack_pin > floor + 0.01f)
+                    ESP_LOGW("charger", "no Vout authority (terminated): yield %.3f -> %.3f", vpack_pin, floor);
+                vpack_pin = floor;
+                ioutLim = NAN;
+                _vPinFilt.reset();
+                _fallbackGlide.reset();
+                _floatGlide.reset();
+                _wasTerminated = nowTerm;
+            } else {
+                // Not full: release the pin upward so this converter keeps a real target and can climb
+                // back to re-take the bus; the controlling converter still regulates it meanwhile.
+                releaseVoutPinning("no Vout authority");
+            }
+            return;
+        }
 
         if (nowTerm != _wasTerminated) {
             float from = std::isfinite(vpack_pin) ? vpack_pin : params.Vbat_fallback;
@@ -314,17 +331,18 @@ public:
             constexpr float OV_FEEDBACK_GAIN = 1.f;
             unsigned long bmsFrameUs = batSt.vcell_high_t;
             bool newBmsFrame = bmsFrameUs != _lastBmsFrameUs;
-            if (newBmsFrame || isnan(vpack_pin)) {
+            if (newBmsFrame || std::isnan(vpack_pin)) {
                 _lastBmsFrameUs = bmsFrameUs;
-                float base = std::isfinite(vpack_pin) ? vpack_pin : fmin(batSt.vout_avg.get(), vbat);
+                float base = std::isfinite(vpack_pin) ? vpack_pin : fminf(batSt.vout_avg.get(), vbat);
                 // Floor below the nominal float voltage by the tolerated Vout offset so this BMS-driven loop
                 // can still pull the highest cell down to v_eoc when our Vout reads high (otherwise the float
                 // floor, in our offset Vout frame, pins a full pack above EOC and trickles current into it).
-                float vPin_raw = fmaxf(base - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN,
+                // The per-cell voltage error must be scaled by the number of cells to become a pack-voltage correction.
+                float vPin_raw = fmaxf(base - (batSt.vcell_high - v_eoc) * params.n_cells * OV_FEEDBACK_GAIN,
                                        params.Vbat_fallback - params.vout_offset_max);
                 _vPinFilt.add(vPin_raw);
                 float vPin = _vPinFilt.get();
-                if (isnan(vpack_pin) or vPin < vpack_pin - 0.01f)
+                if (std::isnan(vpack_pin) or vPin < vpack_pin - 0.01f)
                     ESP_LOGI("charger", "update vpPin:=%.3fV (raw=%.3f cvHigh=%.3f v_term=%.3f vbat_avg=%.3f)",
                              vPin, vPin_raw, batSt.vcell_high, v_eoc, batSt.vout_avg.get());
                 vpack_pin = vPin;
@@ -363,7 +381,7 @@ public:
     void beginMqtt(const ConfFile &mqttConf) {
         auto topic = mqttConf.getString("cell_voltages_max_topic", "");
         if (!topic.empty()) {
-            if (params.Vbat_fallback >= 0)
+            if (params.Vbat_fallback > 0)
                 vpack_pin = params.Vbat_fallback;
             MQTT.subscribeTopic(topic, [&](const char *dat, int len) {
                 batSt.setVcellHigh(strntof(dat, len));
@@ -421,6 +439,7 @@ public:
         _vPinFilt.reset();
         _fallbackGlide.reset();
         _floatGlide.reset();
+        _wasTerminated = false; // force a fresh float glide on re-entry instead of jumping to the stale target
         if (changed)
             ESP_LOGW("charger", "release Vout pinning%s%s%s: %.3f -> %.3f",
                      why ? " [" : "", why ? why : "", why ? "]" : "", prev, target);
@@ -441,7 +460,7 @@ public:
         auto lim = params.Ibat_lim;
 
         // termination mode limit (keep Ibat~0 and supply loads)
-        if (isfinite(ioutLim)) lim = min(lim, ioutLim);
+        if (std::isfinite(ioutLim)) lim = min(lim, ioutLim);
 
         return lim;
     }

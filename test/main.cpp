@@ -272,6 +272,10 @@ void test_release_vout_pinning_goes_to_vbat_max();
 void test_eoc_floor_allows_vout_offset_correction();
 void test_eoc_floor_zero_offset_stops_at_fallback();
 void test_eoc_floor_scales_with_offset();
+void test_terminated_no_authority_yields_low();
+void test_not_terminated_no_authority_releases_high();
+// test_charger.cpp — releaseVoutPinning must reset the terminated-state memory so the float glide restarts
+void test_release_vout_pinning_restarts_float_glide();
 
 void setup() {
 #ifdef TEST_ADC_HW
@@ -420,6 +424,9 @@ void setup() {
     RUN_TEST(test_eoc_floor_allows_vout_offset_correction);
     RUN_TEST(test_eoc_floor_zero_offset_stops_at_fallback);
     RUN_TEST(test_eoc_floor_scales_with_offset);
+    RUN_TEST(test_terminated_no_authority_yields_low);
+    RUN_TEST(test_not_terminated_no_authority_releases_high);
+    RUN_TEST(test_release_vout_pinning_restarts_float_glide);
     RUN_TEST(test_nvs_readstring_roundtrips_long_value);
     RUN_TEST(test_nvs_readstring_short_and_missing);
     RUN_TEST(test_telnet_command_is_deferred_then_runs_on_drain);

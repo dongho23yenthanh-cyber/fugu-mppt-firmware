@@ -28,6 +28,7 @@ static BatChargerParams makeLfpParams() {
     p.Vbat_fallback = 13.4f;
     p.cv_eoc = 3.65f;
     p.cv_min = 3.37f;
+    p.n_cells = 4;             // must match Vbat_max / cv_eoc
     p.Cbat = 280.0f;           // 280 Ah pack
     p.tail_c_rate = 0.05f;
     p.Ibat_lim = 40.0f;
@@ -380,6 +381,38 @@ void test_eoc_floor_zero_offset_stops_at_fallback() {
     TEST_ASSERT_FLOAT_WITHIN(0.05f, charger.params.Vbat_fallback, charger.Vout_max());
 }
 
+// Terminated pack + no Vout authority (sibling holds the shared bus): this converter must yield
+// LOW (pin at the EOC float floor) rather than climbing to Vbat_max and pushing current into a full
+// pack — the limit-cycle that kept a terminated pack trickle-charging.
+void test_terminated_no_authority_yields_low() {
+    BatteryCharger charger;
+    charger.params = makeLfpParams();
+    charger.params.vout_offset_max = 0.6f;
+    loopWallClockUs_ = 1'000'000;
+    driveEocFeedback(charger, charger.params.cv_min + 0.10f, 40); // latch termination (with authority)
+
+    loopWallClockUs_ += 1'000'000;                                // now lose authority while terminated
+    charger.batSt.setVcellHigh(charger.params.cv_min + 0.10f);
+    charger.batSt.updateBatCurrent(0.1f);
+    charger.update(charger.params.Vbat_fallback, 0.1f, /*voutAuthority*/ false);
+
+    const float floor = charger.params.Vbat_fallback - charger.params.vout_offset_max;
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, floor, charger.Vout_max());   // yielded low, NOT Vbat_max
+}
+
+// Not full + no authority: release UP to Vbat_max so the converter can climb back and re-take the
+// bus (unchanged behaviour — only the terminated case yields low).
+void test_not_terminated_no_authority_releases_high() {
+    BatteryCharger charger;
+    charger.params = makeLfpParams();
+    loopWallClockUs_ = 1'000'000;
+    charger.batSt.setVcellHigh(charger.params.cv_min - 0.20f);    // low cell -> not terminated
+    charger.batSt.updateBatCurrent(5.0f);
+    charger.update(charger.params.Vbat_fallback, 5.0f, /*voutAuthority*/ false);
+
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, charger.params.Vbat_max, charger.Vout_max());
+}
+
 // The float floor tracks vout_offset_max: a 0.3 V budget floors 0.3 V below Vbat_fallback.
 void test_eoc_floor_scales_with_offset() {
     BatteryCharger charger;
@@ -390,5 +423,32 @@ void test_eoc_floor_scales_with_offset() {
     driveEocFeedback(charger, charger.params.cv_min + 0.10f, 200);
 
     TEST_ASSERT_FLOAT_WITHIN(0.05f, charger.params.Vbat_fallback - 0.3f, charger.Vout_max());
+}
+
+// releaseVoutPinning must clear the terminated-state memory so that, after the converter
+// climbs back to Vbat_max, the next update starts a fresh float glide rather than jumping
+// immediately to the stale Vbat_fallback target (which would step the setpoint).
+void test_release_vout_pinning_restarts_float_glide() {
+    BatteryCharger charger;
+    charger.params = makeLfpParams();
+    loopWallClockUs_ = 1'000'000;
+
+    // Terminate and settle to the float setpoint. driveEocFeedback holds the cell above v_eoc, so the
+    // EOC loop drives to the floor (Vbat_fallback - vout_offset_max), not Vbat_fallback itself.
+    driveEocFeedback(charger, charger.params.cv_min + 0.10f, 200);
+    TEST_ASSERT_TRUE(bool(charger.termCond));
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, charger.params.Vbat_fallback - charger.params.vout_offset_max, charger.Vout_max());
+
+    // Release the latch; vpack_pin should move UP to Vbat_max.
+    TEST_ASSERT_TRUE(charger.releaseVoutPinning("test"));
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, charger.params.Vbat_max, charger.Vout_max());
+
+    // Drop the cell below v_eoc so EOC feedback does not override the glide.
+    charger.batSt.setVcellHigh(charger.params.cv_min - 0.05f);
+    loopWallClockUs_ += 1'000; // 1 ms: glide is still at its Vbat_max start
+    charger.update(charger.params.Vbat_max, 0.1f, /*voutAuthority*/ true);
+
+    // Without the _wasTerminated reset, Vout_max would immediately snap back to Vbat_fallback.
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, charger.params.Vbat_max, charger.Vout_max());
 }
 

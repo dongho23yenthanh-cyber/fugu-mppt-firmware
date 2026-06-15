@@ -318,6 +318,7 @@ const META = {
   // converter.conf
   topo:{unit:"",desc:"Converter topology: buck or boost",type:"enum"},
   forced_pwm:{unit:"",desc:"Force CCM PWM even at light loads (1=on)",type:"bool"},
+  pwm_driver:{unit:"",desc:"Gate driver: ledc or mcpwm. Only consulted when the firmware compiles in both drivers (default ledc)",type:"enum"},
   boost:{unit:"",desc:"Legacy boost flag (replaced by topo=buck|boost)",type:"bool"},
   mode:{unit:"",desc:"Legacy control mode (currently unused)",type:"string"},
 
@@ -408,7 +409,7 @@ const FILE_KEYS = {
   "limits.conf":["iin_max","iout_max","iout_short","p_max","reverse_current_paranoia",
     "temp_derate","temp_max","vin_max","vin_min","vout_max"],
   "coil.conf":["L0","rect_offset_ns"],
-  "converter.conf":["forced_pwm","topo"],
+  "converter.conf":["forced_pwm","pwm_driver","topo"],
   "charger.conf":["bat_c","cv_ceiling","cv_eoc","cv_float","ibat_max","recharge_dod","tail_c_rate","vout_max",
     "vout_max_fallback","vout_offset_max"],
   "tracker.conf":["sweep_speed","target_duty_cycle"],
@@ -441,7 +442,7 @@ const TYPE_KEYS = {
     "vin_max","vin_min","vout_max","vout_max_fallback","vout_offset_max"]),
   string: new Set(["adc","ble_security","broker_uri","cell_voltages_max_topic","ftp_pass",
     "ftp_user","ibat_lim_topic","ibat_topic","influxdb_host","log_level","mcu","password",
-    "pwm_driver_logic","topo","username"]),
+    "pwm_driver","pwm_driver_logic","topo","username"]),
 };
 // SCRAPER:END TYPE_KEYS
 const CHAN_SUFFIX_TYPE = { adc:"string", ch:"byte", rh:"float", rl:"float", factor:"float", midpoint:"float", filt_len:"long" };
@@ -464,7 +465,7 @@ const DEFAULTS = {
   // coil.conf
   "rect_offset_ns":"0",
   // converter.conf
-  "forced_pwm":"0","topo":"\"buck\"",
+  "forced_pwm":"0","pwm_driver":"\"ledc\"","topo":"\"buck\"",
   // charger.conf
   "cv_eoc":"3.6","cv_float":"3.37","recharge_dod":"0.2","tail_c_rate":"0.05","vout_offset_max":"0.6",
   // tracker.conf

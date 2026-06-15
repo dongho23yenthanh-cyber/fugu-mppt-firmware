@@ -18,7 +18,9 @@
 static constexpr float kFsw = 39000.f;
 
 static void initConvEx(SynchronousConverter &c, const char *topo, const char *bootRefreshNs) {
-    ConfFile converterConf{{{"topo", topo}}};
+    // Pin the MCPWM driver so the diode-emulation math is exercised against it (the production
+    // driver on the s3 boards). Ignored on builds that compile only one driver.
+    ConfFile converterConf{{{"topo", topo}, {"pwm_driver", "mcpwm"}}};
     ConfFile coilConf{{{"L0", "50e-6"}}};
     ConfFile boardConf = bootRefreshNs
         ? ConfFile{{
@@ -170,3 +172,28 @@ void test_boost_ratio_clamped_above_unity() {
     TEST_ASSERT_TRUE(std::isfinite(c.rectCtrlRatio(c.voltageRatio())));
     TEST_ASSERT_TRUE(c.rectCtrlRatio(c.voltageRatio()) >= 0.f);
 }
+
+#if defined(HAVE_MCPWM) && defined(HAVE_LEGACY)
+// Both drivers compiled: converter.conf::pwm_driver picks the active one at runtime. At the same
+// fsw the LEDC and MCPWM timers land on different resolutions, so pwmCounts() differs — a cheap
+// observable that the selected driver actually came up (rather than always falling to the default).
+static void initConvDriver(SynchronousConverter &c, const char *drv, int pinHi, int pinLi) {
+    ConfFile cc{{{"topo", "buck"}, {"pwm_driver", drv}}};
+    ConfFile coil{{{"L0", "50e-6"}}};
+    ConfFile bc{{
+        {"pwm_freq", "39000"}, {"pwm_driver_logic", "HiLi"},
+        {"pwm_hi", std::to_string(pinHi)}, {"pwm_li", std::to_string(pinLi)}, {"skip_assert", "1"},
+    }};
+    c.init(cc, bc, coil);
+}
+
+void test_buck_pwm_driver_runtime_select() {
+    SynchronousConverter cl, cm;
+    initConvDriver(cl, "ledc", 1, 2);
+    initConvDriver(cm, "mcpwm", 4, 5);
+    TEST_ASSERT_TRUE(cl.pwmCounts() > 0);
+    TEST_ASSERT_TRUE(cm.pwmCounts() > 0);
+    // distinct resolutions -> the runtime choice took effect on each converter
+    TEST_ASSERT_TRUE(cm.pwmCounts() != cl.pwmCounts());
+}
+#endif

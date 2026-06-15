@@ -119,6 +119,7 @@ See [Topology notes & examples](#topology-notes--examples) below for worked ACS7
 |--------------|------|-------|---------|------------------------------------------------------------|
 | `topo`       |      | enum  | —       | Converter topology: `buck` or `boost`                      |
 | `forced_pwm` |      | bool  | 0       | Force CCM PWM even at light loads (see notes below)        |
+| `pwm_driver` |      | enum  | ledc    | Gate driver: `ledc` or `mcpwm`. Only consulted when the firmware compiles in both (`CONFIG_FUGU_WITH_LEDC` and `CONFIG_FUGU_WITH_MCPWM`); with one compiled it is forced to that one |
 | `vout_max`   | V    | float | —       | Legacy output voltage limit (real one is in `limits.conf`) |
 
 ## charger.conf — battery termination

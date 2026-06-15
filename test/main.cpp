@@ -207,6 +207,9 @@ void test_buck_bootstrap_min_default();
 void test_buck_bootstrap_min_scales_with_conf();
 void test_boost_bootstrap_min_is_zero();
 void test_boost_ratio_clamped_above_unity();
+#if defined(HAVE_MCPWM) && defined(HAVE_LEGACY)
+void test_buck_pwm_driver_runtime_select();
+#endif
 
 // pwm — measurement-rig self-test (doc/pwm-test-spec1.md)
 void test_pwm_rig_freq_path();
@@ -387,6 +390,9 @@ void setup() {
     RUN_TEST(test_buck_bootstrap_min_scales_with_conf);
     RUN_TEST(test_boost_bootstrap_min_is_zero);
     RUN_TEST(test_boost_ratio_clamped_above_unity);
+#if defined(HAVE_MCPWM) && defined(HAVE_LEGACY)
+    RUN_TEST(test_buck_pwm_driver_runtime_select);
+#endif
 
     // conf.h — ConfFile getters
     RUN_TEST(test_conf_getlong_bases);

@@ -1451,6 +1451,7 @@ void setupCli() {
                  (unsigned) freq, (unsigned) pwmMax,
                  (unsigned) hs_off, (unsigned) ls_on, (unsigned) ls_off);
     });
+#if WITH_LEDC
     cli.addBoundlessCmd("anaw", [](cmd *c) {
         Command cc(c);
         int pin = cc.getArg(0).getValue().toInt();
@@ -1458,6 +1459,7 @@ void setupCli() {
         analogWrite(pin, val);
         UART_LOG("anaw %d -> %d (Arduino LEDC)", pin, val);
     });
+#endif
 #endif
 #ifdef WITH_NETW
     cli.addBoundlessCmd("wifi", cmdWifi); // wifi on | off [minutes]

@@ -60,7 +60,9 @@ public:
 
         auto dc = (uint16_t) (((2 << (FAN_PWM_BITS - 1)) - 1) * duty * 0.01f);
         if (driverDC != dc) {
+#if WITH_LEDC
             ledcWrite(FAN_PWM_CH, dc);
+#endif
             driverDC = dc;
             return true;
         }

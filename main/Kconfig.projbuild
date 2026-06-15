@@ -34,11 +34,22 @@ config FUGU_WITH_BLE
         when this is on.
 
 config FUGU_WITH_MCPWM
-    bool "MCPWM gate driver (instead of LEDC)"
+    bool "MCPWM gate driver"
     default n
     help
-        Drive the half-bridge with the MCPWM peripheral (hardware dead-time, OST brake, glitch-free
-        comparator updates) instead of LEDC. See doc/mcpwm-sync-buck-driver.md.
+        Compile the MCPWM half-bridge gate driver (hardware dead-time, OST brake, glitch-free
+        comparator updates). See doc/mcpwm-sync-buck-driver.md. When both this and FUGU_WITH_LEDC
+        are on, the active driver is chosen at runtime from converter.conf::pwm_driver.
+
+config FUGU_WITH_LEDC
+    bool "LEDC gate driver + fan PWM + anaw"
+    default y
+    help
+        Compile the LEDC half-bridge gate driver, plus everything else that uses the LEDC
+        peripheral: fan PWM (src/cooling.h) and the `anaw` console command. Turning this off
+        strips the whole LEDC driver (libesp_driver_ledc.a + esp32-hal-ledc, ~7 KB) — the fan
+        and `anaw` stop working — so build MCPWM-only converters without paying for LEDC.
+        At least one of FUGU_WITH_LEDC / FUGU_WITH_MCPWM must be on (unless FUGU_WITH_VCONV).
 
 config FUGU_WITH_VCONV
     bool "Virtual converter plant (simulation, no hardware)"

@@ -146,10 +146,15 @@ if (WITH_BLE)
     component_compile_definitions("WITH_BLE=1")
 endif ()
 
-# CONFIG_FUGU_WITH_MCPWM swaps the LEDC gate driver for the MCPWM driver (src/pwm/mcpwm.h):
-# hardware dead-time, GPIO OST brake, glitch-free comparator updates. See doc/mcpwm-sync-buck-driver.md.
+# Gate-driver back-ends. CONFIG_FUGU_WITH_MCPWM (src/pwm/mcpwm.h): hardware dead-time, GPIO OST brake,
+# glitch-free comparator updates (see doc/mcpwm-sync-buck-driver.md). CONFIG_FUGU_WITH_LEDC (src/pwm/ledc.h):
+# the LEDC driver + fan PWM + the `anaw` command. With both on, the buck driver is picked at runtime from
+# converter.conf::pwm_driver; with LEDC off the whole LEDC peripheral (incl. esp32-hal-ledc) drops out.
 if (CONFIG_FUGU_WITH_MCPWM)
     component_compile_definitions("WITH_MCPWM=1")
+endif ()
+if (CONFIG_FUGU_WITH_LEDC)
+    component_compile_definitions("WITH_LEDC=1")
 endif ()
 
 if (WITH_VCONV)

@@ -754,9 +754,10 @@ static void lfControl() {
         uint16_t pwmMargin = mppt.converter.pwmCtrlMax / 256;
         if (pwmMargin < 8) pwmMargin = 8;
         const uint16_t minAuthorityPwm = mppt.converter.getCtrlOnPwmMin() + pwmMargin;
+        const bool currentShowsAuthority = std::isfinite(iout) && (iout > 0.5f || bool(mppt.charger.termCond));
         const bool voutAuthority = !mppt.converter.disabled()
                                    && mppt.converter.getCtrlOnPwmCnt() > minAuthorityPwm
-                                   && std::isfinite(iout) && iout > 0.5f;
+                                   && currentShowsAuthority;
         mppt.charger.update(vout, iout, voutAuthority);
     }
     wifiShutdownIfHot(mppt.ucTemp.last());

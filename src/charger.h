@@ -46,7 +46,10 @@ struct BatChargerParams {
 
         Ibat_lim = chargerConf.getFloat("ibat_max", 20.f, true); // note: iout = ibat + iload
         Cbat = chargerConf.getFloat("bat_c", NAN, true); // larger->"safer" value, doesn't overcharge small bats
-        assert_throw(std::isfinite(Cbat) && Cbat > 0.f, "bat_c must be a positive finite capacity");
+        // Optional: a PSU/non-battery topology omits it. NAN disables termination + DoD recharge
+        // (downstream guards isfinite(Cbat)); warn instead of refusing to start.
+        if (!(std::isfinite(Cbat) && Cbat > 0.f))
+            ESP_LOGW("charger", "bat_c missing/invalid -> termination + EOC feedback disabled (Cbat=NAN)");
         tail_c_rate = chargerConf.getFloat("tail_c_rate", 0.05f);
         assert_throw(tail_c_rate > 0.f, "tail_c_rate must be > 0");
         recharge_dod = chargerConf.getFloat("recharge_dod", 0.20f);

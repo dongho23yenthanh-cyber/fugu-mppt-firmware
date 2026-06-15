@@ -927,8 +927,11 @@ static void loopRTNewData(unsigned long nowMs) {
                 static int64_t bmsBootDeadline = 0;
                 constexpr int64_t BMS_BOOT_WAIT_US = 12'000'000;
                 bool full = bool(mppt.charger.termCond);
+                // Wait for termCond to actually be evaluated (cell voltage AND warm ibat), not just
+                // for the first cell frame — otherwise the sweep could fire in the gap before ibat
+                // smoothing warms up and termination latches.
                 bool waitingForBms = mppt.charger.hasBmsCellSource()
-                                     && !mppt.charger.batSt.haveValidCellVoltage();
+                                     && !mppt.charger.terminationDecided();
                 if (waitingForBms && bmsBootDeadline == 0)
                     bmsBootDeadline = esp_timer_get_time() + BMS_BOOT_WAIT_US;
                 bool bmsWaitElapsed = bmsBootDeadline != 0 && esp_timer_get_time() > bmsBootDeadline;

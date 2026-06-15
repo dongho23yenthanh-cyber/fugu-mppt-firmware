@@ -229,6 +229,7 @@ class BatteryCharger {
     unsigned long _lastBmsFrameUs = 0;
 
     bool _bmsCellSource = false; // a BMS cell-voltage topic was configured (termination can be evaluated)
+    bool _termDecided = false; // termCond has been evaluated at least once (needs cell voltage + warm ibat)
 
 public:
     BatChargerParams params{};
@@ -255,6 +256,7 @@ public:
 
         bool wasTerm = bool(termCond);
         termCond.update(batSt.vcell_high, ibat, batSt.coulombCounter.ahSinceFull());
+        _termDecided = true; // termCond now reflects a real evaluation (cell voltage + warm ibat)
         if (!wasTerm && bool(termCond)) {
             // Rising edge — pack is full, re-zero the coulomb counter so the
             // recharge_dod hysteresis measures against this full point.
@@ -462,6 +464,10 @@ public:
     // has arrived. Lets the sweep trigger defer a boot sweep until that first frame instead of pulsing
     // a possibly-full pack. False when no BMS is wired (then termination can't be known from cells).
     [[nodiscard]] bool hasBmsCellSource() const { return _bmsCellSource; }
+
+    // termCond has run at least once, so it reflects the real pack state. Distinct from
+    // hasBmsCellSource(): a BMS topic may be subscribed but its cell-voltage/ibat frames not yet in.
+    [[nodiscard]] bool terminationDecided() const { return _termDecided; }
 
     [[nodiscard]] float Iout_max() const {
         // TODO this should take the acquired ibat - iout delta into account

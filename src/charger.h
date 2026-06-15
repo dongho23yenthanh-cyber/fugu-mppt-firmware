@@ -228,6 +228,8 @@ class BatteryCharger {
     // runs the integrator 15× per BMS cycle and overshoots).
     unsigned long _lastBmsFrameUs = 0;
 
+    bool _bmsCellSource = false; // a BMS cell-voltage topic was configured (termination can be evaluated)
+
 public:
     BatChargerParams params{};
     Li_ChgTerminationCondition termCond{params};
@@ -384,6 +386,7 @@ public:
     void beginMqtt(const ConfFile &mqttConf) {
         auto topic = mqttConf.getString("cell_voltages_max_topic", "");
         if (!topic.empty()) {
+            _bmsCellSource = true;
             if (params.Vbat_fallback > 0)
                 vpack_pin = params.Vbat_fallback;
             MQTT.subscribeTopic(topic, [&](const char *dat, int len) {
@@ -454,6 +457,11 @@ public:
         if (vpack_pin > 0 and vpack_pin < v_max) v_max = vpack_pin;
         return v_max;
     }
+
+    // A BMS cell-voltage topic is configured, so termCond reflects the real pack state once a frame
+    // has arrived. Lets the sweep trigger defer a boot sweep until that first frame instead of pulsing
+    // a possibly-full pack. False when no BMS is wired (then termination can't be known from cells).
+    [[nodiscard]] bool hasBmsCellSource() const { return _bmsCellSource; }
 
     [[nodiscard]] float Iout_max() const {
         // TODO this should take the acquired ibat - iout delta into account

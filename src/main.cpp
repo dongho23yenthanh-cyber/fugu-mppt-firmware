@@ -919,10 +919,25 @@ static void loopRTNewData(unsigned long nowMs) {
             }
         } else if (wallClockUs() > delayStartUntil && mppt.startCondition()) {
             if (!g_app.manualPwm) {
-                rtcount("mppt.startSweep.pre");
-                mppt.startSweep();
-                rtcount("mppt.startSweep");
-                delayStartUntil = wallClockUs() + 4 * 1000000;
+                // Don't open-loop sweep into a possibly-full pack: a sweep ramps duty 0->max and dumps a
+                // charge pulse (the recharge-after-reboot we saw on repeated OTAs). Skip while terminated.
+                // Right after boot termCond isn't known until the first BMS cell frame arrives, so if a BMS
+                // source is configured but silent, wait briefly for it; if it never comes, sweep anyway
+                // (the charger then holds Vbat_fallback float, so there's no real overcharge).
+                static int64_t bmsBootDeadline = 0;
+                constexpr int64_t BMS_BOOT_WAIT_US = 12'000'000;
+                bool full = bool(mppt.charger.termCond);
+                bool waitingForBms = mppt.charger.hasBmsCellSource()
+                                     && !mppt.charger.batSt.haveValidCellVoltage();
+                if (waitingForBms && bmsBootDeadline == 0)
+                    bmsBootDeadline = esp_timer_get_time() + BMS_BOOT_WAIT_US;
+                bool bmsWaitElapsed = bmsBootDeadline != 0 && esp_timer_get_time() > bmsBootDeadline;
+                if (!full && (!waitingForBms || bmsWaitElapsed)) {
+                    rtcount("mppt.startSweep.pre");
+                    mppt.startSweep();
+                    rtcount("mppt.startSweep");
+                    delayStartUntil = wallClockUs() + 4 * 1000000;
+                }
             }
         }
 

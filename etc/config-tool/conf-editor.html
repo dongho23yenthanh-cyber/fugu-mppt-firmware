@@ -330,6 +330,7 @@ const META = {
   bat_c:{unit:"Ah",desc:"Effective battery pack capacity",type:"float"},
   tail_c_rate:{unit:"C",desc:"End-of-charge tail current as fraction of capacity",type:"float"},
   recharge_dod:{unit:"",desc:"Depth-of-discharge since full to release termination",type:"float"},
+  vout_offset_max:{unit:"V",desc:"Worst-case Vout-sensor error tolerated during float: how far below the float floor the BMS-driven EOC loop may pull to stop charging a full pack when Vout reads high",type:"float"},
 
   // tracker.conf
   target_duty_cycle:{unit:"",desc:"Fixed duty cycle fraction; if set, disables MPPT tracking",type:"float"},
@@ -409,7 +410,7 @@ const FILE_KEYS = {
   "coil.conf":["L0","rect_offset_ns"],
   "converter.conf":["forced_pwm","topo"],
   "charger.conf":["bat_c","cv_ceiling","cv_eoc","cv_float","ibat_max","recharge_dod","tail_c_rate","vout_max",
-    "vout_max_fallback"],
+    "vout_max_fallback","vout_offset_max"],
   "tracker.conf":["sweep_speed","target_duty_cycle"],
   "mqtt.conf":["broker_uri","cell_voltages_max_topic","cmd_input","enabled","ibat_lim_topic",
     "ibat_topic","log_level","password","username"],
@@ -437,7 +438,7 @@ const TYPE_KEYS = {
   float: new Set(["L0","bat_c","boot_refresh_ns","cv_ceiling","cv_eoc","cv_float","ibat_max","iin_max","rect_offset_ns",
     "ina22x_range","ina22x_resistor","iout_max","iout_short","notch_freq","notch_q","p_max","power_conversion_eff",
     "pwm_deadtime_ns","recharge_dod","sweep_speed","tail_c_rate","target_duty_cycle","temp_derate","temp_max",
-    "vin_max","vin_min","vout_max","vout_max_fallback"]),
+    "vin_max","vin_min","vout_max","vout_max_fallback","vout_offset_max"]),
   string: new Set(["adc","ble_security","broker_uri","cell_voltages_max_topic","ftp_pass",
     "ftp_user","ibat_lim_topic","ibat_topic","influxdb_host","log_level","mcu","password",
     "pwm_driver_logic","topo","username"]),
@@ -465,7 +466,7 @@ const DEFAULTS = {
   // converter.conf
   "forced_pwm":"0","topo":"\"buck\"",
   // charger.conf
-  "cv_eoc":"3.6","cv_float":"3.37","recharge_dod":"0.2","tail_c_rate":"0.05",
+  "cv_eoc":"3.6","cv_float":"3.37","recharge_dod":"0.2","tail_c_rate":"0.05","vout_offset_max":"0.6",
   // tracker.conf
   "sweep_speed":"4.0","target_duty_cycle":"0.0",
   // mqtt.conf

@@ -339,3 +339,40 @@ void test_release_vout_pinning_goes_to_vbat_max() {
     TEST_ASSERT_FLOAT_WITHIN(0.01f, charger.params.Vbat_max, charger.Vout_max());
 }
 
+// Drive the EOC feedback loop with the highest cell held above v_eoc, as if this converter's
+// Vout reads high so lowering vpack_pin never actually brings the cell down. The BMS-driven loop
+// must keep pulling vpack_pin below the nominal float floor (Vbat_fallback) by up to
+// params.vout_offset_max, so a full pack stops being trickle-charged despite the Vout offset.
+static void driveEocFeedback(BatteryCharger &charger, float vcellHigh, int frames) {
+    for (int i = 0; i < frames; ++i) {
+        loopWallClockUs_ += 1'000'000;        // a fresh BMS frame each iteration (advances vcell_high_t)
+        charger.batSt.setVcellHigh(vcellHigh);
+        charger.update(charger.params.Vbat_fallback, 0.0f, /*voutAuthority*/ true);
+    }
+}
+
+void test_eoc_floor_allows_vout_offset_correction() {
+    BatteryCharger charger;
+    charger.params = makeLfpParams();          // Vbat_fallback=13.4, cv_min=3.37
+    charger.params.vout_offset_max = 0.6f;
+    loopWallClockUs_ = 1'000'000;
+
+    driveEocFeedback(charger, charger.params.cv_min + 0.10f, 200); // cell stuck above v_eoc
+
+    const float floor = charger.params.Vbat_fallback - charger.params.vout_offset_max; // 12.8
+    TEST_ASSERT_TRUE(charger.Vout_max() < charger.params.Vbat_fallback - 0.05f); // used the headroom
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, floor, charger.Vout_max());                  // settled at the floor
+    TEST_ASSERT_TRUE(charger.Vout_max() >= floor - 0.01f);                       // never below it
+}
+
+void test_eoc_floor_zero_offset_stops_at_fallback() {
+    BatteryCharger charger;
+    charger.params = makeLfpParams();
+    charger.params.vout_offset_max = 0.0f;     // legacy behaviour: floor == Vbat_fallback
+    loopWallClockUs_ = 1'000'000;
+
+    driveEocFeedback(charger, charger.params.cv_min + 0.10f, 200);
+
+    TEST_ASSERT_FLOAT_WITHIN(0.05f, charger.params.Vbat_fallback, charger.Vout_max());
+}
+

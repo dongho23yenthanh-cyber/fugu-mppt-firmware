@@ -22,6 +22,11 @@ struct BatChargerParams {
     float tail_c_rate = 0.05f; // [1/h] ratio of EOC tail current to capacity.
     // ^ LFP: 0.05. NCR (Sanyo NCR18650GA, 67mA on 3500mAh): ~0.02. EVE INR18650: 0.033. Higher = safer (terminates later).
     float recharge_dod = 0.20f; // DoD-since-EoC to release termination. LFP  ~0.20. See doc/Termination.md.
+    float vout_offset_max = 0.6f; // [V] worst-case Vout-sensor error to tolerate during terminated float.
+    // The EOC feedback loop drives the highest cell (BMS, accurate) down to its target by lowering vpack_pin;
+    // this is how far below the nominal float floor (Vbat_fallback, expressed in this converter's possibly-
+    // offset Vout frame) it may pull. Without it a converter that reads Vout high pins a full pack above EOC
+    // and trickles current into it indefinitely. See doc/Termination.md.
 
     void load(const ConfFile &chargerConf) {
         Vbat_max = chargerConf.getFloat("vout_max", NAN, true);
@@ -41,6 +46,8 @@ struct BatChargerParams {
         tail_c_rate = chargerConf.getFloat("tail_c_rate", 0.05f);
         assert_throw(tail_c_rate > 0.f, "tail_c_rate must be > 0");
         recharge_dod = chargerConf.getFloat("recharge_dod", 0.20f);
+        vout_offset_max = chargerConf.getFloat("vout_offset_max", 0.6f);
+        assert_throw(vout_offset_max >= 0.f, "vout_offset_max must be >= 0");
     }
 };
 
@@ -260,7 +267,8 @@ public:
         //   1) EOC feedback — cells above v_eoc: closed loop on vcell_high → v_eoc.
         //      Doubles as the over-target corrector during terminated float; pulls
         //      vpack_pin down until vcell_high reaches v_eoc (≈ cv_min at ibat≈0),
-        //      self-correcting any Vout-ADC offset. Suppressed when balancingMode
+        //      self-correcting a Vout-ADC offset up to params.vout_offset_max (the
+        //      depth it may pull below the nominal float floor). Suppressed when balancingMode
         //      is on, to let a passive balancer act at a fixed float voltage
         //      (unhealthy for an extended period of time, so only when explicitly
         //      requested).
@@ -309,8 +317,11 @@ public:
             if (newBmsFrame || isnan(vpack_pin)) {
                 _lastBmsFrameUs = bmsFrameUs;
                 float base = std::isfinite(vpack_pin) ? vpack_pin : fmin(batSt.vout_avg.get(), vbat);
+                // Floor below the nominal float voltage by the tolerated Vout offset so this BMS-driven loop
+                // can still pull the highest cell down to v_eoc when our Vout reads high (otherwise the float
+                // floor, in our offset Vout frame, pins a full pack above EOC and trickles current into it).
                 float vPin_raw = fmaxf(base - (batSt.vcell_high - v_eoc) * OV_FEEDBACK_GAIN,
-                                       params.Vbat_fallback);
+                                       params.Vbat_fallback - params.vout_offset_max);
                 _vPinFilt.add(vPin_raw);
                 float vPin = _vPinFilt.get();
                 if (isnan(vpack_pin) or vPin < vpack_pin - 0.01f)

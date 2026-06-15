@@ -134,6 +134,7 @@ See [Topology notes & examples](#topology-notes--examples) below for worked ACS7
 | `bat_c`             | Ah   | float | —          | Effective battery pack capacity                                |
 | `tail_c_rate`       | C    | float | 0.05       | End-of-charge tail current as fraction of capacity             |
 | `recharge_dod`      |      | float | 0.20       | Depth-of-discharge since full to release termination           |
+| `vout_offset_max`   | V    | float | 0.6        | Worst-case Vout-sensor error tolerated during float: how far below the float floor the BMS-driven EOC loop may pull to stop charging a full pack when Vout reads high |
 
 ## tracker.conf — MPPT
 

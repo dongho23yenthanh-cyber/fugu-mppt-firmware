@@ -5,6 +5,7 @@
 #include <limits>
 #include <deque>
 
+#include "../util.h"
 
 template<class T>
 inline T abs(T x) { return x < 0 ? -x : x; }
@@ -341,7 +342,7 @@ struct MeanAccumulator {
     MeanAccumulator() { clear(); }
 };
 
-template<typename F=float, typename T=unsigned long, typename D=double>
+template<typename F=float, typename T=time_us, typename D=double>
 class TrapezoidalIntegrator {
     const F timeFactor;
     const T maxDt;
@@ -349,7 +350,7 @@ class TrapezoidalIntegrator {
     F lastX;
     D value;
 public:
-    explicit TrapezoidalIntegrator(float timeFactor = (1.f/ 3600e6f), T maxDt = 1e6) :
+    explicit TrapezoidalIntegrator(float timeFactor = (1.f/ 3600e6f), T maxDt = 1000000ULL) :
             timeFactor(timeFactor), maxDt(maxDt), lastTime{0}, lastX{0}, value{0} {}
 
     D get() const { return value; }

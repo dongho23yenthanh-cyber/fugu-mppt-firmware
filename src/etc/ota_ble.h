@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../util.h"
+
 // OTA firmware update pushed over BLE (no WiFi). The host streams the image to a NUS write-no-response
 // characteristic; bytes are staged in a PSRAM ring and flushed to the passive OTA partition from the
 // network loop. Control + status ride the existing console: `otab` commands in, OTAB_* lines out
@@ -15,5 +17,5 @@ void otaBleAbort();                                     // esp_ota_abort, free s
 void otaBleRequestAbort();                               // ask the net-loop tick to abort (safe from any task)
 bool otaBleActive();                                    // true between begin and end/abort
 void otaBleStageBytes(const uint8_t *data, size_t len); // FW-char onWrite (host task): copy into ring only
-void otaBleTick(unsigned long nowMs);                   // network loop: drain ring -> esp_ota_write
+void otaBleTick(time_ms nowMs);                   // network loop: drain ring -> esp_ota_write
 #endif

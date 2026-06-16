@@ -87,7 +87,7 @@ static void configureVirtualConverter() {
 #endif
 
 void setupSensors(const ConfFile &boardConf, const Limits &lim) {
-    loopWallClockUs_ = micros();
+    loopWallClockUs_ = esp_timer_get_time();
     heap_caps_check_integrity_all(true);
 
 #if WITH_VCONV

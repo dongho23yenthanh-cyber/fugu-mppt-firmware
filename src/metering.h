@@ -5,6 +5,7 @@
 #include "store.h"
 #include "math/float16.h"
 #include "math/statmath.h"
+#include "util.h"
 
 template<typename F=float16>
 struct DailyEnergyMeterState {
@@ -199,9 +200,9 @@ struct PersistentState {
 
 
 struct SolarEnergyMeter {
-    TrapezoidalIntegrator<float, unsigned long, float> totalEnergy{
+    TrapezoidalIntegrator<float, time_us, float> totalEnergy{
             1e-6f / 3600.f,  // /us => /h
-            /*maxDt*/(unsigned long) 4e6f // 4sec
+            /*maxDt*/static_cast<time_us>(4e6f) // 4sec
     };
 
     FlashValueStore<PersistentState> flash{
@@ -229,7 +230,7 @@ struct SolarEnergyMeter {
         commit(true);
     }
 
-    void add(float power, float smoothPower, float vin, float vout, unsigned long timeUs) {
+    void add(float power, float smoothPower, float vin, float vout, time_us timeUs) {
         if (power > 0.1f)
             totalEnergy.add(power, timeUs);
         //dailyEnergyMeter.update(smoothPower, totalEnergy.get(), vin, vout);

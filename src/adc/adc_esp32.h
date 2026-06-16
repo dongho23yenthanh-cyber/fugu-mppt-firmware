@@ -8,7 +8,7 @@
 #include "rt.h"
 
 
-const unsigned long &loopWallClockUs();
+const time_us &loopWallClockUs();
 
 /**
  * Single-shot implementation for ESP32's internal ADC1. Uses `esp_adc_cal_characterize()`.

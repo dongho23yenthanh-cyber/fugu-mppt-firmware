@@ -133,7 +133,7 @@ void otaBleStageBytes(const uint8_t *data, size_t len) {
     rCount += len;
 }
 
-void otaBleTick(unsigned long nowMs) {
+void otaBleTick(time_ms nowMs) {
     if (!active) return;
     if (abortReq) { otaBleAbort(); return; } // disconnect/abort requested off the net loop
     static uint8_t slice[FLUSH_SLICE];
@@ -231,6 +231,6 @@ void otaBleAbort() {}
 void otaBleRequestAbort() {}
 bool otaBleActive() { return false; }
 void otaBleStageBytes(const uint8_t *, size_t) {}
-void otaBleTick(unsigned long) {}
+void otaBleTick(time_ms) {}
 
 #endif

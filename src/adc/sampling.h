@@ -235,7 +235,7 @@ private:
     };
 
     uint8_t calibrating_ = 0;
-    unsigned long timeLastCalibration = 0;
+    time_us timeLastCalibration = 0;
 
 public:
     volatile bool halted = false;
@@ -666,7 +666,7 @@ public:
 
     [[nodiscard]] bool isCalibrating() const { return calibrating_ > 0; }
 
-    [[nodiscard]] unsigned long getTimeLastCalibrationUs() const { return timeLastCalibration; }
+    [[nodiscard]] time_us getTimeLastCalibrationUs() const { return timeLastCalibration; }
 
 
     void reInitADCs() {

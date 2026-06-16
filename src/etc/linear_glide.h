@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdint>
 
+#include "../util.h"
+
 // Time-bounded linear interpolation between two values. Use to smooth a
 // setpoint that would otherwise step abruptly — e.g. the pack-voltage
 // fallback transition when BMS data goes stale.
@@ -17,14 +19,14 @@
 // Not thread-safe. Caller is responsible for serialising access.
 class LinearGlide {
     const uint32_t _durUs;
-    unsigned long _startUs = 0; // 0 == inactive
+    time_us _startUs = 0; // 0 == inactive
     float _from = NAN;
     float _to = NAN;
 
 public:
     explicit LinearGlide(uint32_t durationUs) : _durUs(durationUs) {}
 
-    void start(float from, float to, unsigned long nowUs) {
+    void start(float from, float to, time_us nowUs) {
         _from = from;
         _to = to;
         _startUs = nowUs;
@@ -34,8 +36,8 @@ public:
 
     // Linearly interpolated value at `nowUs`. Returns `to` once the duration
     // has elapsed. Precondition: active() — undefined return when inactive.
-    [[nodiscard]] float value(unsigned long nowUs) const {
-        unsigned long dt = nowUs - _startUs;
+    [[nodiscard]] float value(time_us nowUs) const {
+        time_us dt = nowUs - _startUs;
         if (dt >= _durUs) return _to;
         return _from + (_to - _from) * ((float) dt / (float) _durUs);
     }

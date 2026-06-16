@@ -95,7 +95,7 @@ void doOta(String url) {
 esp_err_t _ota_http_event_handler(esp_http_client_event_t *evt) {
     static int contentLen = 0;
     static int contentReceived = 0;
-    static unsigned long tStart = 0;
+    static time_us tStart = 0;
     static uint8_t lastPct = 0;
 
     switch (evt->event_id) {
@@ -126,7 +126,7 @@ esp_err_t _ota_http_event_handler(esp_http_client_event_t *evt) {
                     ESP_LOGI("ota", "Download Progress: %4d %%", pct);
                     lastPct = pct;
                     if (pct == 100) {
-                        ESP_LOGI(TAG, "Download took %lu ms (%lu KB/s)", (wallClockUs() - tStart) / 1000,
+                        ESP_LOGI(TAG, "Download took %llu ms (%llu KB/s)", (wallClockUs() - tStart) / 1000,
                                  contentReceived * 1000 / (wallClockUs() - tStart)
                         );
                     }

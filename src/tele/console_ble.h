@@ -3,6 +3,8 @@
 #include <string>
 #include <cstdint>
 
+#include "../util.h"
+
 // BLE serial console over the Nordic UART Service (NUS). A new transport for handleCommand(),
 // reachable without Wi-Fi. ESP32-S3 supports BLE only (no classic SPP). All functions are
 // no-ops unless the firmware is built with -DWITH_BLE (see main/CMakeLists.txt).
@@ -16,7 +18,7 @@ void bleConsoleBegin(const std::string &deviceName, const std::string &security,
 
 void bleConsoleEnd();
 
-void bleConsoleLoop(unsigned long nowMs); // drives the RX queue through loopConsole(); call on core 0
+void bleConsoleLoop(time_ms nowMs); // drives the RX queue through loopConsole(); call on core 0
 
 bool bleConsoleConnected();
 

@@ -63,18 +63,18 @@ struct BatteryState {
     static constexpr uint16_t IBAT_MIN_SAMPLES = 8; // smoothing warm-up before ibat is published
 
     volatile float vcell_high = 0; // voltage of highest cell reported by BMS
-    volatile unsigned long vcell_high_t = 0; // timestamp of highest cell voltage
+    volatile uint32_t vcell_high_t = 0; // 32-bit lower half of wallClockUs(). 32-bit single-store/load is atomic across cores on Xtensa; 64-bit would not be.
 
     EWMA<volatile float, float> vout_avg{60}; // time-averaged pack voltage
     CoulombCounter coulombCounter{}; // Ah-since-last-full tracker, used for recharge hysteresis
 
     void setVcellHigh(const float &vcell_high_) {
         vcell_high = vcell_high_;
-        vcell_high_t = wallClockUs();
+        vcell_high_t = static_cast<uint32_t>(wallClockUs());
     }
 
     [[nodiscard]] bool haveValidCellVoltage() const {
-        return vcell_high > 0 and wallClockUs() - vcell_high_t < (VCELL_EXPIRATION_TIME_SEC * 1000000);
+        return vcell_high > 0 and wallClockUs() - vcell_high_t < (VCELL_EXPIRATION_TIME_SEC * 1000000ULL);
     }
 
     // producer (MQTT task): smooth ibat here and publish a single lock-free
@@ -226,7 +226,7 @@ class BatteryCharger {
     // Integrator step gate: advance vpack_pin only on a fresh BMS frame so the
     // step rate matches the cell-voltage update rate (otherwise loopLF at 1 Hz
     // runs the integrator 15× per BMS cycle and overshoots).
-    unsigned long _lastBmsFrameUs = 0;
+    uint32_t _lastBmsFrameUs = 0;
 
     bool _bmsCellSource = false; // a BMS cell-voltage topic was configured (termination can be evaluated)
     bool _termDecided = false; // termCond has been evaluated at least once (needs cell voltage + warm ibat)
@@ -336,7 +336,7 @@ public:
             _fallbackGlide.reset();
             _floatGlide.reset();
             constexpr float OV_FEEDBACK_GAIN = 1.f;
-            unsigned long bmsFrameUs = batSt.vcell_high_t;
+            uint32_t bmsFrameUs = batSt.vcell_high_t;
             bool newBmsFrame = bmsFrameUs != _lastBmsFrameUs;
             if (newBmsFrame || std::isnan(vpack_pin)) {
                 _lastBmsFrameUs = bmsFrameUs;

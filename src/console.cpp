@@ -31,7 +31,7 @@ void consoleFlush() { if (consoleFlushHook) consoleFlushHook(); }
 static constexpr auto uartPortNum = UART_NUM_0;
 
 
-void loopConsole(int read(char *buf, size_t len), int write(const char *buf, size_t len), unsigned long nowMs) {
+void loopConsole(int read(char *buf, size_t len), int write(const char *buf, size_t len), time_ms nowMs) {
     constexpr uint8_t bufSiz = 128;
     static char buf[bufSiz];
     static uint8_t buf_pos = 0;
@@ -114,7 +114,7 @@ int console_write_usb(const char *buf, size_t len) {
 #endif
 }
 
-void loopUart(unsigned long nowMs) {
+void loopUart(time_ms nowMs) {
     // for some reason Serial.available() doesn't work under platformio
     // so access the uart port directly
     loopConsole(uartRead, uartWrite, nowMs);

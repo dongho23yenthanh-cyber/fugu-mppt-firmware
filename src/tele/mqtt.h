@@ -5,6 +5,7 @@
 
 #include "../conf.h"
 #include "../service.h"
+#include "../util.h"
 #include "mqtt_client.h"
 
 class MqttService : public Service {
@@ -26,7 +27,7 @@ public:
 private:
     std::unordered_map<std::string, MqttMsgCallback> mqttMsgHandlers{};
     bool mqttConnected = false;
-    unsigned long _lastTickMs = 0;
+    time_ms _lastTickMs = 0;
 
 public:
     bool isConnected()const  { return mqttConnected; }

@@ -79,8 +79,9 @@ static bool lastNotifyOk = true;             // set by TxCallbacks::onStatus, re
 // slow-interval drain before the faster interval applies.
 static volatile bool txArmSettle = false;
 static volatile bool connParamsPending = false;
-static unsigned long txConnectMs = 0;
-static constexpr unsigned long TX_SETTLE_MS = 500;
+static time_ms txConnectMs = 0;
+
+static constexpr time_ms TX_SETTLE_MS = 500;
 
 static int bleWrite(const char *buf, size_t len) {
     if (!deviceConnected || !txChar) return 0;
@@ -93,7 +94,7 @@ static int bleWrite(const char *buf, size_t len) {
 }
 
 // Push queued output to the client, paced by NimBLE's buffer availability. Pump from the network loop.
-static void bleTxDrain(unsigned long nowMs) {
+static void bleTxDrain(time_ms nowMs) {
     if (!deviceConnected || !txChar || !bleServer) return;
     std::lock_guard<std::recursive_mutex> lk(txMutex);
     if (txArmSettle) { txConnectMs = nowMs; txArmSettle = false; }
@@ -274,7 +275,7 @@ void bleConsoleEnd() {
     while (rxQueue.try_dequeue(c)) {} // drop stale input
 }
 
-void bleConsoleLoop(unsigned long nowMs) {
+void bleConsoleLoop(time_ms nowMs) {
     if (!bleStarted) return;
     // Let a blocking command (e.g. `ota <url>`) push pending output while it runs — otherwise its
     // progress/result sits in txBuf until it returns, and on a successful OTA the reboot eats it.
@@ -289,7 +290,7 @@ bool bleConsoleConnected() { return deviceConnected; }
 
 void bleConsoleAwaitTxDrain(unsigned lowWater, unsigned timeoutMs) {
     if (!bleStarted || !deviceConnected) return;
-    unsigned long start = wallClockMs();
+    time_ms start = wallClockMs();
     for (;;) {
         size_t backlog;
         { std::lock_guard<std::recursive_mutex> lk(txMutex); backlog = txBuf.size() - txHead; }
@@ -306,7 +307,7 @@ void bleConsoleBegin(const std::string &, const std::string &, uint32_t) {}
 
 void bleConsoleEnd() {}
 
-void bleConsoleLoop(unsigned long) {}
+void bleConsoleLoop(time_ms) {}
 
 bool bleConsoleConnected() { return false; }
 

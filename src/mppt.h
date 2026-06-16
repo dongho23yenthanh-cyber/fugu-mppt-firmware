@@ -197,9 +197,9 @@ private:
 
     Plot sweepPlot{};
 
-    unsigned long lastTimeProtectPassed = 0;
-    unsigned long _lastPointWrite = 0;
-    unsigned long _backoffUntilUs = 0;
+    time_ms lastTimeProtectPassed = 0;
+    time_us _lastPointWrite = 0;
+    time_us _backoffUntilUs = 0;
     unsigned short _teleNumPoints = 0;
 
     const VIinVout<const Sensor *> &sensors;
@@ -295,7 +295,7 @@ public:
             converter.disable();
         }
         if (backoffSec) {
-            auto until = wallClockUs() + (unsigned long) backoffSec * 1000000UL;
+            auto until = wallClockUs() + static_cast<time_us>(backoffSec) * 1000000ULL;
             ESP_LOGW("mppt", "backoff %lus [%s]%s", (unsigned long) backoffSec, who,
                      _sweeping ? " mid-sweep" : "");
             if (until > _backoffUntilUs) _backoffUntilUs = until;
@@ -320,12 +320,7 @@ public:
         return changed;
     }
 
-    [[nodiscard]] bool inBackoff() {
-        // wallClockUs() is 32-bit micros() and wraps every ~71 min; if the backoff has already
-        // expired, clear it so the next wrap doesn't make it look "in the future" again.
-        if (wallClockUs() > _backoffUntilUs) _backoffUntilUs = 0;
-        return _backoffUntilUs != 0;
-    }
+    [[nodiscard]] bool inBackoff() const { return wallClockUs() < _backoffUntilUs; }
 
     [[nodiscard]] float boardPowerSupplyVoltage() const {
         constexpr auto diodeFwdVoltage = 0.3f;
@@ -340,7 +335,7 @@ public:
 
     // First startCondition() clause currently blocking a start, or nullptr if clear.
     // Single source of truth for startCondition(); also logged while idle in START.
-    [[nodiscard]] const char *startBlockReason() {
+    [[nodiscard]] const char *startBlockReason() const {
         if (inBackoff()) return "backoff";
         // gate restart at the hard-cutoff knee (Temp_max), not the derate onset: between the
         // knees the converter must run derated, not stay off (a sweep/backoff above Temp_derate
@@ -355,7 +350,7 @@ public:
         return nullptr;
     }
 
-    [[nodiscard]] bool startCondition() { return startBlockReason() == nullptr; }
+    [[nodiscard]] bool startCondition() const { return startBlockReason() == nullptr; }
 
     bool protectLf(bool ignoreUV) {
         //auto nowMs = loopWallClockMs();
@@ -677,7 +672,7 @@ public:
 
     void telemetry();
 
-    unsigned long lastUs = 0;
+    time_us lastUs = 0;
 
     void update(); // normal update
     void updateCV(); // Constant-Voltage mode

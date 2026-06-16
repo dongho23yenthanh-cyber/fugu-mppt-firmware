@@ -9,7 +9,7 @@
 #include "../etc/version.h"
 #include "telemetry.h"    // getHostname, handleCommand
 
-extern unsigned long lastTimeOutUs;
+extern time_us lastTimeOutUs;
 
 void telnetDispatchCommandAsync(const char *line) {
     // Defer to loopNetwork_task (where process_queued_tasks runs). Running handleCommand inline

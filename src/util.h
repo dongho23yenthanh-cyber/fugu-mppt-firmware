@@ -5,11 +5,14 @@
 #define RT_CORE 1
 #define NON_RT_CORE 0
 
-extern unsigned long loopWallClockUs_;
+using time_us = uint64_t; // monotonic microseconds, sourced from esp_timer_get_time()
+using time_ms = uint64_t; // monotonic milliseconds, derived from wallClockUs()
 
-inline const unsigned long &wallClockUs() { return loopWallClockUs_; }
+extern time_us loopWallClockUs_;
 
-inline unsigned long wallClockMs() { return (unsigned long) (loopWallClockUs_ / 1000ULL); }
+inline const time_us &wallClockUs() { return loopWallClockUs_; }
+
+inline time_ms wallClockMs() { return loopWallClockUs_ / 1000ULL; }
 
 
 void scan_i2c();

@@ -6,9 +6,10 @@
 //#include "math/statmath.h"
 #include "etc/rt.h"
 #include "tele/scope.h"
+#include "../util.h"
 
 
-const unsigned long &wallClockUs();
+const time_us &wallClockUs();
 
 static bool adc_fake_periodic_timer_callback(void *arg);
 
@@ -26,7 +27,7 @@ public:
     }
 
 private:
-    std::array<unsigned long, 4> resetTimes;
+    std::array<time_us, 4> resetTimes;
 
     TaskNotification taskNotification{};
 
@@ -128,7 +129,7 @@ public:
     float getInputImpedance(uint8_t ch) override { return 100e3; }
 
     void reset(const uint8_t ch) override {
-        ESP_LOGI("adc_fake", "Reset channel %u at %lu", ch, wallClockUs());
+        ESP_LOGI("adc_fake", "Reset channel %u at %llu", ch, wallClockUs());
         resetTimes[ch] = wallClockUs();
     }
 

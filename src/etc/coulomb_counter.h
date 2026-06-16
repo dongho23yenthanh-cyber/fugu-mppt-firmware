@@ -17,7 +17,7 @@
  * on Xtensa) is enough — no critical section.
  */
 class CoulombCounter {
-    TrapezoidalIntegrator<> _integrator{1.f / 3600e6f, 30'000'000UL}; // producer-only
+    TrapezoidalIntegrator<> _integrator{1.f / 3600e6f, 30'000'000ULL}; // producer-only
     std::atomic<float> _ahSinceFull{0.f}; // single writer: producer
     std::atomic<bool> _resetRequested{false}; // consumer -> producer
 
@@ -25,7 +25,7 @@ public:
     void updateBatCurrent(float ibat) { updateBatCurrent(ibat, wallClockUs()); }
 
     // producer thread
-    void updateBatCurrent(float ibat, unsigned long nowUs) {
+    void updateBatCurrent(float ibat, time_us nowUs) {
         if (_resetRequested.exchange(false, std::memory_order_relaxed))
             _integrator.reset();
         _integrator.add(-ibat, nowUs);

@@ -6,18 +6,20 @@
 
 #include <cstdint>
 
+#include "util.h"
+
 struct AppState {
     bool manualPwm = false;
 #ifdef WITH_NETW
     bool disableWifi = false;
-    uint32_t wifiReenableMs = 0; // wallClockMs() deadline to auto re-enable WiFi (0 = never)
+    time_ms wifiReenableMs = 0; // wallClockMs() deadline to auto re-enable WiFi (0 = never)
 #endif
     bool usbConnected = false;
     bool setupErr = false;
     uint16_t loopRateMin = 0;
-    unsigned long maxLoopLag = 0;
+    uint32_t maxLoopLag = 0; // peak RT-loop lag (µs), a time delta, not a timestamp
 #if CAPTURE_LOOP_DT
-    unsigned long maxLoopDT = 0;
+    uint32_t maxLoopDT = 0; // peak loop dt (µs), a time delta
 #endif
 };
 

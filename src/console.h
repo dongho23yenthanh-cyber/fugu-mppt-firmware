@@ -4,17 +4,17 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>   // QueueHandle_t
 
+#include "util.h"
+
 void uartInit(int port_num);
 
 void consoleInit();
 
 int console_write_usb(const char *buf, unsigned int len);
 
-void loopUart(unsigned long nowMs);
+void loopUart(time_ms nowMs);
 
-// Generic line-based console driver: reads from read(), echoes via write(), and dispatches
-// completed lines to handleCommand(). Reused by every transport (UART, USB, BLE).
-void loopConsole(int read(char *buf, size_t len), int write(const char *buf, size_t len), unsigned long nowMs);
+void loopConsole(int read(char *buf, size_t len), int write(const char *buf, size_t len), time_ms nowMs);
 
 // Installed by a transport whose output is buffered and drained asynchronously from its own loop
 // (BLE), so a long-running blocking command (e.g. an OTA download) can push pending output mid-run
@@ -23,7 +23,7 @@ void loopConsole(int read(char *buf, size_t len), int write(const char *buf, siz
 extern void (*consoleFlushHook)();
 void consoleFlush();
 
-extern unsigned long lastTimeOutUs;
+extern time_us lastTimeOutUs;
 
 
 

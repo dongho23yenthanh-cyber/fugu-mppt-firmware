@@ -1,10 +1,11 @@
 #pragma once
 
 #include "math/statmath.h"
+#include "util.h"
 
 struct MPP {
     float power = 0;
-    unsigned long timestamp = 0;
+    time_ms timestamp = 0;
     uint16_t dutyCycle = 0;
     float vin = 0;
 };
@@ -21,8 +22,8 @@ struct Tracker {
     float frequency = 20;
 
     bool _direction = false; //true => increase duty cycle/decrease solar voltage
-    unsigned long _time = 0;
-    unsigned long _timeLastReverse = 0;
+    time_ms _time = 0;
+    time_ms _timeLastReverse = 0;
 
     float _curPower = 0.0;
     float _lastPower = 0.0;

@@ -67,18 +67,19 @@ SynchronousConverter converter; // buck or boost
 LedIndicator led;
 MpptController mppt{adcSampler, sensors, converter, lcdService.lcd}; // lcd owned by lcdService
 
-unsigned long loopWallClockUs_ = 0;
+time_us loopWallClockUs_ = 0;
 
-unsigned long lastLoopTime = 0;
+time_us lastLoopTime = 0;
 
-unsigned long timeLastSampler = 0;
+time_us timeLastSampler = 0;
 
-unsigned long delayStartUntil = 0;
+time_us delayStartUntil = 0;
 
-const auto lfPeriod = 3000000; //(mppt.tracker.avgPower.get() < 1) ? 3000000 : 3000000;
+const auto lfPeriod = 3000000ULL; //(mppt.tracker.avgPower.get() < 1) ? 3000000 : 3000000;
 
-unsigned long lastTimeOutUs = 0;
+time_us lastTimeOutUs = 0;
 uint32_t lastNSamples = 0;
+
 unsigned long lastMpptUpdateNumSamples = 0;
 
 float conversionEfficiency;
@@ -93,7 +94,7 @@ static void loopNetwork_task(void *arg);
 
 static void loopRT(void *arg); // this is the critical one
 
-static void loopRTNewData(unsigned long nowMs);
+static void loopRTNewData(time_ms nowMs);
 
 #ifdef WITH_NETW
 // arduino-esp32's WiFiGeneric.cpp:298 calls esp_netif_create_default_wifi_ap() unconditionally,
@@ -506,7 +507,7 @@ static esp_err_t disable_cpu_power_saving(void) {
 
 void stopAndBackoff(uint32_t secondsDelay) {
     mppt.shutdownDcdc("stopAndBackoff");
-    delayStartUntil = wallClockUs() + secondsDelay * 1000000;
+    delayStartUntil = wallClockUs() + static_cast<time_us>(secondsDelay) * 1000000ULL;
 }
 
 static void loopRT(void *arg) {
@@ -517,7 +518,7 @@ static void loopRT(void *arg) {
     } catch (const std::runtime_error &er) {
         ESP_LOGE("main", "error starting ADC sampler: %s", er.what());
         while (true) {
-            loopWallClockUs_ = micros();
+            loopWallClockUs_ = esp_timer_get_time();
             vTaskDelay(10);
         }
     }
@@ -541,11 +542,11 @@ static void loopRT(void *arg) {
 
     while (true) {
         rtcount("start");
-        loopWallClockUs_ = micros();
+        loopWallClockUs_ = esp_timer_get_time();
         rtcount("micros");
         auto &nowUs(loopWallClockUs_);
 
-        auto nowMs = (unsigned long) (nowUs / 1000ULL);
+        time_ms nowMs = nowUs / 1000ULL;
 
         rtcount("adc.update.pre");
         auto samplerRet = adcSampler.update();
@@ -562,8 +563,8 @@ static void loopRT(void *arg) {
         // kAdcSustainedMs — a transient wedge (e.g. a console uxTaskGetSystemState() briefly starving
         // the DMA) recovers on one reset and must NOT trip a backoff on a live converter. Calibration
         // legitimately withholds fresh samples, so it's excluded from the timeLastSampler arm.
-        constexpr unsigned long kAdcResetThrottleMs = 300, kAdcSustainedMs = 800, kAdcRestartMs = 60000;
-        static unsigned long adcStalledSinceMs = 0, lastAdcResetMs = 0;
+        constexpr time_ms kAdcResetThrottleMs = 300, kAdcSustainedMs = 800, kAdcRestartMs = 60000;
+        static time_ms adcStalledSinceMs = 0, lastAdcResetMs = 0;
 
         bool adcStalled = samplerRet == ADC_Sampler::UpdateRet::AdcError ||
                           (samplerRet != ADC_Sampler::UpdateRet::NewData && !adcSampler.isCalibrating() &&
@@ -576,7 +577,7 @@ static void loopRT(void *arg) {
                 adcSampler.resetPeripherals();
             }
             if (nowMs - adcStalledSinceMs > kAdcSustainedMs && !converter.disabled() && !mppt.inBackoff()) {
-                ESP_LOGE("main", "ADC stall %lu ms, shutdown (nSamples=%lu)", nowMs - adcStalledSinceMs,
+                ESP_LOGE("main", "ADC stall %llu ms, shutdown (nSamples=%lu)", nowMs - adcStalledSinceMs,
                          lastMpptUpdateNumSamples);
                 stopAndBackoff(16);
             }
@@ -660,7 +661,7 @@ static void wifiShutdownIfHot(float chipTempC) {
 // log-alloc contention (a discovery/health poller sending ip/uptime tripped this on every poll, see
 // doc/dev-notes/Real-Time Latency.md) — can't trigger stopAndBackoff; only sustained starvation does.
 // Per-sample OV/OC cutouts (mppt.protect) are independent and still fire every arriving sample.
-static void lfWatchdog(unsigned long nowUs, uint32_t dt, uint32_t sps, uint32_t nSamples) {
+static void lfWatchdog(time_us nowUs, uint32_t dt, uint32_t sps, uint32_t nSamples) {
     static uint8_t starvedWindows = 0;
     constexpr uint8_t TRIP_WINDOWS = 3;
 
@@ -800,7 +801,7 @@ static void lfStatusLine(uint32_t nSamples, uint32_t sps, uint32_t dt) {
     if (mppt.converter.disabled() && !g_app.manualPwm) {
         const char *reason = mppt.startBlockReason();
         static const char *lastReason = nullptr;
-        static unsigned long lastLogUs = 0;
+        static time_us lastLogUs = 0;
         auto nowUs = wallClockUs();
         if (reason && (reason != lastReason || nowUs - lastLogUs > 30000000)) {
             ESP_LOGI("mppt", "START blocked: %s (Vin=%.1f Vout=%.1f ntc=%.0f mcu=%.0f)", reason,
@@ -813,7 +814,7 @@ static void lfStatusLine(uint32_t nSamples, uint32_t sps, uint32_t dt) {
 }
 
 // RGB LED color from current converter state (manual / idle / sweep / MPPT / CV / topping).
-static void lfUpdateLed(unsigned long nowUs) {
+static void lfUpdateLed(time_us nowUs) {
     if (g_app.manualPwm) {
         uint8_t i = constrain((sensors.Vout->last * sensors.Iout->last) / mppt.limits.P_max * 255, 1, 255);
         led.setRGB(0, i, i);
@@ -837,7 +838,7 @@ static void lfUpdateLed(unsigned long nowUs) {
     }
 }
 
-void loopLF(const unsigned long &nowUs) {
+void loopLF(const time_us &nowUs) {
     auto &nSamples(sensors.Vout ? sensors.Vout->numSamples : lastNSamples);
     auto dt = nowUs - lastTimeOutUs;
     uint32_t sps = (dt > 20000) ? (uint64_t) (nSamples - lastNSamples) * 1000000llu / dt : 0;
@@ -870,7 +871,7 @@ void loopLF(const unsigned long &nowUs) {
     lfUpdateLed(nowUs);
 }
 
-static void loopRTNewData(unsigned long nowMs) {
+static void loopRTNewData(time_ms nowMs) {
     // cap control update rate to sensor sampling rate (see below). rate for all 3 sensors are equal.
     // we choose Vout here because this is the most critical control value (react fast to prevent OV)
     auto nSamples = sensors.Vout->numSamples;
@@ -925,13 +926,21 @@ static void loopRTNewData(unsigned long nowMs) {
                 // source is configured but silent, wait briefly for it; if it never comes, sweep anyway
                 // (the charger then holds Vbat_fallback float, so there's no real overcharge).
                 static int64_t bmsBootDeadline = 0;
+                static bool bmsWasFresh = false;
                 constexpr int64_t BMS_BOOT_WAIT_US = 12'000'000;
-                bool full = bool(mppt.charger.termCond);
+                bool bmsFresh = mppt.charger.batSt.haveValidCellVoltage();
+                // A stale BMS cell frame can leave termCond stuck true. Don't trust it: only treat
+                // the pack as full when termCond is true AND the BMS data is fresh.
+                bool full = bool(mppt.charger.termCond) && bmsFresh;
                 // Wait for termCond to actually be evaluated (cell voltage AND warm ibat), not just
                 // for the first cell frame — otherwise the sweep could fire in the gap before ibat
-                // smoothing warms up and termination latches.
+                // smoothing warms up and termination latches. Also wait if the BMS just went stale,
+                // so a brief outage doesn't immediately allow a sweep into a possibly-full pack.
                 bool waitingForBms = mppt.charger.hasBmsCellSource()
-                                     && !mppt.charger.terminationDecided();
+                                     && (!mppt.charger.terminationDecided() || !bmsFresh);
+                if (bmsWasFresh && !bmsFresh)
+                    bmsBootDeadline = 0; // reset the wait window on fresh -> stale transition
+                bmsWasFresh = bmsFresh;
                 if (waitingForBms && bmsBootDeadline == 0)
                     bmsBootDeadline = esp_timer_get_time() + BMS_BOOT_WAIT_US;
                 bool bmsWaitElapsed = bmsBootDeadline != 0 && esp_timer_get_time() > bmsBootDeadline;
@@ -939,7 +948,7 @@ static void loopRTNewData(unsigned long nowMs) {
                     rtcount("mppt.startSweep.pre");
                     mppt.startSweep();
                     rtcount("mppt.startSweep");
-                    delayStartUntil = wallClockUs() + 4 * 1000000;
+                    delayStartUntil = wallClockUs() + 4 * 1000000ULL;
                 }
             }
         }
@@ -1001,8 +1010,8 @@ static void networkLoopTick() {
 
         // Night = not converting for a while: drop to MAX_MODEM to cut standby battery draw. Back to
         // MIN_MODEM the instant PV power returns so daytime console/MQTT/OTA stay responsive.
-        static uint32_t lastActiveMs = 0;
-        uint32_t nowMs = wallClockMs();
+        static time_ms lastActiveMs = 0;
+        time_ms nowMs = wallClockMs();
         if (converting) lastActiveMs = nowMs;
         int8_t want = (nowMs - lastActiveMs > 5u * 60 * 1000) ? 1 : 0;
         if (wifiUp && want != psMode) {

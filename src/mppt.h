@@ -320,7 +320,12 @@ public:
         return changed;
     }
 
-    [[nodiscard]] bool inBackoff() const { return wallClockUs() < _backoffUntilUs; }
+    [[nodiscard]] bool inBackoff() {
+        // wallClockUs() is 32-bit micros() and wraps every ~71 min; if the backoff has already
+        // expired, clear it so the next wrap doesn't make it look "in the future" again.
+        if (wallClockUs() > _backoffUntilUs) _backoffUntilUs = 0;
+        return _backoffUntilUs != 0;
+    }
 
     [[nodiscard]] float boardPowerSupplyVoltage() const {
         constexpr auto diodeFwdVoltage = 0.3f;
@@ -335,7 +340,7 @@ public:
 
     // First startCondition() clause currently blocking a start, or nullptr if clear.
     // Single source of truth for startCondition(); also logged while idle in START.
-    [[nodiscard]] const char *startBlockReason() const {
+    [[nodiscard]] const char *startBlockReason() {
         if (inBackoff()) return "backoff";
         // gate restart at the hard-cutoff knee (Temp_max), not the derate onset: between the
         // knees the converter must run derated, not stay off (a sweep/backoff above Temp_derate
@@ -350,7 +355,7 @@ public:
         return nullptr;
     }
 
-    [[nodiscard]] bool startCondition() const { return startBlockReason() == nullptr; }
+    [[nodiscard]] bool startCondition() { return startBlockReason() == nullptr; }
 
     bool protectLf(bool ignoreUV) {
         //auto nowMs = loopWallClockMs();

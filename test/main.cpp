@@ -3,13 +3,14 @@
 #include <Arduino.h>
 
 #include "storage/key-value.h"
+#include "util.h"
 
 //#warning "Test main"
 
 // src/main.cpp defines this in the normal build; with RUN_TESTS=1 the entry point
 // is swapped to this file, so we provide our own definition. wallClockUs() reads it,
 // but nothing in tests writes — that's fine, time-based tests pass explicit timestamps.
-unsigned long loopWallClockUs_ = 0;
+time_us loopWallClockUs_ = 0;
 
 // Same swap: src/main.cpp owns the real nvs; telemetry.cpp (linked into the test
 // build) references it, so define it here too.
@@ -37,7 +38,7 @@ Scope *scope = nullptr;
 // so define them here too (same swap as nvs/mppt above).
 #include "app_state.h"
 AppState g_app{};
-unsigned long lastTimeOutUs = 0;
+time_us lastTimeOutUs = 0;
 
 // Instrumented stub: test_security.cpp asserts the telnet command path DEFERS handleCommand (via
 // enqueue_task) instead of running it inline (the UAF fix). Record calls so the test can observe
@@ -121,6 +122,7 @@ void test_termination_line_clamps_above_cv_eoc();
 void test_termination_line_midpoint();
 void test_termination_does_not_latch_below_line();
 void test_termination_latches_above_line();
+void test_termination_latches_when_vcell_above_cv_eoc_at_high_current();
 void test_termination_release_via_dod();
 void test_termination_release_via_voltage_floor();
 void test_termination_dod_release_skipped_when_cbat_missing();
@@ -299,6 +301,7 @@ void setup() {
     // charger.h — latch/release
     RUN_TEST(test_termination_does_not_latch_below_line);
     RUN_TEST(test_termination_latches_above_line);
+    RUN_TEST(test_termination_latches_when_vcell_above_cv_eoc_at_high_current);
     RUN_TEST(test_termination_release_via_dod);
     RUN_TEST(test_termination_release_via_voltage_floor);
     RUN_TEST(test_termination_dod_release_skipped_when_cbat_missing);

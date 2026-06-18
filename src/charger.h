@@ -74,7 +74,8 @@ struct BatteryState {
     }
 
     [[nodiscard]] bool haveValidCellVoltage() const {
-        return vcell_high > 0 and wallClockUs() - vcell_high_t < (VCELL_EXPIRATION_TIME_SEC * 1000000ULL);
+        // Compare as 32-bit so the 71-minute wrap-around of vcell_high_t is handled correctly.
+        return vcell_high > 0 and (static_cast<uint32_t>(wallClockUs()) - vcell_high_t) < (VCELL_EXPIRATION_TIME_SEC * 1000000ULL);
     }
 
     // producer (MQTT task): smooth ibat here and publish a single lock-free
@@ -146,12 +147,10 @@ public:
         _v_term = fminf(p.cv_min + fmaxf(0.f, vo), p.cv_eoc); // don't go beyond cv_eoc to avoid BMS cut-off
         float iBatFloor = -p.tail_c_rate * p.Cbat * 0.02f;
 
-        // Hard per-cell ceiling backstop. The normal trigger below compares against the *uncapped* line
-        // cv_min + ibat·r, which exceeds cv_eoc whenever ibat > tail_c_rate·Cbat (the tail current). While
-        // that much current flows the strongest cell can be driven well past cv_eoc before the line drops to
-        // meet it — on an imbalanced pack one cell runs toward the BMS over-voltage cut-off. This latches
-        // termination once the highest cell holds at/above cv_ceiling, current-independent; a short streak
-        // rejects a one-frame charge-current I·R spike.
+        // Hard per-cell ceiling backstop. The normal trigger compares against _v_term, which is capped at
+        // cv_eoc so the cell is never intentionally pushed above the EOC voltage regardless of charge current.
+        // The ceiling latches termination if the highest cell still reaches cv_ceiling (e.g. a transient I·R
+        // spike or a misconfigured cv_eoc), current-independent; a short streak rejects a one-frame spike.
         bool ceilingLatch = false;
         if (!terminated and std::isfinite(p.cv_ceiling) and vcell_high >= p.cv_ceiling) {
             if (++_ceilStreak >= VCEIL_STREAK_REQ) ceilingLatch = true;
@@ -159,7 +158,7 @@ public:
             _ceilStreak = 0;
         }
 
-        if (!terminated and (ceilingLatch or (ibat > iBatFloor and vcell_high > p.cv_min + vo))) {
+        if (!terminated and (ceilingLatch or (ibat > iBatFloor and vcell_high > _v_term))) {
             terminated = true;
             _vfloorStreak = 0;
             _ceilStreak = 0;

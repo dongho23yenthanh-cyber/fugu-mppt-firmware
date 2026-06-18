@@ -97,6 +97,19 @@ void test_termination_latches_above_line() {
     TEST_ASSERT_TRUE(bool(tc));
 }
 
+// Regression: at high current the old uncapped termination line was cv_min + ibat*r, which
+// far exceeded cv_eoc and allowed cells to be driven well above cv_eoc before the ceiling
+// backstop finally latched. The normal trigger must use the capped v_term so any cell above
+// cv_eoc terminates immediately, regardless of charge current.
+void test_termination_latches_when_vcell_above_cv_eoc_at_high_current() {
+    auto p = makeLfpParams();
+    Li_ChgTerminationCondition tc{p};
+    const float highA = 4.0f * p.tail_c_rate * p.Cbat; // 56 A
+    // v_term is capped at cv_eoc even at high current; old code would have needed ~4.45 V.
+    tc.update(p.cv_eoc + 0.02f, highA, 0.0f);
+    TEST_ASSERT_TRUE(bool(tc));
+}
+
 void test_termination_release_via_dod() {
     auto p = makeLfpParams();
     Li_ChgTerminationCondition tc{p};
@@ -231,7 +244,7 @@ void test_mqtt_vcell_message_updates_state() {
 // Test/main.cpp owns this variable in the test build. The MQTT-driven ibat path
 // uses wallClockUs() (which reads loopWallClockUs_) for integration timestamps,
 // so we must advance it ourselves — nothing else does during tests.
-extern unsigned long loopWallClockUs_;
+extern time_us loopWallClockUs_;
 
 void test_mqtt_ibat_message_drives_coulomb_counter() {
     BatteryCharger charger;

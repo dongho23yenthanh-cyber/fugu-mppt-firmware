@@ -6,7 +6,8 @@ Locks the switching clocks of multiple converters to a shared timebase recovered
 beacons — **receive-only**: the device never associates or transmits, so it works with WiFi
 "off" (no TX bursts on the 3V3 rail during precision measurements). Implementation:
 `src/sync/bsync.{h,cpp}`, driver hooks in `src/pwm/mcpwm.h` (`setPeriodTicks`, `count`,
-`update_period_on_empty`).
+`update_period_on_empty`). The dedicated beacon source is documented in
+[bsync-beacon-node.md](bsync-beacon-node.md).
 
 ## Mechanism
 

@@ -296,8 +296,25 @@ Devices with hostnames like `fugu-esp32s3-*` are bench devices, not real power c
 
 Confirm the hostname in the welcome message (`Welcome to <hostname> (192.168.4.2)`), as IPs are not static.
 Confirm the device ip address with the `ip` command.
-You have a device log history available through `ssh havan.local` `tail pv/fugu_console.log -f -n 200`
-You can find battery data in InfluxDB with `batmon()` in
+
+# Device Data
+
+You have access to live and historic device telemetry and logs.
+Read device log through `ssh havan.local` `tail pv/fugu_console.log -f -n 200`.
+The telemetry data is at influxdb tm.fabi.me:8086 / db `ha_van` / measurement mppt.
+(user `$INFLUX_HA_VAN_USER`, pass `$INFLUX_HA_VAN_PASS` — `.claude/memory/secrets.env`).
+
+```bash
+set -a && . .claude/memory/secrets.env && set +a   # loads $INFLUX_HA_VAN_USER/_PASS
+curl -sG http://tm.fabi.me:8086/query --data-urlencode db=ha_van \
+  --data-urlencode "u=$INFLUX_HA_VAN_USER" --data-urlencode "p=$INFLUX_HA_VAN_PASS" \
+  --data-urlencode "q=SELECT * FROM mppt WHERE device='fry' ORDER BY time DESC LIMIT 3"
+```
+
+Fields: `Ui`=Vin, `Uo`=Vout, `P`=power, `I`=Iout, `pwm_duty`=HS count, `cv_lim_idx`=active CV
+limiter, `lag`=loop latency, `mcu_temp`/`ntc_temp`, `mppt_state`. `device` is a tag (`fry`/`flat`).
+
+Find battery data in InfluxDB with `batmon()` in
 `/Users/fab/dev/ha/home-assistant-addons/batmon-ha/tools/impedance/datasets.py`, use default device="bat_caravan"
 
 # Important

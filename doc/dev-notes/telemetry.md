@@ -29,6 +29,8 @@ https://pypi.org/project/adafruit-ampy/
 
 https://github.com/analogdevicesinc/scopy?tab=readme-ov-file
 
+https://github.com/Protocentral/protocentral_openview
+
 
 scopy
     - libIIO (linux embedded)

@@ -2,6 +2,7 @@
 
 #include <array>
 #include "driver/mcpwm_prelude.h"
+#include "hal/mcpwm_ll.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "mcpwm_timing.h"
@@ -58,11 +59,13 @@ class MCPWM_SyncLeg {
     mcpwm_cmpr_handle_t  cmpHS_ = nullptr, cmpLS_ = nullptr;
     mcpwm_gen_handle_t   genHS_ = nullptr, genLS_ = nullptr;
     uint16_t dtTicks_  = 0;
+    int group_ = 0;
 
 public:
     const char *name = "mcpwm";
     uint16_t pwmMax     = 0;   // commandable span: period_ticks (InEn) or period_ticks-dtTicks (HiLi)
     uint16_t periodTicks = 0;  // true timer period; phase math must use this, not pwmMax
+    uint32_t resolutionHz = 0; // timer tick rate (counts/sec)
 
     mcpwm_oper_handle_t  oper()  const { return oper_; }
     mcpwm_gen_handle_t   genHS() const { return genHS_; }
@@ -81,6 +84,8 @@ public:
                                  : bestTiming(freq);
         pwmMax      = (uint16_t) t.period_ticks;
         periodTicks = (uint16_t) t.period_ticks;
+        resolutionHz = t.resolution_hz;
+        group_      = group;
 
         mcpwm_timer_config_t tc = {
             .group_id      = group,
@@ -89,7 +94,8 @@ public:
             .count_mode    = MCPWM_TIMER_COUNT_MODE_UP,
             .period_ticks  = t.period_ticks,
             .intr_priority = 0,
-            .flags         = {},
+            // period writes (setPeriodTicks) latch on TEZ -> glitch-free, like the comparators
+            .flags         = {.update_period_on_empty = 1, .update_period_on_sync = 0, .allow_pd = 0},
         };
         ESP_ERROR_CHECK(mcpwm_new_timer(&tc, &timer_));
 
@@ -161,6 +167,17 @@ public:
 
     inline void setHsOff(uint16_t c) { mcpwm_comparator_set_compare_value(cmpHS_, c); }
     inline void setLsOff(uint16_t c) { mcpwm_comparator_set_compare_value(cmpLS_, c); }
+
+    // Trim the timer period (latches on TEZ, see update_period_on_empty). Callers must never pass
+    // a value below the init periodTicks: comparators may sit at periodTicks-1 and a shrunken
+    // period would skip their event, leaving the LS gate high for a full cycle.
+    inline void setPeriodTicks(uint16_t t) { mcpwm_timer_set_period(timer_, t); }
+
+    // Live counter value, register read. The driver never exposes the count; production has a
+    // single global leg, so this leg holds hw timer 0 of its group (first mcpwm_new_timer alloc).
+    [[nodiscard]] inline uint32_t count() const {
+        return mcpwm_ll_timer_get_count_value(MCPWM_LL_GET_HW(group_), 0);
+    }
 
     void start() {
         ESP_ERROR_CHECK(mcpwm_timer_enable(timer_));

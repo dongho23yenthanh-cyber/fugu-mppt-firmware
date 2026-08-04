@@ -223,6 +223,23 @@ NVS credentials take precedence; the conf values are the fallback.
 | `enabled`      |      | bool   | 1         | Start this service at boot                   |
 | `log_level`    |      | enum   | info      | Verbosity: `error`, `warn` or `info`         |
 
+## bsync.conf — beacon PWM-clock sync (`WITH_NETW` + `WITH_MCPWM` builds)
+
+Frequency/phase-locks the MCPWM switching clock of multiple converters to a shared timebase
+recovered from sniffed 802.11 beacons (receive-only, no association/TX — usable while WiFi is
+"off" for precision measurements). All participating devices must point `bssid`/`channel` at the
+*same* AP. See `doc/dev-notes/beacon-sync.md`.
+
+| key         | unit | type   | default | description                                                                |
+|-------------|------|--------|---------|----------------------------------------------------------------------------|
+| `bssid`     |      | string |         | Sync AP BSSID `aa:bb:cc:dd:ee:ff` (required; same on all devices)          |
+| `channel`   |      | int    | 1       | WiFi channel of the sync AP (used only while unassociated)                 |
+| `phase_us`  | µs   | float  | 0       | Per-device target phase offset on the shared grid (interleaving)           |
+| `kp`        |      | float  | 5e-6    | Servo P gain, period-ticks per phase-error-tick                            |
+| `ki`        | 1/s  | float  | 2.5e-7  | Servo I gain (steady-state crystal-offset trim)                            |
+| `enabled`   |      | bool   | 0       | Start this service at boot                                                 |
+| `log_level` |      | enum   | info    | Verbosity: `error`, `warn` or `info`                                       |
+
 ## pprof.conf — sampling profiler
 
 | key            | unit | type | default | description                                                             |

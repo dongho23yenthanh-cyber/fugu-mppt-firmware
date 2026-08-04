@@ -268,6 +268,11 @@ public:
 
     [[nodiscard]] const uint16_t &pwmMaxDriver() const { return driverPwmMax; };
 
+#if HAVE_MCPWM
+    // Raw leg access for the beacon-sync servo (period trim + live count); null when LEDC active.
+    MCPWM_SyncLeg *mcpwmLeg() { return useMcpwm ? &mcpwmDrv : nullptr; }
+#endif
+
     [[nodiscard]] uint16_t getDtTicks() const {
         return drvDtTicks();
     }

@@ -31,6 +31,7 @@
 #include "tele/home_assistant.h"
 #include "etc/ota.h"
 #endif
+#include "sync/bsync.h"
 #ifdef WITH_MEASURE_COIL
 #include "selftest/measure_coil.h"
 #endif
@@ -101,8 +102,10 @@ static void loopRTNewData(time_ms nowMs);
 // but esp_wifi defines it only when CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y. We turn SOFTAP off in
 // sdkconfig.defaults (saves a few KB) and never act as an AP, so stub it inline here so the
 // link succeeds. Inline because a separate TU was getting --gc-sections'd out of libmain.a
-// before the linker had a chance to satisfy arduino's undefined ref.
-extern "C" void *esp_netif_create_default_wifi_ap(void) { return nullptr; }
+// before the linker had a chance to satisfy arduino's undefined ref. Signature must match
+// esp_netif.h (included via bsync.h -> esp_wifi.h in MCPWM builds).
+#include <esp_netif.h>
+extern "C" esp_netif_t *esp_netif_create_default_wifi_ap(void) { return nullptr; }
 #endif
 
 
@@ -314,6 +317,9 @@ static void registerServices() {
 #endif
 #ifdef WITH_BLE
     g_services.registerService(&bleConsoleService);
+#endif
+#ifdef HAVE_BSYNC
+    g_services.registerService(&bsyncService); // no requiresNetwork: sniffs beacons w/o association
 #endif
     g_services.startEnabledAtBoot(wifiIsConnected());
 }

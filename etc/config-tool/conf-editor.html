@@ -367,6 +367,13 @@ const META = {
   // pprof.conf
   sprofiler_hz:{unit:"Hz",desc:"Sampling profiler frequency (needs OpenOCD attached)",type:"int"},
 
+  // bsync.conf
+  bssid:{unit:"",desc:"Sync AP BSSID aa:bb:cc:dd:ee:ff (same on all devices)",type:"string"},
+  channel:{unit:"",desc:"WiFi channel of the sync AP (used only while unassociated)",type:"int"},
+  phase_us:{unit:"µs",desc:"Per-device target phase offset on the shared grid",type:"float"},
+  kp:{unit:"",desc:"Beacon-sync servo P gain (period-ticks per phase-error-tick)",type:"float"},
+  ki:{unit:"1/s",desc:"Beacon-sync servo I gain (steady-state crystal-offset trim)",type:"float"},
+
   // every service conf (mqtt/tele/ftp/telnet/scope/lcd/ble)
   enabled:{unit:"",desc:"Start this service at boot (1=on, 0=off)",type:"bool"},
   log_level:{unit:"",desc:"Service log verbosity: error, warn or info",type:"enum"},
@@ -419,6 +426,7 @@ const FILE_KEYS = {
   "ftp.conf":["enabled","ftp_pass","ftp_user","log_level"],
   "telnet.conf":["enabled","log_level"],
   "scope.conf":["enabled","log_level"],
+  "bsync.conf":["bssid","channel","enabled","ki","kp","log_level","phase_us"],
   "lcd.conf":["addr","enabled","log_level"],
   "ble.conf":["ble_passkey","ble_security","enabled","log_level"],
   "pprof.conf":["sprofiler_hz"],

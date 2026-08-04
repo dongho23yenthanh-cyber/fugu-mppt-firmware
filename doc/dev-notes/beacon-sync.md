@@ -122,8 +122,10 @@ Findings, in causal order:
   `bsync.conf::hw_only=1` selects them by frame length (full-IE beacon >80 B vs 47 B injected
   skeleton). Best validated config: **hw_only=1, bw=1.2** → σ 0.16 µs, p2p ±0.5 µs (~2° σ at
   39 kHz).
-- Node-side follow-up: drop the injector entirely and shorten the softAP `beacon_interval`
-  (e.g. 25 TU ≈ 40 hw beacons/s) — more clean-stamp rate supports more loop bandwidth.
+- Production config: **hw_only=1, bw=1.2, node at the stock 100 TU** (the injector can go).
+  IDF validates `wifi_ap_config_t::beacon_interval >= 100 TU`, so more hw-beacon rate would
+  need patching the check or poking the TBTT register — not worth it: slow wander already
+  sits below the per-beacon fast noise, so the loop is stamp-noise-limited, not rate-limited.
 
 Measurement traps (they cost runs): the servo's reported `e` over-states physical error
 (~×4.5); polling the console during a capture stretches the 1 kHz dither slots (core-0

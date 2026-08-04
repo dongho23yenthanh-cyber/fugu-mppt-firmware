@@ -41,6 +41,15 @@ config FUGU_WITH_MCPWM
         comparator updates). See doc/mcpwm-sync-buck-driver.md. When both this and FUGU_WITH_LEDC
         are on, the active driver is chosen at runtime from converter.conf::pwm_driver.
 
+config FUGU_WITH_BSYNC
+    bool "Beacon-sniffing MCPWM clock sync (bsync service)"
+    default y
+    depends on FUGU_WITH_NETW && FUGU_WITH_MCPWM
+    help
+        Phase/frequency-lock the MCPWM switching clock of multiple converters to a shared
+        timebase recovered from sniffed 802.11 beacons (RX-only, works unassociated).
+        Adds the `bsync` service + bsync.conf. See doc/dev-notes/beacon-sync.md.
+
 config FUGU_WITH_LEDC
     bool "LEDC gate driver + fan PWM + anaw"
     default y

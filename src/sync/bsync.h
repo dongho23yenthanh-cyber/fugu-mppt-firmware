@@ -13,7 +13,7 @@
 #include "util.h"
 #include "buck.h"
 
-#if defined(WITH_NETW) && defined(HAVE_MCPWM)
+#if defined(WITH_BSYNC) && defined(HAVE_MCPWM)
 #define HAVE_BSYNC 1
 
 #include <esp_timer.h>

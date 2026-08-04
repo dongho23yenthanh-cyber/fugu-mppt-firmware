@@ -29,7 +29,10 @@ elseif ($ENV{MAIN_SRC})
 else ()
     # cli.cpp, bsync.cpp and measure_coil.cpp extern main.cpp's globals, so they're only built
     # alongside the real main (not test mains).
-    set(MAIN_SRC "../src/main.cpp" "../src/cli.cpp" "../src/sync/bsync.cpp")
+    set(MAIN_SRC "../src/main.cpp" "../src/cli.cpp")
+    if (CONFIG_FUGU_WITH_BSYNC)
+        list(APPEND MAIN_SRC "../src/sync/bsync.cpp")
+    endif ()
     # CONFIG_FUGU_WITH_MEASURE_COIL compiles in the on-device coil inductance sweep + `measure-coil`
     # console command (src/selftest/measure_coil.cpp). Bench-only tool — saves ~11 KB in production builds.
     if (CONFIG_FUGU_WITH_MEASURE_COIL)
@@ -155,6 +158,9 @@ if (CONFIG_FUGU_WITH_MCPWM)
 endif ()
 if (CONFIG_FUGU_WITH_LEDC)
     component_compile_definitions("WITH_LEDC=1")
+endif ()
+if (CONFIG_FUGU_WITH_BSYNC)
+    component_compile_definitions("WITH_BSYNC=1")
 endif ()
 
 if (WITH_VCONV)

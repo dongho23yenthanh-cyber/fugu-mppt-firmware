@@ -36,6 +36,8 @@ void BeaconSyncService::rxCb(void *buf, wifi_promiscuous_pkt_type_t type) {
     const uint8_t *pl = p->payload;
     if (pl[0] != 0x80) return;                // beacon subtype only
     if (memcmp(pl + 16, s->bssid_, 6) != 0) return;
+    // injected skeleton frames are 47B; real softAP beacons carry the full IE set (>80B)
+    if (s->hwOnly_ && p->rx_ctrl.sig_len < 64) return;
 
     uint64_t apTsf;                           // hw-inserted AP timestamp, first field of the body
     memcpy(&apTsf, pl + 24, 8);
@@ -206,6 +208,7 @@ bool BeaconSyncService::onStart() {
     ki_ = c.getFloat("ki", 2.5e-7f) * bw_ * bw_;
     alphaA_ = std::min(0.3f * bw_, 0.9f);
     alphaB_ = 0.05f * bw_ * bw_;
+    hwOnly_ = c.getByte("hw_only", 0) != 0;
 
     leg_ = converter.mcpwmLeg();
     if (!leg_ || !leg_->periodTicks) {
@@ -271,8 +274,9 @@ bool BeaconSyncService::onStart() {
         onStop();
         return false;
     }
-    ESP_LOGI(name(), "sniffing %s ch=%u grid=%u+0.5 ticks @%lu Hz phase=%+.1f us bw=%.2f kp=%.2g ki=%.2g A=%.3f",
-             bs.c_str(), channel_, nomPeriod_, (unsigned long) leg_->resolutionHz, phaseUs_, bw_, kp_, ki_, alphaA_);
+    ESP_LOGI(name(), "sniffing %s ch=%u grid=%u+0.5 ticks @%lu Hz phase=%+.1f us bw=%.2f kp=%.2g ki=%.2g A=%.3f%s",
+             bs.c_str(), channel_, nomPeriod_, (unsigned long) leg_->resolutionHz, phaseUs_, bw_, kp_, ki_, alphaA_,
+             hwOnly_ ? " hw_only" : "");
     return true;
 }
 

@@ -93,3 +93,39 @@ is logged and the sync AP must share the STA's channel.
 Beacon accept rate on the bench was 0.2–3/s (congested channel + converter RF right at the
 antenna), far below the 10/s TBTT — the alpha-beta prediction bridges the gaps and lock held
 regardless.
+
+## Oscilloscope campaign results (2026-08-04, dedicated beacon node)
+
+Ground truth measured with a two-channel scope on both converters' LS gates (×10 probes),
+relative edge timing extracted per trigger event, 10-minute runs, dedicated XIAO beacon node
+on a clear channel (~60 frames/s: softAP beacons every 100 TU + esp_timer-injected frames
+every 20 ms, same BSSID).
+
+| stream, bw            | fast σ | slow σ | p2p (10 min) |
+|-----------------------|--------|--------|--------------|
+| mixed 60/s, bw=0.2    | 0.23 µs| 0.39 µs| 2.5 µs       |
+| mixed 60/s, bw=0.05   | 0.17 µs| ~1.5 µs| 5.7 µs       |
+| **hw-only 10/s, bw=1.2** | **0.12 µs** | **0.09 µs** | **1.0 µs** |
+
+Findings, in causal order:
+
+- Three firmware fixes were prerequisites for clean steady state: reject-streak **median
+  revalidation** (a re-seed from one sample caused µs phase steps), **freezing the rx→esp
+  bridge** after acquisition (max-filter ratchet rebased mid-run), and **rSmooth** (~30 s EWMA
+  of the alpha-beta drift rate on the feedforward path — raw per-frame `r` is FM noise).
+- bw=0.05 is below the crystals' relative drift-wander corner: the phase random-walks between
+  corrections (~6–8 min hunting, never converges). Don't go that low.
+- **Injected frames are the dominant noise source.** `esp_wifi_80211_tx` frames pick up
+  software scheduling/queueing jitter that common-view geometry does not cancel; hardware
+  TBTT beacons (MAC-scheduled, hw TSF-stamped — the timestamp field of injected beacons is
+  also hw-overwritten, but their *timing* is soft) are ~4× cleaner at 1/6 the rate.
+  `bsync.conf::hw_only=1` selects them by frame length (full-IE beacon >80 B vs 47 B injected
+  skeleton). Best validated config: **hw_only=1, bw=1.2** → σ 0.16 µs, p2p ±0.5 µs (~2° σ at
+  39 kHz).
+- Node-side follow-up: drop the injector entirely and shorten the softAP `beacon_interval`
+  (e.g. 25 TU ≈ 40 hw beacons/s) — more clean-stamp rate supports more loop bandwidth.
+
+Measurement traps (they cost runs): the servo's reported `e` over-states physical error
+(~×4.5); polling the console during a capture stretches the 1 kHz dither slots (core-0
+esp_timer starvation) → µs ripple; ×100 probes are SNR-starved on 3 V gates (fast σ inflates
+3×); a SW node reads soft/load-dependent at light load — probe the LS gate.

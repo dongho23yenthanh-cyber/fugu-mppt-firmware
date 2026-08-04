@@ -378,6 +378,7 @@ const META = {
   kp:{unit:"",desc:"Beacon-sync servo P gain (period-ticks per phase-error-tick)",type:"float"},
   ki:{unit:"1/s",desc:"Beacon-sync servo I gain (steady-state crystal-offset trim)",type:"float"},
   bw:{unit:"",desc:"Beacon-sync loop-bandwidth scale (0.05-4): lower = less phase breathing, slower lock",type:"float"},
+  hw_only:{unit:"",desc:"Accept only full-IE (hw TBTT) beacons, drop short injected frames",type:"bool"},
 
   // every service conf (mqtt/tele/ftp/telnet/scope/lcd/ble)
   enabled:{unit:"",desc:"Start this service at boot (1=on, 0=off)",type:"bool"},
@@ -431,7 +432,7 @@ const FILE_KEYS = {
   "ftp.conf":["enabled","ftp_pass","ftp_user","log_level"],
   "telnet.conf":["enabled","log_level"],
   "scope.conf":["enabled","log_level"],
-  "bsync.conf":["bssid","bw","channel","enabled","ki","kp","log_level","phase_us"],
+  "bsync.conf":["bssid","bw","channel","enabled","hw_only","ki","kp","log_level","phase_us"],
   "lcd.conf":["addr","enabled","log_level"],
   "ble.conf":["ble_passkey","ble_security","enabled","log_level"],
   "pprof.conf":["sprofiler_hz"],

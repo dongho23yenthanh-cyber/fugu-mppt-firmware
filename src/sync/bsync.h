@@ -48,6 +48,7 @@ private:
     float bw_ = 1.0f;        // one-knob loop-bandwidth scale: lower = less phase breathing, slower lock
     float alphaA_ = 0.3f;    // alpha-beta gains, bw-scaled (A~bw, B~bw² keeps damping)
     float alphaB_ = 0.05f;
+    bool hwOnly_ = false;    // accept only full-IE (hw TBTT) beacons, drop short injected frames
 
     // driver
     MCPWM_SyncLeg *leg_ = nullptr;

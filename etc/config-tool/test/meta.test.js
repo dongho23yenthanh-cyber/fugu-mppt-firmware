@@ -64,6 +64,7 @@ test('lookupDefault returns the firmware-scraped default for known keys', async 
   assert.equal(window.lookupDefault('conf/board.conf',   'i2c_sda'),          '255');
   assert.equal(window.lookupDefault('conf/charger.conf', 'cv_eoc'),           '3.6');
   assert.equal(window.lookupDefault('conf/charger.conf', 'recharge_dod'),     '0.2');
+  assert.equal(window.lookupDefault('conf/charger.conf', 'recharge_vfloor_band'), '0.05');
   assert.equal(window.lookupDefault('conf/limits.conf',  'temp_max'),         '90.0');
   // string defaults stay quoted so the type is unambiguous
   assert.equal(window.lookupDefault('conf/converter.conf', 'topo'),           '"buck"');

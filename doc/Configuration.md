@@ -135,6 +135,7 @@ See [Topology notes & examples](#topology-notes--examples) below for worked ACS7
 | `bat_c`             | Ah   | float | —          | Effective battery pack capacity                                |
 | `tail_c_rate`       | C    | float | 0.05       | End-of-charge tail current as fraction of capacity             |
 | `recharge_dod`      |      | float | 0.20       | Depth-of-discharge since full to release termination           |
+| `recharge_vfloor_band` | V | float | 0.05    | Cell-voltage drop below cv_min to release termination (fallback to DoD counter) |
 | `vout_offset_max`   | V    | float | 0.6        | Worst-case Vout-sensor error tolerated during float: how far below the float floor the BMS-driven EOC loop may pull to stop charging a full pack when Vout reads high |
 
 ## tracker.conf — MPPT
@@ -235,8 +236,9 @@ recovered from sniffed 802.11 beacons (receive-only, no association/TX — usabl
 | `bssid`     |      | string |         | Sync AP BSSID `aa:bb:cc:dd:ee:ff` (required; same on all devices)          |
 | `channel`   |      | int    | 1       | WiFi channel of the sync AP (used only while unassociated)                 |
 | `phase_us`  | µs   | float  | 0       | Per-device target phase offset on the shared grid (interleaving)           |
-| `kp`        |      | float  | 5e-6    | Servo P gain, period-ticks per phase-error-tick                            |
-| `ki`        | 1/s  | float  | 2.5e-7  | Servo I gain (steady-state crystal-offset trim)                            |
+| `bw`        |      | float  | 1.0     | Loop-bandwidth scale (0.05–4): lower = less phase breathing, slower lock   |
+| `kp`        |      | float  | 5e-6    | Servo P gain, period-ticks per phase-error-tick (×bw)                      |
+| `ki`        | 1/s  | float  | 2.5e-7  | Servo I gain, steady-state crystal-offset trim (×bw²)                      |
 | `enabled`   |      | bool   | 0       | Start this service at boot                                                 |
 | `log_level` |      | enum   | info    | Verbosity: `error`, `warn` or `info`                                       |
 

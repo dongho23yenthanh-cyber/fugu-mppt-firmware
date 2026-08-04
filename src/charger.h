@@ -23,6 +23,7 @@ struct BatChargerParams {
     float tail_c_rate = 0.05f; // [1/h] ratio of EOC tail current to capacity.
     // ^ LFP: 0.05. NCR (Sanyo NCR18650GA, 67mA on 3500mAh): ~0.02. EVE INR18650: 0.033. Higher = safer (terminates earlier).
     float recharge_dod = 0.20f; // DoD-since-EoC to release termination. LFP  ~0.20. See doc/Termination.md.
+    float recharge_vfloor_band = 0.05f; // [V] cell-voltage drop below cv_min to release termination (fallback to DoD). See doc/Termination.md.
     float vout_offset_max = 0.6f; // [V] worst-case Vout-sensor error to tolerate during terminated float.
     // The EOC feedback loop drives the highest cell (BMS, accurate) down to its target by lowering vpack_pin;
     // this is how far below the nominal float floor (Vbat_fallback, expressed in this converter's possibly-
@@ -53,6 +54,8 @@ struct BatChargerParams {
         tail_c_rate = chargerConf.getFloat("tail_c_rate", 0.05f);
         assert_throw(tail_c_rate > 0.f, "tail_c_rate must be > 0");
         recharge_dod = chargerConf.getFloat("recharge_dod", 0.20f);
+        recharge_vfloor_band = chargerConf.getFloat("recharge_vfloor_band", 0.05f);
+        assert_throw(recharge_vfloor_band >= 0.f, "recharge_vfloor_band must be >= 0");
         vout_offset_max = chargerConf.getFloat("vout_offset_max", 0.6f);
         assert_throw(vout_offset_max >= 0.f, "vout_offset_max must be >= 0");
     }
@@ -179,11 +182,10 @@ private:
         // Require a sustained streak so a single I·R sag (50 A load spike →
         // vcell drops a few hundred mV for one BMS frame) doesn't release a
         // still-near-full pack.
-        constexpr float RECHARGE_VFLOOR_BAND = 0.1f;
-        if (vcell_high < p.cv_min - RECHARGE_VFLOOR_BAND) {
+        if (vcell_high < p.cv_min - p.recharge_vfloor_band) {
             if (++_vfloorStreak >= VFLOOR_STREAK_REQ) {
                 ESP_LOGW("charger", "Termination release due to vcell_high(%.3f)<%.3f - %.3f (sustained %u frames)",
-                         vcell_high, p.cv_min, RECHARGE_VFLOOR_BAND, (unsigned) _vfloorStreak);
+                         vcell_high, p.cv_min, p.recharge_vfloor_band, (unsigned) _vfloorStreak);
                 _vfloorStreak = 0;
                 return true;
             }

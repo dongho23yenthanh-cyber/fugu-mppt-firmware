@@ -58,6 +58,13 @@ class MCPWM_SyncLeg {
     mcpwm_oper_handle_t  oper_  = nullptr;
     mcpwm_cmpr_handle_t  cmpHS_ = nullptr, cmpLS_ = nullptr;
     mcpwm_gen_handle_t   genHS_ = nullptr, genLS_ = nullptr;
+#if WITH_WSYNC
+    // wired inter-chip sync (see doc/dev-notes/wired-sync.md): master pulse out / slave phase-reload in
+    mcpwm_oper_handle_t  syncOper_ = nullptr;
+    mcpwm_cmpr_handle_t  syncCmp_  = nullptr, syncCmpA_ = nullptr;
+    mcpwm_gen_handle_t   syncGen_  = nullptr;
+    mcpwm_sync_handle_t  syncIn_   = nullptr;
+#endif
     uint16_t dtTicks_  = 0;
     int group_ = 0;
 
@@ -76,8 +83,11 @@ public:
     // fixedTicks=0 (default, production) -> bestTiming(freq): max counts the hw can give.
     // fixedTicks>0 overrides bestTiming with that exact period; for migration / bit-identical
     // calibration replays only.
+    // syncSlave: this leg is a wired-sync slave (initSyncIn follows) — the incoming sync event
+    // substitutes TEZ, so comparator + period shadow registers must also latch on sync (a slow
+    // slave crystal would otherwise never reach its own TEZ once the reloads keep it below period).
     void init(int group, uint32_t freq, int pinHS, int pinLS,
-              uint32_t dtTicks, bool enLogic, uint32_t fixedTicks = 0) {
+              uint32_t dtTicks, bool enLogic, uint32_t fixedTicks = 0, bool syncSlave = false) {
         ESP_LOGI("mcpwm-leg", "init grp=%d freq=%u pinHS=%d pinLS=%d dtTicks=%u enLogic=%d fixed=%u",
                  group, (unsigned) freq, pinHS, pinLS, (unsigned) dtTicks, enLogic, (unsigned) fixedTicks);
         PwmTiming t = fixedTicks ? PwmTiming{freq * fixedTicks, fixedTicks, freq}
@@ -95,7 +105,7 @@ public:
             .period_ticks  = t.period_ticks,
             .intr_priority = 0,
             // period writes (setPeriodTicks) latch on TEZ -> glitch-free, like the comparators
-            .flags         = {.update_period_on_empty = 1, .update_period_on_sync = 0, .allow_pd = 0},
+            .flags         = {.update_period_on_empty = 1, .update_period_on_sync = (uint32_t) syncSlave, .allow_pd = 0},
         };
         ESP_ERROR_CHECK(mcpwm_new_timer(&tc, &timer_));
 
@@ -105,7 +115,7 @@ public:
 
         mcpwm_comparator_config_t cc = {
             .intr_priority = 0,
-            .flags = {.update_cmp_on_tez = 1, .update_cmp_on_tep = 0, .update_cmp_on_sync = 0},
+            .flags = {.update_cmp_on_tez = 1, .update_cmp_on_tep = 0, .update_cmp_on_sync = (uint32_t) syncSlave},
         };
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpHS_));
         ESP_ERROR_CHECK(mcpwm_new_comparator(oper_, &cc, &cmpLS_));
@@ -165,6 +175,72 @@ public:
         }
     }
 
+#if WITH_WSYNC
+    // Master: emit a pulse [offsetTicks, offsetTicks+pulseTicks] each period on `gpio`,
+    // phase-rigid to the switching period (own operator, gate dead-time submodule untouched).
+    // offsetTicks shifts the slave's period start relative to the master's for interleaving.
+    // Call before start().
+    void initSyncOut(int gpio, uint16_t pulseTicks, uint16_t offsetTicks) {
+        if ((uint32_t) offsetTicks + pulseTicks >= periodTicks)
+            offsetTicks = (uint16_t) (periodTicks - pulseTicks - 1); // pulse must fit the period
+        mcpwm_operator_config_t oc = {.group_id = group_, .intr_priority = 0, .flags = {}};
+        ESP_ERROR_CHECK(mcpwm_new_operator(&oc, &syncOper_));
+        ESP_ERROR_CHECK(mcpwm_operator_connect_timer(syncOper_, timer_));
+        mcpwm_comparator_config_t cc = {
+            .intr_priority = 0,
+            .flags = {.update_cmp_on_tez = 1, .update_cmp_on_tep = 0, .update_cmp_on_sync = 0},
+        };
+        ESP_ERROR_CHECK(mcpwm_new_comparator(syncOper_, &cc, &syncCmp_));
+        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(syncCmp_, (uint32_t) offsetTicks + pulseTicks));
+        mcpwm_generator_config_t gc = {.gen_gpio_num = gpio, .flags = {}};
+        ESP_ERROR_CHECK(mcpwm_new_generator(syncOper_, &gc, &syncGen_));
+        if (offsetTicks) {
+            ESP_ERROR_CHECK(mcpwm_new_comparator(syncOper_, &cc, &syncCmpA_));
+            ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(syncCmpA_, offsetTicks));
+            ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(syncGen_,
+                MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, syncCmpA_, MCPWM_GEN_ACTION_HIGH)));
+        } else {
+            ESP_ERROR_CHECK(mcpwm_generator_set_action_on_timer_event(syncGen_,
+                MCPWM_GEN_TIMER_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, MCPWM_TIMER_EVENT_EMPTY, MCPWM_GEN_ACTION_HIGH)));
+        }
+        ESP_ERROR_CHECK(mcpwm_generator_set_action_on_compare_event(syncGen_,
+            MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, syncCmp_, MCPWM_GEN_ACTION_LOW)));
+    }
+
+    // Slave: each rising edge on `gpio` IS the period boundary — the timer count hardware-reloads
+    // to 0 and the generators run their period-start actions, making the sync a full TEZ
+    // substitute: an arbitrary phase jump lands in a defined period-start gate state instead of
+    // skipping a comparator event (stretched gate pulse), and a slow slave crystal that never
+    // reaches its own TEZ (reloaded below period every cycle) still gets shadow latching + gate
+    // actions. The reload target is fixed at 0 — any value past a live comparator would re-open
+    // the skip hazard; shift the MASTER's pulse (initSyncOut offsetTicks) to phase-shift instead.
+    // IDF allows one sync-trigger action per operator, so LS takes the public API (it guards
+    // against HS/LS overlap after a mid-cycle jump) and HS's action on the same trigger is a
+    // direct LL write: production has a single global leg, so this leg holds operator 0,
+    // genHS_ = generator 0 (first alloc) and trigger slot 0 (first free; the brake does not use
+    // the trigger table) — same hw-index assumption as count().
+    // Requires init(syncSlave=true); call before start().
+    void initSyncIn(int gpio, bool enLogic) {
+        mcpwm_gpio_sync_src_config_t sc = {
+            .group_id = group_,
+            .gpio_num = gpio,
+            .flags = {.active_neg = 0, .io_loop_back = 0, .pull_up = 0, .pull_down = 1},
+        };
+        ESP_ERROR_CHECK(mcpwm_new_gpio_sync_src(&sc, &syncIn_));
+        mcpwm_timer_sync_phase_config_t pc = {
+            .sync_src    = syncIn_,
+            .count_value = 0,
+            .direction   = MCPWM_TIMER_DIRECTION_UP,
+        };
+        ESP_ERROR_CHECK(mcpwm_timer_set_phase_on_sync(timer_, &pc));
+        ESP_ERROR_CHECK(mcpwm_generator_set_action_on_sync_event(genLS_,
+            MCPWM_GEN_SYNC_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, syncIn_,
+                                        enLogic ? MCPWM_GEN_ACTION_HIGH : MCPWM_GEN_ACTION_LOW)));
+        mcpwm_ll_generator_set_action_on_trigger_event(MCPWM_LL_GET_HW(group_), 0, 0,
+            MCPWM_TIMER_DIRECTION_UP, 0, MCPWM_GEN_ACTION_HIGH);
+    }
+#endif // WITH_WSYNC
+
     inline void setHsOff(uint16_t c) { mcpwm_comparator_set_compare_value(cmpHS_, c); }
     inline void setLsOff(uint16_t c) { mcpwm_comparator_set_compare_value(cmpLS_, c); }
 
@@ -203,6 +279,13 @@ public:
     ~MCPWM_SyncLeg() {
         if (timer_) mcpwm_timer_start_stop(timer_, MCPWM_TIMER_STOP_EMPTY);
         if (timer_) mcpwm_timer_disable(timer_);
+#if WITH_WSYNC
+        if (syncGen_)  mcpwm_del_generator(syncGen_);
+        if (syncCmp_)  mcpwm_del_comparator(syncCmp_);
+        if (syncCmpA_) mcpwm_del_comparator(syncCmpA_);
+        if (syncOper_) mcpwm_del_operator(syncOper_);
+        if (syncIn_)   mcpwm_del_sync_src(syncIn_);
+#endif
         if (genHS_) mcpwm_del_generator(genHS_);
         if (genLS_) mcpwm_del_generator(genLS_);
         if (cmpHS_) mcpwm_del_comparator(cmpHS_);

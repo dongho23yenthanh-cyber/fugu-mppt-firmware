@@ -52,6 +52,7 @@ Conventions used in the tables below:
 | `pwm_deadtime_ns`       | ns   | float  | 0       | HiLi hardware dead-time (MCPWM); 0 = none      |
 | `pwm_fault_pin`         | GPIO | int    | 255     | GPIO for HW OST brake (MCPWM); 255 = disabled  |
 | `pwm_fault_active_high` |      | bool   | 0       | 1 if fault asserts high, 0 if low              |
+| `pwm_sync_pin`          | GPIO | int    | —       | Wired-sync pulse pin (`WITH_WSYNC`, MCPWM); master out / slave in |
 | `panel_en`              | GPIO | int    | —       | Panel/input backflow enable switch pin         |
 | `panel_sd`              | GPIO | int    | —       | Panel/input backflow shutdown switch pin       |
 | `led_WS2812`            | GPIO | int    | —       | WS2812 status LED data pin; 255=disabled       |
@@ -121,6 +122,8 @@ See [Topology notes & examples](#topology-notes--examples) below for worked ACS7
 | `forced_pwm` |      | bool  | 0       | Force CCM PWM even at light loads (see notes below)        |
 | `pwm_driver` |      | enum  | ledc    | Gate driver: `ledc` or `mcpwm`. Only consulted when the firmware compiles in both (`CONFIG_FUGU_WITH_LEDC` and `CONFIG_FUGU_WITH_MCPWM`); with one compiled it is forced to that one |
 | `vout_max`   | V    | float | —       | Legacy output voltage limit (real one is in `limits.conf`) |
+| `sync_role`  |      | enum  | none    | Wired MCPWM clock sync (`WITH_WSYNC`): `none`, `master` (emit TEZ pulse on `board.conf::pwm_sync_pin`) or `slave` (phase-reload timer from that pin). See `doc/dev-notes/wired-sync.md` |
+| `sync_phase_ns` | ns | float | 0      | Master only: pulse offset from its TEZ (= slave period-start shift; half a period for 180° interleave). Ignored on a slave (reload fixed at 0) |
 
 ## charger.conf — battery termination
 

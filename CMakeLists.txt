@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 # Feature flags moved from WITH_* env vars to Kconfig (main/Kconfig.projbuild, CONFIG_FUGU_WITH_*).
 # Reject stale env usage so an old `WITH_BLE=0 idf.py build` can't silently build the feature *on*.
-foreach (_legacy WITH_BLE WITH_NETW WITH_SPROFILER WITH_VCONV WITH_MCPWM WITH_MEASURE_COIL)
+foreach (_legacy WITH_BLE WITH_NETW WITH_SPROFILER WITH_VCONV WITH_MCPWM WITH_MEASURE_COIL WITH_WSYNC)
     if (DEFINED ENV{${_legacy}})
         message(FATAL_ERROR
                 "${_legacy} env flag is gone — use CONFIG_FUGU_${_legacy} (idf.py menuconfig -> "

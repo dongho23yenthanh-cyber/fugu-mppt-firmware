@@ -124,7 +124,11 @@ class SynchronousConverter {
     // useMcpwm at runtime; with a single driver the unreachable arm is #if'd out and the call
     // folds to the same code as before. MCPWM commits both comparators on TEZ (glitch-free,
     // order-independent); the LEDC path keeps its two-write ordering dance.
-    void drvInit(uint8_t pinCtrl, uint8_t pinRect, const ConfFile &boardConf) {
+    void drvInit(uint8_t pinCtrl, uint8_t pinRect, const ConfFile &boardConf,
+                 const std::string &syncRole, float syncPhaseNs) {
+#if !WITH_WSYNC
+        (void) syncRole; (void) syncPhaseNs;
+#endif
 #if HAVE_MCPWM
         if (useMcpwm) {
             // bestTiming picks the max period_ticks the hw can give at pwmFrequency; rect_offset is
@@ -133,12 +137,45 @@ class SynchronousConverter {
             // InEn drivers do dead-time in the gate-driver chip, so the MCPWM dt submodule stays off.
             uint32_t dtTicks = pwmEnLogic ? 0u : (uint32_t) std::lround(
                 boardConf.getFloat("pwm_deadtime_ns", 0.f) * 1e-9f * (float) resolutionHz);
-            mcpwmDrv.init(0, pwmFrequency, pinCtrl, pinRect, dtTicks, pwmEnLogic);
+            bool syncSlave = false;
+#if WITH_WSYNC
+            syncSlave = syncRole == "slave";
+#endif
+            mcpwmDrv.init(0, pwmFrequency, pinCtrl, pinRect, dtTicks, pwmEnLogic, 0, syncSlave);
             uint8_t faultPin = boardConf.getByte("pwm_fault_pin", 255);
             if (faultPin != 255) {
                 faultBrake.initGpio(0, faultPin, boardConf.getByte("pwm_fault_active_high", 0));
                 faultBrake.bindLeg(mcpwmDrv.oper(), mcpwmDrv.genHS(), mcpwmDrv.genLS());
             }
+#if WITH_WSYNC
+            // Wired inter-chip clock sync, armed before start() so the timer never free-runs with
+            // the sync half-configured. Master: TEZ-locked pulse on pwm_sync_pin, sync_phase_ns
+            // shifts the pulse (= slave period start) for interleaving. Slave: pulse edge = period
+            // boundary; sync_phase_ns compensates the wire propagation delay only.
+            if (syncRole != "none") {
+                uint8_t syncPin = boardConf.getByte("pwm_sync_pin", 255);
+                assert_throw(syncPin != 255, "pwm_sync_pin missing in board.conf");
+                assert_throw(syncSlave ? GPIO_IS_VALID_GPIO(syncPin) : GPIO_IS_VALID_OUTPUT_GPIO(syncPin),
+                             "pwm_sync_pin invalid");
+                assert_throw(syncPin != pinCtrl && syncPin != pinRect && syncPin != pinSd
+                             && syncPin != faultPin, "pwm_sync_pin collides");
+                float tickHz = (float) mcpwmDrv.resolutionHz;
+                if (syncSlave) {
+                    // slave reload is fixed at count 0 (see initSyncIn); phase shifts live on the master
+                    if (syncPhaseNs != 0)
+                        ESP_LOGW("converter", "%s", "sync_phase_ns is master-only, ignored on slave");
+                    mcpwmDrv.initSyncIn(syncPin, pwmEnLogic);
+                    wsyncSlave = true;
+                } else {
+                    int32_t ph = (int32_t) (std::lround(syncPhaseNs * 1e-9f * tickHz) % mcpwmDrv.periodTicks);
+                    if (ph < 0) ph += mcpwmDrv.periodTicks;
+                    auto pulseTicks = (uint16_t) std::max(1l, std::lround(250e-9f * tickHz));
+                    mcpwmDrv.initSyncOut(syncPin, pulseTicks, (uint16_t) ph);
+                    ESP_LOGI("converter", "wired sync master pulse offset %ld ticks", (long) ph);
+                }
+                ESP_LOGI("converter", "wired sync %s pin=%u", syncRole.c_str(), syncPin);
+            }
+#endif
             mcpwmDrv.start();
             // Boot latched-low (consistent with disabled(), pwmCtrl==0); first protected
             // pwmPerturb(+) clears it. Without this, InEn boards (no pwm_sd) would switch early.
@@ -272,6 +309,9 @@ public:
     // Raw leg access for the beacon-sync servo (period trim + live count); null when LEDC active.
     MCPWM_SyncLeg *mcpwmLeg() { return useMcpwm ? &mcpwmDrv : nullptr; }
 #endif
+    // true when this converter is a wired-sync slave (sync_role=slave): the wire owns the
+    // period, so period-trimming servos (bsync) must not run.
+    bool wsyncSlave = false;
 
     [[nodiscard]] uint16_t getDtTicks() const {
         return drvDtTicks();
@@ -411,9 +451,23 @@ public:
             throw std::runtime_error("unrecognized pwm_driver_logic " + drvInpLogic);
         }
 
+        std::string syncRole = "none";
+        float syncPhaseNs = 0;
+#if WITH_WSYNC
+        syncRole = converterConf.getString("sync_role", "none");
+        if (syncRole != "none" && syncRole != "master" && syncRole != "slave")
+            throw std::runtime_error("unrecognized sync_role " + syncRole);
+        assert_throw(syncRole == "none" || useMcpwm, "sync_role needs pwm_driver=mcpwm");
+        syncPhaseNs = converterConf.getFloat("sync_phase_ns", 0.f);
+        assert_throw(std::abs(syncPhaseNs) <= 2e9f / (float) pwmFrequency, "sync_phase_ns out of range");
+#else
+        if (converterConf.getString("sync_role", "none") != "none")
+            ESP_LOGW("converter", "%s", "sync_role set but firmware built without FUGU_WITH_WSYNC");
+#endif
+
         // rect_offset is stored as a time (rect_offset_ns) and converted to counts below, so it
         // survives the LEDC<->MCPWM resolution change without re-measuring.
-        drvInit(pinCtrl, pinRect, boardConf);
+        drvInit(pinCtrl, pinRect, boardConf, syncRole, syncPhaseNs);
         ESP_LOGI("converter", "gate driver: %s (pwmMax=%u)", driverName, (unsigned) driverPwmMax);
 
         if (pinSd != 255) {

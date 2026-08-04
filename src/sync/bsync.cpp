@@ -185,6 +185,11 @@ bool BeaconSyncService::onStart() {
         ESP_LOGE(name(), "needs the mcpwm gate driver (converter.conf pwm_driver=mcpwm)");
         return false;
     }
+    if (converter.wsyncSlave) {
+        leg_ = nullptr;
+        ESP_LOGE(name(), "wired-sync slave: the sync wire owns the period, bsync must stay off");
+        return false;
+    }
     if (leg_->resolutionHz % 1000000u != 0) {
         // the phase grid math assumes an integral tick-per-us rate (true for 160 MHz)
         ESP_LOGE(name(), "tick rate %lu not integral per us", (unsigned long) leg_->resolutionHz);

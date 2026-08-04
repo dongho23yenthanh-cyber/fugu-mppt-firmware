@@ -275,6 +275,7 @@ const META = {
   pwm_deadtime_ns:{unit:"ns",desc:"HiLi hardware dead-time (MCPWM); 0 = none",type:"float"},
   pwm_fault_pin:{unit:"GPIO",desc:"GPIO for HW OST brake (MCPWM); 255 = disabled",type:"int"},
   pwm_fault_active_high:{unit:"",desc:"1 if fault asserts high, 0 if low",type:"bool"},
+  pwm_sync_pin:{unit:"GPIO",desc:"Wired-sync pulse pin (WITH_WSYNC, MCPWM): master out / slave in",type:"int"},
   pwm_in:{unit:"GPIO",desc:"Gate driver IN pin (InEn mode)",type:"int"},
   pwm_en:{unit:"GPIO",desc:"Gate driver EN pin (InEn mode)",type:"int"},
   panel_en:{unit:"GPIO",desc:"Panel/input backflow enable switch pin",type:"int"},
@@ -318,6 +319,8 @@ const META = {
   // converter.conf
   topo:{unit:"",desc:"Converter topology: buck or boost",type:"enum"},
   forced_pwm:{unit:"",desc:"Force CCM PWM even at light loads (1=on)",type:"bool"},
+  sync_role:{unit:"",desc:"Wired MCPWM clock sync (WITH_WSYNC): none, master or slave",type:"enum"},
+  sync_phase_ns:{unit:"ns",desc:"Master only: pulse offset (T/2 = 180deg interleave); ignored on slave",type:"float"},
   pwm_driver:{unit:"",desc:"Gate driver: ledc or mcpwm. Only consulted when the firmware compiles in both drivers (default ledc)",type:"enum"},
   boost:{unit:"",desc:"Legacy boost flag (replaced by topo=buck|boost)",type:"bool"},
   mode:{unit:"",desc:"Legacy control mode (currently unused)",type:"string"},
@@ -412,13 +415,13 @@ const FILE_KEYS = {
     "i2c_scl","i2c_sda","ina22x_addr","ina22x_alert","ina22x_conv_time_us","ina22x_range","ina22x_resistor",
     "led_WS2812","led_WS2812B","led_simple","mcu","ntc_ch","panel_en","panel_sd",
     "pwm_deadtime_ns","pwm_driver_logic","pwm_en","pwm_fault_active_high","pwm_fault_pin",
-    "pwm_freq","pwm_hi","pwm_in","pwm_li","pwm_sd","skip_assert"],
+    "pwm_freq","pwm_hi","pwm_in","pwm_li","pwm_sd","pwm_sync_pin","skip_assert"],
   "sensor.conf":["adc","despike","esp32adc1_avg","esp32adc1_sr","expected_hz",
     "ignore_calibration_constraints","notch_adaptive","notch_freq","notch_q","ntc_ch","power_conversion_eff"],
   "limits.conf":["iin_max","iout_max","iout_short","p_max","reverse_current_paranoia",
     "temp_derate","temp_max","vin_max","vin_min","vout_max"],
   "coil.conf":["L0","rect_offset_ns"],
-  "converter.conf":["forced_pwm","pwm_driver","topo"],
+  "converter.conf":["forced_pwm","pwm_driver","sync_phase_ns","sync_role","topo"],
   "charger.conf":["bat_c","cv_ceiling","cv_eoc","cv_float","ibat_max","recharge_dod","recharge_vfloor_band","tail_c_rate","vout_max",
     "vout_max_fallback","vout_offset_max"],
   "tracker.conf":["sweep_speed","target_duty_cycle"],
@@ -475,7 +478,7 @@ const DEFAULTS = {
   // coil.conf
   "rect_offset_ns":"0",
   // converter.conf
-  "forced_pwm":"0","pwm_driver":"\"ledc\"","topo":"\"buck\"",
+  "forced_pwm":"0","pwm_driver":"\"ledc\"","sync_phase_ns":"0","sync_role":"\"none\"","topo":"\"buck\"",
   // charger.conf
   "cv_eoc":"3.6","cv_float":"3.37","recharge_dod":"0.2","recharge_vfloor_band":"0.05","tail_c_rate":"0.05","vout_offset_max":"0.6",
   // tracker.conf

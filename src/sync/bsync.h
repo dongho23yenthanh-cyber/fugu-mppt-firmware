@@ -43,8 +43,11 @@ private:
     uint8_t bssid_[6]{};
     uint8_t channel_ = 1;
     float phaseUs_ = 0;      // per-device target phase offset on the shared grid
-    float kp_ = 5e-6f;       // period-ticks per phase-error-tick
-    float ki_ = 2.5e-7f;     // 1/s
+    float kp_ = 5e-6f;       // period-ticks per phase-error-tick (bw-scaled in onStart)
+    float ki_ = 2.5e-7f;     // 1/s (bw-scaled)
+    float bw_ = 1.0f;        // one-knob loop-bandwidth scale: lower = less phase breathing, slower lock
+    float alphaA_ = 0.3f;    // alpha-beta gains, bw-scaled (A~bw, B~bw² keeps damping)
+    float alphaB_ = 0.05f;
 
     // driver
     MCPWM_SyncLeg *leg_ = nullptr;
@@ -71,6 +74,8 @@ private:
     // rx-clock bridge state (rxCb only)
     int64_t rxExt_ = 0;      // 64-bit extension of the 32-bit hw rx stamp
     uint32_t rxLast_ = 0;
+    int64_t espLast_ = 0;    // esp_timer at last beacon; gaps > ~42 min lose 32-bit wraps -> restart
+    bool rxInit_ = false;
     int64_t dEst_ = 0;       // max of (rxExt_ - espAtCb) [µs]
     bool dInit_ = false;
 

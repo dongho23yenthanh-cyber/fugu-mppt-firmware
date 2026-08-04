@@ -77,8 +77,11 @@ is logged and the sync AP must share the STA's channel.
   claimed lock.
 - [x] **PS interference**: association resets power-save to MIN_MODEM which sleeps through
   most beacons — onTick re-forces `WIFI_PS_NONE` every second.
-- [ ] **Two-device relative sync**: scope both converters' switch nodes, trigger on one — the
-  other's edge must stop walking. Needs the second board.
+- [x] **Two-device relative sync** (electronic): fboost e=+0.8 µs and fbuck e=−0.9 µs locked
+  simultaneously to the same grid → relative phase 1.7 µs (~24° @39 kHz), zero average
+  frequency offset (crystals differ ~1.6 ppm). fboost also auto-relocked from conf after an
+  unattended reboot. Scope shot of both switch nodes (trigger on one, other edge stands
+  still) still worth taking for the record.
 - [ ] **Coast**: kill the AP; state → `coasting`, phase slips slowly (crystal temp drift
   only), relocks on AP return without a duty glitch.
 - [ ] **Timer index assumption**: `MCPWM_SyncLeg::count()` reads hw timer 0 of the group —

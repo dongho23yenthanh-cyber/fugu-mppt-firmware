@@ -40,14 +40,22 @@ void BeaconSyncService::rxCb(void *buf, wifi_promiscuous_pkt_type_t type) {
     uint64_t apTsf;                           // hw-inserted AP timestamp, first field of the body
     memcpy(&apTsf, pl + 24, 8);
 
-    // extend the 32-bit hw rx stamp (own µs clock, hw-latched at frame arrival) to 64 bit;
-    // valid while beacon gaps stay < 71 min (longer gaps step rxExt_, caught by the reject path)
+    // extend the 32-bit hw rx stamp (own µs clock, hw-latched at frame arrival) to 64 bit.
+    // A beacon gap long enough to lose whole 32-bit wraps (71.6 min) can't be delta-extended;
+    // restart the bridge + estimator instead of carrying a silently wrap-biased rxExt_.
     uint32_t rx32 = p->rx_ctrl.timestamp;
     int64_t espNow = esp_timer_get_time();
     portENTER_CRITICAL(&s->mux_);
-    if (s->rxLast_ == 0 && s->rxExt_ == 0) s->rxExt_ = rx32;
-    else s->rxExt_ += (uint32_t) (rx32 - s->rxLast_);
+    if (!s->rxInit_ || espNow - s->espLast_ > 2'500'000'000LL) {
+        s->rxExt_ = rx32;
+        s->rxInit_ = true;
+        s->dInit_ = false;
+        s->estInit_ = false;
+    } else {
+        s->rxExt_ += (uint32_t) (rx32 - s->rxLast_);
+    }
     s->rxLast_ = rx32;
+    s->espLast_ = espNow;
 
     // bridge rx clock -> esp_timer: both run off the same crystal, so d is constant per wifi
     // session; max-filter converges to (true offset - callback-latency floor)
@@ -89,7 +97,7 @@ void BeaconSyncService::rxCb(void *buf, wifi_promiscuous_pkt_type_t type) {
                 if (++s->rejStreak_ >= 8) s->estInit_ = false;
             } else {
                 s->rejStreak_ = 0;
-                constexpr double A = 0.3, B = 0.05; // alpha-beta, ~critically damped at 10 Hz beacons
+                double A = s->alphaA_, B = s->alphaB_; // alpha-beta, ~critically damped at bw=1 / 10 Hz beacons
                 s->est_.o = pred + A * resid;
                 s->est_.r = std::clamp(s->est_.r + B * resid / dt, -200e-6, 200e-6);
                 s->est_.t = w;
@@ -133,7 +141,7 @@ bool BeaconSyncService::radioUp() {
         }
     } else if (WiFi.channel() != channel_) {
         // associated: channel follows the AP, the conf value can't be applied
-        ESP_LOGW(name(), "associated on ch%d, conf channel %u ignored — sync AP must share the STA channel",
+        ESP_LOGW(name(), "associated on ch%d, conf channel %u ignored - sync AP must share the STA channel",
                  WiFi.channel(), channel_);
     }
     wifi_promiscuous_filter_t f = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT};
@@ -148,19 +156,7 @@ bool BeaconSyncService::radioUp() {
 }
 
 bool BeaconSyncService::onStart() {
-    leg_ = converter.mcpwmLeg();
-    if (!leg_ || !leg_->periodTicks) {
-        ESP_LOGE(name(), "needs the mcpwm gate driver (converter.conf pwm_driver=mcpwm)");
-        return false;
-    }
-    nomPeriod_ = leg_->periodTicks;
-    if (leg_->resolutionHz % 1000000u != 0) {
-        // the phase grid math assumes an integral tick-per-µs rate (true for 160 MHz)
-        ESP_LOGE(name(), "tick rate %lu not integral per µs", (unsigned long) leg_->resolutionHz);
-        return false;
-    }
-    ticksPerUs_ = leg_->resolutionHz / 1000000u;
-
+    // conf first: these early failure returns must leave no side effects behind
     ConfFile c{"/littlefs/conf/bsync.conf", true};
     auto bs = c.getString("bssid", "");
     if (!parseBssid(bs, bssid_)) {
@@ -174,8 +170,29 @@ bool BeaconSyncService::onStart() {
         return false;
     }
     phaseUs_ = c.getFloat("phase_us", 0.f);
-    kp_ = c.getFloat("kp", 5e-6f);
-    ki_ = c.getFloat("ki", 2.5e-7f);
+    // bw scales every loop bandwidth together, damping-preserving (first-order gains ~bw,
+    // integral/rate gains ~bw²). <1 trades lock/reacquire speed for less phase breathing:
+    // the crystals only drift at ppb/s, so the loop can average much harder than default.
+    bw_ = std::clamp(c.getFloat("bw", 1.0f), 0.05f, 4.0f);
+    kp_ = c.getFloat("kp", 5e-6f) * bw_;
+    ki_ = c.getFloat("ki", 2.5e-7f) * bw_ * bw_;
+    alphaA_ = std::min(0.3f * bw_, 0.9f);
+    alphaB_ = 0.05f * bw_ * bw_;
+
+    leg_ = converter.mcpwmLeg();
+    if (!leg_ || !leg_->periodTicks) {
+        leg_ = nullptr;
+        ESP_LOGE(name(), "needs the mcpwm gate driver (converter.conf pwm_driver=mcpwm)");
+        return false;
+    }
+    if (leg_->resolutionHz % 1000000u != 0) {
+        // the phase grid math assumes an integral tick-per-us rate (true for 160 MHz)
+        ESP_LOGE(name(), "tick rate %lu not integral per us", (unsigned long) leg_->resolutionHz);
+        leg_ = nullptr;
+        return false;
+    }
+    nomPeriod_ = leg_->periodTicks;
+    ticksPerUs_ = leg_->resolutionHz / 1000000u;
 
     portENTER_CRITICAL(&mux_);
     estInit_ = false;
@@ -183,6 +200,8 @@ bool BeaconSyncService::onStart() {
     rejStreak_ = 0;
     rxExt_ = 0;
     rxLast_ = 0;
+    espLast_ = 0;
+    rxInit_ = false;
     dEst_ = 0;
     dInit_ = false;
     portEXIT_CRITICAL(&mux_);
@@ -214,8 +233,8 @@ bool BeaconSyncService::onStart() {
         onStop();
         return false;
     }
-    ESP_LOGI(name(), "sniffing %s ch=%u grid=%u+0.5 ticks @%lu Hz phase=%+.1f µs kp=%.2g ki=%.2g",
-             bs.c_str(), channel_, nomPeriod_, (unsigned long) leg_->resolutionHz, phaseUs_, kp_, ki_);
+    ESP_LOGI(name(), "sniffing %s ch=%u grid=%u+0.5 ticks @%lu Hz phase=%+.1f us bw=%.2f kp=%.2g ki=%.2g A=%.3f",
+             bs.c_str(), channel_, nomPeriod_, (unsigned long) leg_->resolutionHz, phaseUs_, bw_, kp_, ki_, alphaA_);
     return true;
 }
 

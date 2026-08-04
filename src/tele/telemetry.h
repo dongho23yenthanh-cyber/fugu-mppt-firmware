@@ -17,7 +17,7 @@ const std::string &getHostname(bool reload = false);
 
 std::string getDeviceId();
 
-void add_ap(const std::string &ssid, const std::string &psk);
+bool add_ap(const std::string &ssid, const std::string &psk);
 
 void wifi_load_conf();
 

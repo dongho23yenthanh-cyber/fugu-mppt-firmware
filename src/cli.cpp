@@ -298,7 +298,8 @@ static void cmdWifiAdd(cmd *c) {
     std::string ssid = ssidAndPw.substring(0, i).c_str();
     auto psk = ssidAndPw.substring(i + 1);
     ESP_LOGI("main", "adding wifi network %s (psk=%s)", ssid.c_str(), psk.c_str());
-    add_ap(ssid, psk.c_str());
+    if (!add_ap(ssid, psk.c_str()))
+        CMD_FAIL_RETURN("wifi-add: not stored (bad chars or write error)");
 }
 #endif
 

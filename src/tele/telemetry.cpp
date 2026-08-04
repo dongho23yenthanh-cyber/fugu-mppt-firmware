@@ -63,28 +63,49 @@ void wifi_load_conf() {
 
     for (const auto &k: wifiConf.keys()) {
         if (starts_with(k, "ssid") && !ends_with(k, "_psk")) {
-            auto ssid = wifiConf.getString(k).c_str();
+            auto ssid = wifiConf.getString(k); // keep the string alive; .c_str() on the temp dangled
             auto psk = wifiConf.c(k + "_psk", "");
             if (ssid == ssid_def and psk == psk_def) continue;
-            if (!wifiMulti.addAP(wifiConf.getString(k).c_str(), psk)) {
-                ESP_LOGW("tele", "Failed to add ap  %s", ssid);
+            if (!wifiMulti.addAP(ssid.c_str(), psk)) {
+                ESP_LOGW("tele", "Failed to add ap  %s", ssid.c_str());
             } else {
-                ESP_LOGI("tele", "Add WiFi SSID %s (psk %s)", ssid, psk ? "***" : "<none>");
+                ESP_LOGI("tele", "Add WiFi SSID %s (psk %s)", ssid.c_str(), psk ? "***" : "<none>");
                 noSsid = false;
             }
         }
     }
 }
 
-void add_ap(const std::string &ssid, const std::string &psk) {
+// The key is a sanitized label — the loader above reads the SSID from the VALUE, so '='/spaces
+// in an SSID can't corrupt the key=value format. '#' starts a comment in the conf parser and is
+// unstorable (no escaping): reject instead of persisting a truncated credential. Overwrites an
+// existing entry (psk update). Two single-pair add() calls: a 2-pair KVList literal with runtime
+// values miscompiles on xtensa 14.2 (throws length_error).
+bool add_ap(const std::string &ssid, const std::string &psk) {
     auto confPath = "/littlefs/conf/wifi.conf";
+    if (ssid.empty() || ssid.find('#') != std::string::npos || psk.find('#') != std::string::npos ||
+        trim(ssid) != ssid || trim(psk) != psk) {
+        ESP_LOGE("tele", "ssid/psk with '#' or leading/trailing whitespace cannot be stored");
+        return false;
+    }
+    std::string label = "ssid_";
+    for (char c: ssid) label += (char) (isalnum((unsigned char) c) ? c : '_');
     ConfFile wifiConf{confPath, true};
-    wifiConf.add({
-        {"ssid_" + ssid, ssid},
-        {"ssid_" + ssid + "_psk", psk.c_str()}
-    });
+    // different SSIDs can sanitize to the same label; suffix instead of silently clobbering
+    auto base = label;
+    for (int i = 2; !wifiConf.getString(label, ssid).empty() &&
+                    wifiConf.getString(label, ssid) != ssid && i < 10; ++i)
+        label = base + std::to_string(i);
+    // psk first: if the second write fails, an orphan _psk key is ignored by the loader,
+    // while an orphan ssid key would be joined as an open network
+    if (!wifiConf.add({{label + "_psk", psk}}, true) ||
+        !wifiConf.add({{label, ssid}}, true)) {
+        ESP_LOGE("tele", "failed to write %s", confPath);
+        return false;
+    }
     ESP_LOGI("tele", "Added Wifi AP %s to %s", ssid.c_str(), confPath);
     noSsid = false;
+    return true;
 }
 
 std::string getDeviceId() {

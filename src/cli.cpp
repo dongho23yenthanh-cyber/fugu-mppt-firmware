@@ -1217,7 +1217,7 @@ static void cmdStatus(cmd *) {
     const auto &p = chg.params;
     auto &bs = chg.batSt;
     bool vcOk = bs.haveValidCellVoltage();
-    uint32_t ageS = bs.vcell_high > 0 ? (uint32_t) ((wallClockUs() - bs.vcell_high_t) / 1000000ULL) : 0;
+    uint32_t ageS = bs.vcell_high > 0 ? (uint32_t) ((static_cast<uint32_t>(wallClockUs()) - bs.vcell_high_t) / 1000000ULL) : 0;
 
     UART_LOG("Charger: %s", (bool) chg.termCond ? "TERMINATED (float)" : "charging");
     UART_LOG("  Vbat_max=%.2fV Vout_max=%.2fV  Ibat_lim=%.1fA Iout_max=%.1fA",

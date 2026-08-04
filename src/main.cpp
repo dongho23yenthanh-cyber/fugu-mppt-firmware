@@ -366,7 +366,7 @@ static void bootWatchdogDisarm() {
 static void lfMarkOtaValid() {
     static bool done = false;
     if (done || millis() < OTA_VALIDATE_UPTIME_MS) return;
-    if (!timeLastSampler || (wallClockUs() - timeLastSampler) > 1000000) return; // RT sampler alive?
+    if (!timeLastSampler || (wallClockUs() - timeLastSampler) > 1000000ULL) return; // RT sampler alive?
 
     done = true;
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -699,8 +699,8 @@ static void lfWatchdog(time_us nowUs, uint32_t dt, uint32_t sps, uint32_t nSampl
 // TODO(remove): this whole watchdog is a stopgap for an unresolved CV-floor/limit lockup. Once the
 // root cause is fixed it should go — it has no place rebooting a healthy converter. The 2h timeout
 // keeps it from firing on the normal low-power dawn ramp (Vin>>Vout, Iout<0.3A is legit then).
-// Uses esp_timer_get_time() (monotonic 64-bit µs) — the shared wall clock is 32-bit micros() and
-// wraps every ~71min, too short to time a 2h interval.
+// Uses esp_timer_get_time() (monotonic 64-bit µs) directly — avoids the instrumented
+// wallClockUs() overhead and keeps the watchdog independent of the RT loop.
 static void lfStuckWatchdog() {
     static int64_t stuckSinceUs = 0;
     static bool triedRelease = false;
@@ -830,7 +830,7 @@ static void lfUpdateLed(time_us nowUs) {
         if (g_app.setupErr) { led.setHexShort(0x600); return; }
         if (!sensors.Vin) return;
         if (mppt.boardPowerSupplyUnderVoltage(true)) { led.setHexShort(0x100); return; }
-        if (nowUs > 60000000 * 15) led.setHexShort(0x000); // turn off light at night (protect insects)
+        if (nowUs > 60000000ULL * 15) led.setHexShort(0x000); // turn off light at night (protect insects)
         else led.setHexShort(sensors.Vout->last > sensors.Vin->last ? 0x100 : 0x300);
         return;
     }

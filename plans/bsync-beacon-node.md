@@ -2,6 +2,23 @@
 
 # Plan: dedicated beacon node for bsync (ESP32-S3)
 
+## Status (2026-08-04, bench)
+
+- **Phase 0 verdict: the S3 MAC hardware DOES rewrite the timestamp field of raw-injected
+  beacon frames.** Evidence: XIAO node (bssid `10:20:ba:05:4c:8d`, ch 13) transmits softAP
+  beacons (10/s) + injected sentinel-timestamp frames (50/s); fbuck's bsync accepted ~60/s
+  with `rej=0` and locked (e ±2 µs) — a verbatim sentinel would be rejected every time with
+  a ~10¹⁹ µs residual, so acceptance at 6× the softAP rate proves hw stamping.
+- **Phase 1+2 de facto running**: `etc/bsync-beacon/` (~160 LOC) is the node, flashed on a
+  Seeed XIAO ESP32-S3; hw-stamped injected frames at 20 ms already give the high-rate
+  timebase with zero receiver changes. LED heartbeat 0.5 Hz = AP+injector alive.
+- **Phase 3 partly done**: receiver `bw` knob exists (fbuck runs bw=0.20 → kp=1e-06
+  ki=1e-08 A=0.060); wander measurement in progress.
+- Bring-up traps hit: XIAO silently re-enters ROM download mode after esptool's RTS reset
+  when it was replugged with BOOT held (needs a clean replug); receiver must not be
+  associated to an AP or the sniffer stays on that AP's channel (`wifi off` first).
+- Open: fboost still on the FRITZ timebase; SSID/PSK per-chip polish; RSSI weighting.
+
 ## Goal
 
 A cheap, always-on, off-board beacon source that replaces the household AP as the bsync

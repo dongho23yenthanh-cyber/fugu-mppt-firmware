@@ -71,6 +71,14 @@ private:
     bool estInit_ = false;
     uint8_t rejStreak_ = 0;
     uint32_t nRejected_ = 0, nClockDomain_ = 0, nTsfDead_ = 0;
+    // reject-streak revalidation: a streak collects REVAL_N raw offsets and rebases on their
+    // MEDIAN only if it truly disagrees — a transient reject burst (callback-latency spike,
+    // bad-stamp cluster) then causes NO phase step. Hard re-seed stays reserved for epoch jumps.
+    static constexpr int REVAL_N = 15;
+    double revalBuf_[REVAL_N]{};
+    uint8_t revalCnt_ = 0;
+    bool revaling_ = false;
+    uint32_t nReval_ = 0, nRevalStep_ = 0;
     // rx-clock bridge state (rxCb only)
     int64_t rxExt_ = 0;      // 64-bit extension of the 32-bit hw rx stamp
     uint32_t rxLast_ = 0;
@@ -81,6 +89,11 @@ private:
 
     // servo state
     double iAcc_ = 0;
+    // feedforward uses a ~30s-smoothed drift rate: raw r carries per-frame estimator noise that
+    // would otherwise be applied directly as frequency modulation (u = 0.5 + P·r + ...), slewing
+    // the phase ~±1µs/s at 60 beacons/s (observed as white ±2µs shot noise on the scope)
+    double rSmooth_ = 0;
+    bool rSmoothInit_ = false;
     int64_t lastServoUs_ = 0, lastRadioRetryUs_ = 0;
     float lastErrUs_ = NAN;
     enum class Lock : uint8_t { Acquiring, Locked, Coasting } lock_ = Lock::Acquiring;

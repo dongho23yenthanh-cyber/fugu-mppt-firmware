@@ -51,6 +51,7 @@ void BeaconSyncService::rxCb(void *buf, wifi_promiscuous_pkt_type_t type) {
         s->rxInit_ = true;
         s->dInit_ = false;
         s->estInit_ = false;
+        s->revaling_ = false;
     } else {
         s->rxExt_ += (uint32_t) (rx32 - s->rxLast_);
     }
@@ -58,18 +59,21 @@ void BeaconSyncService::rxCb(void *buf, wifi_promiscuous_pkt_type_t type) {
     s->espLast_ = espNow;
 
     // bridge rx clock -> esp_timer: both run off the same crystal, so d is constant per wifi
-    // session; max-filter converges to (true offset - callback-latency floor)
+    // session; max-filter converges to (true offset - callback-latency floor). Ratchet only
+    // during acquisition: after convergence a lucky low-latency callback would rebase the
+    // bridge and step the phase by µs (observed +1.85µs on the scope) — freeze it instead,
+    // keeping only the epoch-jump re-seeds. The frozen floor residual is a small constant
+    // per-device bias.
     int64_t dMeas = s->rxExt_ - espNow;
-    if (!s->dInit_ || dMeas > s->dEst_) {
+    bool acquiring = !s->estInit_ || s->est_.nBeacons < 300;
+    if (!s->dInit_ || (dMeas > s->dEst_ && acquiring)) {
         if (s->dInit_ && dMeas - s->dEst_ > 1'000'000) { // rx-clock epoch jumped (wifi restart)
             s->nClockDomain_++;
-            s->dEst_ = dMeas;
-        } else {
-            s->dEst_ = dMeas;
         }
+        s->dEst_ = dMeas;
         s->dInit_ = true;
-    } else if (s->dEst_ - dMeas > 1'000'000) {           // epoch jumped backwards: re-seed bridge
-        s->nClockDomain_++;
+    } else if (s->dEst_ - dMeas > 1'000'000 || dMeas - s->dEst_ > 1'000'000) {
+        s->nClockDomain_++;                              // epoch jumped: re-seed bridge
         s->dEst_ = dMeas;
     }
 
@@ -87,21 +91,45 @@ void BeaconSyncService::rxCb(void *buf, wifi_promiscuous_pkt_type_t type) {
             // rejStreak_ path can't reach this (dt stays negative for hours) — re-seed now
             s->est_ = {meas, 0.0, w, 1};
             s->rejStreak_ = 0;
+            s->revaling_ = false;
         } else if (dt > 1000.0) {             // ignore duplicate/burst frames
             double pred = s->est_.o + s->est_.r * dt;
-            double resid = meas - pred;
-            if (std::abs(resid) > 500.0) {
-                s->nRejected_++;
-                // AP reboot / local TSF step: re-seed after a persistent jump instead of
-                // rejecting forever (absence of accepted beacons must not freeze the estimate)
-                if (++s->rejStreak_ >= 8) s->estInit_ = false;
+            if (s->revaling_) {
+                // reject-streak revalidation: collect raw offsets, judge by their median.
+                // est stays frozen meanwhile (servo keeps predicting via r).
+                s->revalBuf_[s->revalCnt_++] = meas;
+                if (s->revalCnt_ >= REVAL_N) {
+                    double tmp[REVAL_N];
+                    memcpy(tmp, s->revalBuf_, sizeof tmp);
+                    std::sort(tmp, tmp + REVAL_N);
+                    double med = tmp[REVAL_N / 2];
+                    if (std::abs(med - pred) > 500.0) {
+                        pred = med;           // genuine offset step: robust rebase, keep r
+                        s->nRevalStep_++;
+                    }                          // else: transient burst — resume with NO step
+                    s->est_.o = pred;          // o re-anchored at time w in both cases
+                    s->est_.t = w;
+                    // nBeacons preserved: the dEst_ ratchet stays frozen through revalidation
+                    s->revaling_ = false;
+                    s->rejStreak_ = 0;
+                }
             } else {
-                s->rejStreak_ = 0;
-                double A = s->alphaA_, B = s->alphaB_; // alpha-beta, ~critically damped at bw=1 / 10 Hz beacons
-                s->est_.o = pred + A * resid;
-                s->est_.r = std::clamp(s->est_.r + B * resid / dt, -200e-6, 200e-6);
-                s->est_.t = w;
-                s->est_.nBeacons++;
+                double resid = meas - pred;
+                if (std::abs(resid) > 500.0) {
+                    s->nRejected_++;
+                    if (++s->rejStreak_ >= 8) { // persistent disagreement: revalidate, don't re-seed
+                        s->revaling_ = true;
+                        s->revalCnt_ = 0;
+                        s->nReval_++;
+                    }
+                } else {
+                    s->rejStreak_ = 0;
+                    double A = s->alphaA_, B = s->alphaB_; // alpha-beta, ~critically damped at bw=1 / 10 Hz beacons
+                    s->est_.o = pred + A * resid;
+                    s->est_.r = std::clamp(s->est_.r + B * resid / dt, -200e-6, 200e-6);
+                    s->est_.t = w;
+                    s->est_.nBeacons++;
+                }
             }
         }
     }
@@ -209,8 +237,13 @@ bool BeaconSyncService::onStart() {
     rxInit_ = false;
     dEst_ = 0;
     dInit_ = false;
+    revaling_ = false;
+    revalCnt_ = 0;
     portEXIT_CRITICAL(&mux_);
     nRejected_ = nClockDomain_ = nTsfDead_ = 0;
+    nReval_ = nRevalStep_ = 0;
+    rSmooth_ = 0;
+    rSmoothInit_ = false;
     iAcc_ = 0;
     uCmd_ = 0.5f;
     sdCarry_ = 0;
@@ -287,11 +320,21 @@ void BeaconSyncService::servo(int64_t nowUs) {
 
     int64_t age = w - e.t;
     bool fresh = init && e.nBeacons >= 5 && age >= 0 && age < 3'000'000;
+    // smooth the drift feedforward (~30s EWMA at 1Hz servo ticks): raw e.r is per-frame noisy
+    // and must not modulate the frequency directly
+    if (init && e.nBeacons >= 5) {
+        if (!rSmoothInit_) {
+            rSmooth_ = e.r;
+            rSmoothInit_ = true;
+        } else {
+            rSmooth_ += (e.r - rSmooth_) / 30.0;
+        }
+    }
     if (!fresh) {
-        // coast on the learned frequency trim (drift feedforward + I residual); no phase
-        // corrections without a timebase
+        // coast on the learned frequency trim (smoothed drift feedforward + I residual); no
+        // phase corrections without a timebase
         lock_ = (init && e.nBeacons >= 5) ? Lock::Coasting : Lock::Acquiring;
-        uCmd_ = (float) std::clamp(0.5 + (double) nomPeriod_ * e.r + iAcc_, 0.0, 1.0);
+        uCmd_ = (float) std::clamp(0.5 + (double) nomPeriod_ * rSmooth_ + iAcc_, 0.0, 1.0);
         return;
     }
 
@@ -318,8 +361,8 @@ void BeaconSyncService::servo(int64_t nowUs) {
     iAcc_ = std::clamp(iAcc_ + (double) ki_ * eTicks * dt, -0.45, 0.45);
     // frequency feedforward from the measured drift: the P-term's pull-in range is only a few
     // ppm and the wrapped phase error integrates to ~zero, so the crystal offset (tens of ppm)
-    // must come from r, not the PI
-    uCmd_ = (float) std::clamp(0.5 + (double) nomPeriod_ * e.r + (double) kp_ * eTicks + iAcc_, 0.0, 1.0);
+    // must come from r (smoothed), not the PI
+    uCmd_ = (float) std::clamp(0.5 + (double) nomPeriod_ * rSmooth_ + (double) kp_ * eTicks + iAcc_, 0.0, 1.0);
     lock_ = std::abs(lastErrUs_) < 5.0f ? Lock::Locked : Lock::Acquiring;
 }
 
@@ -363,9 +406,10 @@ std::string BeaconSyncService::statusDetail() const {
     const char *st = lock_ == Lock::Locked ? "locked" : lock_ == Lock::Coasting ? "coasting" : "acquiring";
     char buf[144];
     snprintf(buf, sizeof buf,
-             "%s e=%+.1fµs u=%.3f drift=%+.1fppm beacons=%u age=%.1fs rej=%u dom=%u d=%.0fµs",
+             "%s e=%+.1fµs u=%.3f drift=%+.1fppm beacons=%u age=%.1fs rej=%u dom=%u rv=%u/%u d=%.0fµs",
              st, lastErrUs_, (double) uCmd_, e.r * 1e6, (unsigned) e.nBeacons, age,
-             (unsigned) nRejected_, (unsigned) nClockDomain_, (double) d);
+             (unsigned) nRejected_, (unsigned) nClockDomain_, (unsigned) nReval_, (unsigned) nRevalStep_,
+             (double) d);
     return buf;
 }
 

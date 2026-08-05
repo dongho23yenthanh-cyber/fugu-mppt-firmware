@@ -40,6 +40,7 @@
 - [clangd LSP for xtensa](project_clangd_xtensa_lsp.md) — .clangd strips xtensa-only flags; query-driver resolves newlib headers
 - [InfluxDB line protocol now in-house](project_influxdb_lineprotocol_inhouse.md) — src/tele/line_protocol.h; vendored submodule removed
 - [Binary line protocol + tamp](project_binary_lineprotocol_and_tamp.md) — sym_line_protocol.h 2.6-4x vs text (~13x w/ tamp); NOT yet wired into telemetry.cpp
+- [BLE telemetry stream](project_ble_telemetry_stream.md) — CONFIG_FUGU_WITH_BLE_TELE, NUS 0005, set-time+tele-ble 1; builds green, NOT yet bench-tested; commit etc/fugu changes to fugu-py too
 - [Creds in gitignored env files](reference_creds_env_files.md) — etc/influx.env + etc/mqtt.env; source, don't hardcode
 - [InfluxDB timestamps were "lu" (obsolete)](project_influxdb_timestamp_llu_bug.md) — newlib %llu lesson; lib removed
 - [OTA push over BLE (no WiFi)](project_ota_over_ble.md) — otab begin/end + FW char, credit-window streaming
@@ -61,7 +62,7 @@
 - [Router liveness watchdog (self-recovery)](project_router_liveness_watchdog.md) — reboots itself on sustained upstream-LAN loss; `GET/POST /liveness`
 - [fl4p/esp32_nat_router_extended fork branches](reference_fl4p_nat_router_fork.md) — liveness-watchdog, upload-firmware-button, all-fixes; s3 needs 4MB flashsize
 - [Verify chip + firmware before flashing](feedback_verify_chip_before_flash.md) — `esptool chip_id` + serial banner; fugu units look identical to NAT router on USB
-- [Confirm before flashing/OTA](feedback_confirm_before_flashing.md) — ask for explicit go before every flash, bench units included
+- [Flash policy](feedback_confirm_before_flashing.md) — bench units: flash without asking (8-04); fry/flat: still confirm first
 - [Stop conversion before OTAing fry/flat at high power](project_fugu_ota_stop_conversion_high_power.md) — `dc 0` first (drops load + disables loop-latency watchdog); reboot auto-resumes
 - [classic-ESP32 IRAM overflow + overlay](project_esp32_iram_overlay.md) — build in build-esp32/, not shared build/
 - [Wokwi CI token](reference_wokwi_cli_token.md) — WOKWI_CLI_TOKEN; ~/.wokwi/user.tok is a license, not the CI token

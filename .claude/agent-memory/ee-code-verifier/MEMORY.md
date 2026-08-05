@@ -6,3 +6,5 @@
 - [esp32cont getSamplingRate dual-formula bug](project_esp32cont_samplingrate_dual_formula.md) — start() and getSamplingRate() compute pattern length independently; disagree off the NTC+duplicate path → 100Hz notch mistuned
 - [esp32cont read() throws in RT + no no-sample watchdog](project_esp32cont_read_throws_and_no_sample_watchdog.md) — read() can throw into RT loop; Wokwi never-samples starves silently; ISR path itself is correct
 - [fry ADC-error reboot loop (2026-05-29)](project_fry_adc_error_reboot_loop_may29.md) — internal cont-ADC (vin+ntc) DMA stalls every boot, resetPeripherals won't revive it (flat does), reboots ~15s; real root = heap/vtable corruption (HEAP_POISONING is the probe); gpio_install warning benign
+- [wsync sync event = zero dead-time shoot-through](project_wsync_sync_event_shootthrough.md) — follower sync drives LS LOW + HS HIGH on the same trigger, DT submodule bypassed; only safe while locked
+- [wsync coupling-network worked numbers](project_wsync_coupling_network_numbers.md) — real bias 0.64 V (not 0.77), C2 in series with C1, τ=6.1 µs, no CM rejection above DC

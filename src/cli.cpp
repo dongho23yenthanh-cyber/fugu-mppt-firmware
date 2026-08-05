@@ -809,6 +809,18 @@ static void cmdRtStats(cmd *) {
     print_real_time_stats_blocking();
 }
 
+// wired-sync follower diagnostic: edge rate on the sync pin (PCNT)
+static void cmdWsync(cmd *) {
+    int since = converter.wsyncEdges();
+    if (since < 0) {
+        UART_LOG("wsync: no edge counter (not a wired-sync follower, or WITH_WSYNC off)");
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(250));
+    int n = converter.wsyncEdges();
+    UART_LOG("wsync edges: %d in 250ms (%.2f kHz), %d since last query", n, n * 4e-3, since);
+}
+
 // monotonic seconds since boot; resets only on reboot (unlike status N, which zeroes on each sweep)
 static void cmdUptime(cmd *) {
         UART_LOG("Uptime: %lu s", (uint32_t) (esp_timer_get_time() / 1000000));
@@ -1398,6 +1410,7 @@ void setupCli() {
     cli.addBoundlessCmd("crash", cmdCrash); // crash <null|abort|stack>: deliberate panic, writes coredump
 #endif
     cli.addCommand("uptime", cmdUptime);
+    cli.addCommand("wsync", cmdWsync);
     cli.addBoundlessCmd("sensor", cmdSensor); // `sensor` full dump; `sensor avg` compact EWM line
 #ifdef WITH_NETW
     cli.addCommand("ip", cmdIp);

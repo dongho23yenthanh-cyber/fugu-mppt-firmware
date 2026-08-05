@@ -216,9 +216,9 @@ bool BeaconSyncService::onStart() {
         ESP_LOGE(name(), "needs the mcpwm gate driver (converter.conf pwm_driver=mcpwm)");
         return false;
     }
-    if (converter.wsyncSlave) {
+    if (converter.wsyncFollower) {
         leg_ = nullptr;
-        ESP_LOGE(name(), "wired-sync slave: the sync wire owns the period, bsync must stay off");
+        ESP_LOGE(name(), "wired-sync follower: the sync wire owns the period, bsync must stay off");
         return false;
     }
     if (leg_->resolutionHz % 1000000u != 0) {

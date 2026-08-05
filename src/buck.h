@@ -26,6 +26,9 @@ using LegacyPwm = PWM_ESP32_ledc;
 #if WITH_MCPWM
 #include "pwm/mcpwm.h"
 #define HAVE_MCPWM 1
+#if WITH_WSYNC
+#include <driver/pulse_cnt.h>
+#endif
 #endif
 
 #else // MOCK
@@ -137,11 +140,11 @@ class SynchronousConverter {
             // InEn drivers do dead-time in the gate-driver chip, so the MCPWM dt submodule stays off.
             uint32_t dtTicks = pwmEnLogic ? 0u : (uint32_t) std::lround(
                 boardConf.getFloat("pwm_deadtime_ns", 0.f) * 1e-9f * (float) resolutionHz);
-            bool syncSlave = false;
+            bool syncFollower = false;
 #if WITH_WSYNC
-            syncSlave = syncRole == "slave";
+            syncFollower = syncRole == "follower";
 #endif
-            mcpwmDrv.init(0, pwmFrequency, pinCtrl, pinRect, dtTicks, pwmEnLogic, 0, syncSlave);
+            mcpwmDrv.init(0, pwmFrequency, pinCtrl, pinRect, dtTicks, pwmEnLogic, 0, syncFollower);
             uint8_t faultPin = boardConf.getByte("pwm_fault_pin", 255);
             if (faultPin != 255) {
                 faultBrake.initGpio(0, faultPin, boardConf.getByte("pwm_fault_active_high", 0));
@@ -149,29 +152,54 @@ class SynchronousConverter {
             }
 #if WITH_WSYNC
             // Wired inter-chip clock sync, armed before start() so the timer never free-runs with
-            // the sync half-configured. Master: TEZ-locked pulse on pwm_sync_pin, sync_phase_ns
-            // shifts the pulse (= slave period start) for interleaving. Slave: pulse edge = period
-            // boundary; sync_phase_ns compensates the wire propagation delay only.
+            // the sync half-configured. Leader: TEZ-locked pulse on pwm_sync_pin, sync_phase_deg
+            // shifts the pulse (= follower period start) for interleaving. Follower: pulse edge
+            // = period boundary, no shift.
             if (syncRole != "none") {
                 uint8_t syncPin = boardConf.getByte("pwm_sync_pin", 255);
                 assert_throw(syncPin != 255, "pwm_sync_pin missing in board.conf");
-                assert_throw(syncSlave ? GPIO_IS_VALID_GPIO(syncPin) : GPIO_IS_VALID_OUTPUT_GPIO(syncPin),
+                assert_throw(syncFollower ? GPIO_IS_VALID_GPIO(syncPin) : GPIO_IS_VALID_OUTPUT_GPIO(syncPin),
                              "pwm_sync_pin invalid");
                 assert_throw(syncPin != pinCtrl && syncPin != pinRect && syncPin != pinSd
                              && syncPin != faultPin, "pwm_sync_pin collides");
                 float tickHz = (float) mcpwmDrv.resolutionHz;
-                if (syncSlave) {
-                    // slave reload is fixed at count 0 (see initSyncIn); phase shifts live on the master
+                // pad edge counter for both roles (`wsync` cmd): follower = wire delivery check,
+                // leader = self-check of its own pulse. Runs BEFORE the role init: enabling the
+                // pad's input/output here routes the matrix to plain GPIO, and initSyncOut must
+                // claim the output matrix LAST or the pulse never reaches the pad.
+                pcnt_unit_config_t upc = {.low_limit = -32768, .high_limit = 32767,
+                                          .intr_priority = 0, .flags = {}};
+                ESP_ERROR_CHECK(pcnt_new_unit(&upc, &wsyncPcnt_));
+                pcnt_chan_config_t cpc = {.edge_gpio_num = syncPin, .level_gpio_num = -1,
+                                          .flags = {.invert_edge_input = 0, .invert_level_input = 0,
+                                                    .virt_edge_io_level = 0, .virt_level_io_level = 1,
+                                                    .io_loop_back = 0}};
+                pcnt_channel_handle_t pch;
+                ESP_ERROR_CHECK(pcnt_new_channel(wsyncPcnt_, &cpc, &pch));
+                ESP_ERROR_CHECK(pcnt_channel_set_edge_action(pch, PCNT_CHANNEL_EDGE_ACTION_INCREASE,
+                                                             PCNT_CHANNEL_EDGE_ACTION_HOLD));
+                // level input unused: KEEP on both levels, else the (virtual) level line gates counting
+                ESP_ERROR_CHECK(pcnt_channel_set_level_action(pch, PCNT_CHANNEL_LEVEL_ACTION_KEEP,
+                                                              PCNT_CHANNEL_LEVEL_ACTION_KEEP));
+                ESP_ERROR_CHECK(pcnt_unit_enable(wsyncPcnt_));
+                ESP_ERROR_CHECK(pcnt_unit_clear_count(wsyncPcnt_));
+                ESP_ERROR_CHECK(pcnt_unit_start(wsyncPcnt_));
+                if (!syncFollower)
+                    ESP_ERROR_CHECK(gpio_set_direction((gpio_num_t) syncPin, GPIO_MODE_INPUT_OUTPUT));
+                if (syncFollower) {
+                    // follower reload is fixed at count 0 (see initSyncIn); phase shifts live on the leader
                     if (syncPhaseNs != 0)
-                        ESP_LOGW("converter", "%s", "sync_phase_ns is master-only, ignored on slave");
+                        ESP_LOGW("converter", "%s", "sync_phase_* is leader-only, ignored on follower");
                     mcpwmDrv.initSyncIn(syncPin, pwmEnLogic);
-                    wsyncSlave = true;
+                    wsyncFollower = true;
                 } else {
                     int32_t ph = (int32_t) (std::lround(syncPhaseNs * 1e-9f * tickHz) % mcpwmDrv.periodTicks);
                     if (ph < 0) ph += mcpwmDrv.periodTicks;
-                    auto pulseTicks = (uint16_t) std::max(1l, std::lround(250e-9f * tickHz));
+                    // ~1 us pulse: long vs gate edges and scope-friendly, short vs the receiver
+                    // RC bias droop (~8 us)
+                    auto pulseTicks = (uint16_t) std::max(1l, std::lround(1e-6f * tickHz));
                     mcpwmDrv.initSyncOut(syncPin, pulseTicks, (uint16_t) ph);
-                    ESP_LOGI("converter", "wired sync master pulse offset %ld ticks", (long) ph);
+                    ESP_LOGI("converter", "wired sync leader pulse offset %ld ticks", (long) ph);
                 }
                 ESP_LOGI("converter", "wired sync %s pin=%u", syncRole.c_str(), syncPin);
             }
@@ -309,9 +337,24 @@ public:
     // Raw leg access for the beacon-sync servo (period trim + live count); null when LEDC active.
     MCPWM_SyncLeg *mcpwmLeg() { return useMcpwm ? &mcpwmDrv : nullptr; }
 #endif
-    // true when this converter is a wired-sync slave (sync_role=slave): the wire owns the
-    // period, so period-trimming servos (bsync) must not run.
-    bool wsyncSlave = false;
+    // true when this converter is a wired-sync follower (sync_role=follower): the wire owns
+    // the period, so period-trimming servos (bsync) must not run.
+    bool wsyncFollower = false;
+#if WITH_WSYNC
+    pcnt_unit_handle_t wsyncPcnt_ = nullptr;
+#endif
+    // sync-pin edges since the last call (follower bench diagnostic); -1 = no counter
+    int wsyncEdges() {
+#if WITH_WSYNC
+        if (wsyncPcnt_) {
+            int c = 0;
+            pcnt_unit_get_count(wsyncPcnt_, &c);
+            pcnt_unit_clear_count(wsyncPcnt_);
+            return c;
+        }
+#endif
+        return -1;
+    }
 
     [[nodiscard]] uint16_t getDtTicks() const {
         return drvDtTicks();
@@ -455,11 +498,17 @@ public:
         float syncPhaseNs = 0;
 #if WITH_WSYNC
         syncRole = converterConf.getString("sync_role", "none");
-        if (syncRole != "none" && syncRole != "master" && syncRole != "slave")
+        if (syncRole != "none" && syncRole != "leader" && syncRole != "follower")
             throw std::runtime_error("unrecognized sync_role " + syncRole);
         assert_throw(syncRole == "none" || useMcpwm, "sync_role needs pwm_driver=mcpwm");
-        syncPhaseNs = converterConf.getFloat("sync_phase_ns", 0.f);
-        assert_throw(std::abs(syncPhaseNs) <= 2e9f / (float) pwmFrequency, "sync_phase_ns out of range");
+        // phase as an angle (frequency-independent, 180 = interleave), plus an additive ns trim
+        // for wire + receiver propagation delay, which is a time and does not scale with pwm_freq
+        float periodNs = 1e9f / (float) pwmFrequency;
+        float syncPhaseDeg = converterConf.getFloat("sync_phase_deg", 0.f);
+        float trimNs = converterConf.getFloat("sync_phase_ns", 0.f);
+        assert_throw(std::abs(syncPhaseDeg) <= 3600.f, "sync_phase_deg out of range");
+        assert_throw(std::abs(trimNs) <= periodNs, "sync_phase_ns out of range");
+        syncPhaseNs = syncPhaseDeg * (periodNs / 360.f) + trimNs;
 #else
         if (converterConf.getString("sync_role", "none") != "none")
             ESP_LOGW("converter", "%s", "sync_role set but firmware built without FUGU_WITH_WSYNC");

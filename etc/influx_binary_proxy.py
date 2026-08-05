@@ -19,11 +19,16 @@ Usage:
 """
 import argparse, socket, sys, time
 
-if sys.platform == 'linux':
-    try:
-        import bluek.shadow  # noqa: F401 — kernel-direct BLE (fl4p/bluek): no bluetoothd D-Bus
-    except ImportError:      # races, and connections die with the process (no stale links)
-        pass
+def use_bluek():
+    """Shadow bleak with fl4p/bluek (kernel-direct, no bluetoothd D-Bus races; connections die
+    with the process). Only for the CONNECTION modes — the --adv observer stays on stock bleak:
+    bluetoothd discovery reports duplicates steadily, while raw mgmt discovery gets kernel-
+    deduped into rare bursts (and holds no connections, so its pathologies don't apply)."""
+    if sys.platform == 'linux':
+        try:
+            import bluek.shadow  # noqa: F401
+        except ImportError:
+            pass
 
 sys.path.insert(0, __file__.rsplit('/', 1)[0])  # etc/ on the path -> fugu package
 from fugu.teledec import decode_payload, TeleStream, tamp
@@ -98,6 +103,7 @@ def serve_udp(args, fwd):
 def serve_ble_all(args, fwd):
     """One service for every fugu device in range: scan for NUS/fugu-* advertisers, run one
     worker (connection + enable sequence + decode) per device, re-discover on loss."""
+    use_bluek()
     import queue, threading, asyncio
     from fugu.transport import BleTransport
     from fugu.console import Console
@@ -205,8 +211,11 @@ def serve_adv(args, fwd):
         lastseq[dev.address] = blob[1]
         _, seq, ui, uo, i, p, mcu, ntc, duty, lag, state = struct.unpack('<BB4e2b2HB', blob)
         # tag = hostname, matching the NUS/UDP telemetry series (BLE name is "fugu-<hostname>";
-        # the name rides the adv payload every 8th slot — scan responses don't reach every kernel)
-        name = names.get(dev.address) or 'fugu-' + dev.address.replace(':', '')[-6:].lower()
+        # the name rides the adv payload every 8th slot). Until it arrives (<=4 s), drop the
+        # record — a MAC fallback would fragment the series on every bridge restart.
+        name = names.get(dev.address)
+        if not name:
+            return
         name = name[5:] if name.startswith('fugu-') and len(name) > 5 else name
         ts = int(time.time() * 1000)
         temps = ''.join(f",{k}={v:.1f}" for k, v in (('mcu_temp', mcu), ('ntc_temp', ntc))
@@ -228,6 +237,7 @@ def serve_adv(args, fwd):
 
 
 def serve_ble(args, fwd):
+    use_bluek()
     import queue
     from fugu.transport import BleTransport
     from fugu.console import Console

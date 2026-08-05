@@ -40,7 +40,7 @@
 - [clangd LSP for xtensa](project_clangd_xtensa_lsp.md) — .clangd strips xtensa-only flags; query-driver resolves newlib headers
 - [InfluxDB line protocol now in-house](project_influxdb_lineprotocol_inhouse.md) — src/tele/line_protocol.h; vendored submodule removed
 - [Binary line protocol + tamp](project_binary_lineprotocol_and_tamp.md) — sym_line_protocol.h 2.6-4x vs text (~13x w/ tamp); NOT yet wired into telemetry.cpp
-- [BLE telemetry stream](project_ble_telemetry_stream.md) — CONFIG_FUGU_WITH_BLE_TELE, NUS 0005, set-time+tele-ble 1; builds green, NOT yet bench-tested; commit etc/fugu changes to fugu-py too
+- [BLE telemetry stream + adv broadcast](project_ble_telemetry_stream.md) — WITH_BLE_TELE (NUS 0005, set-time+tele-ble 1, rpi bridge) + WITH_BLE_ADV (connectionless mfr-adv record, --adv); both bench-validated 8-05; NEVER enable NIMBLE_EXT_ADV (silent ENOTSUP)
 - [Creds in gitignored env files](reference_creds_env_files.md) — etc/influx.env + etc/mqtt.env; source, don't hardcode
 - [InfluxDB timestamps were "lu" (obsolete)](project_influxdb_timestamp_llu_bug.md) — newlib %llu lesson; lib removed
 - [OTA push over BLE (no WiFi)](project_ota_over_ble.md) — otab begin/end + FW char, credit-window streaming

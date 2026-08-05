@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: ee629fbc-82ce-4953-a3c7-f58db5aa12e1
-  modified: 2026-08-05T15:21:46.291Z
+  modified: 2026-08-05T16:50:06.022Z
 ---
 
 Implemented 2026-08-05 (uncommitted at time of writing). Binary telemetry (sym_line_protocol +
@@ -71,6 +71,15 @@ mbuf either way). Patch lives in the IDF tree (now `-dirty`) AND as
 `etc/patches/nimble-att-tx-no-panic.patch` — reapply with `git -C
 $IDF_PATH/components/bt/host/nimble/nimble apply <patch>` after any IDF update. Details in
 doc/dev-notes/ble-telemetry.md.
+
+**Adv broadcast (8-05 eve, ea394e5):** `CONFIG_FUGU_WITH_BLE_ADV` — connectionless 17B record
+in mfr adv data (company 0xFFFF, magic 0xF7, struct `<BB4e2b2HB`), tele.conf `adv_ms` (def 500).
+Non-connectable adv keeps broadcasting DURING a connection (legacy API allows it; only
+connectable modes blocked); `teleAdvTick` reconciler owns adv-mode state — never trust the
+disconnect event alone. Do NOT enable `CONFIG_BT_NIMBLE_EXT_ADV`: legacy `ble_gap_adv_start`
+then links but silently returns ENOTSUP (console stops advertising, no error). Host:
+`influx_binary_proxy.py --adv`. Bench-validated both units, incl. unconnectable fboost;
+delivery thins ~4x during an active console session (RF contention), recovers on disconnect.
 
 **Open:** fboost `0sps` sampler (likely tied to its wsync-bench wiring; see commit 6833fb5) →
 near-zero points. No-WiFi boot still mis-archives today-as-yesterday in DailyEnergyMeter until

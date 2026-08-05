@@ -7,7 +7,16 @@ pulse hardware-locked to its MCPWM TEZ; followers hardware-reload their timer co
 rising edge. No software in the loop — relative jitter collapses to edge-detection dispersion
 (driver + coupling RC + input threshold, low single-digit ns, under one 6.25 ns tick), and a
 follower never free-runs more than one period from the leader, so crystal drift (±ppm) is absorbed
-as a sub-tick correction every cycle.
+as a sub-tick correction every cycle. The sync edge is resampled in the 160 MHz group clock, so
+relative jitter is up to one tick (6.25 ns), not under it.
+
+> **Unresolved hazard — do not run this on a live converter yet.** A sync edge sets LS LOW and HS
+> HIGH on the same clock. The LS→HS dead-band is *not* hardware dead-time: it comes from reserving
+> `pwmMax -= dtTicks` in software (`mcpwm.h` `init()`), which only holds when the edge coincides
+> with the period boundary. An out-of-phase edge — first lock, relock after a wire break, or any
+> noise glitch — therefore commands **zero** dead time, leaving 30–80 ns of real cross-conduction
+> at DC-link voltage. Steady-state lock is safe (sync coincides with the follower's own TEZ, LS
+> already off), which is why the bench leader test looked clean.
 
 ## Configuration
 
@@ -49,7 +58,13 @@ trigger 0, the single-global-leg hw-index assumption also used by `count()`).
 `bsync` and `sync_role=follower` are mutually exclusive at runtime: the bsync service refuses to
 start on a wired-sync follower (the wire owns the period).
 
-## Coupling circuit (galvanically isolated, tolerates ~1 V ground offset)
+## Coupling circuit (DC-blocked, tolerates ~1 V static ground offset)
+
+**Not galvanic isolation, and no common-mode rejection above DC.** C1's reactance at the pulse
+edge is ~50 Ω against a ~6.6 k node, so a ground-to-ground *step* couples in essentially
+unattenuated — a 2 V CM step with a ≤1 µs edge is indistinguishable from the sync pulse at the
+receiver. A static offset is rejected; a stiff conducted CM transient is not. For anything beyond
+a quiet bench, use a 1:1 pulse transformer or a digital isolator instead of this network.
 
 ```
   LEADER                                                      FOLLOWER
@@ -85,12 +100,21 @@ download mode); U0RXD is a good choice (silent at boot, non-strapping — costs 
 serial-RX console on that device, USB/telnet/BLE unaffected). Avoid U0TXD on the LEADER:
 ROM boot chatter becomes a >period-rate spurious sync burst into a converting follower.
 
-- C1 couples the edge; C2 is the AC ground bond that closes the HF return loop while standing
-  off the DC ground offset. Film/C0G ≥50 V (class-2 ceramic capacitance sags with bias).
-- R1/R2 bias the follower input to ~0.8 V (below V_IL). Thevenin ~7.6 k with C1 → RC ≈ 8 µs, long
-  vs the 1 µs pulse, so the edge arrives undistorted; the falling-edge undershoot is clamped
-  through the 1 k series resistor (add a BAT54S for tidiness).
-- Optional 74LVC1G17 Schmitt buffer (follower 3V3) between bias node and GPIO for noise margin.
+- C1 couples the edge; C2 closes the HF return loop while standing off the DC ground offset. It is
+  electrically **in series** with C1 for the pulse, so at 10 nF it is a 9 % series element, not the
+  negligible "ground bond" it looks like — use **100 nF** (C_eff 0.99 nF). Film/C0G ≥50 V
+  (class-2 ceramic capacitance sags with bias).
+- R1/R2 bias the follower input to **~0.64 V**, not the 0.77 V the bare divider suggests: the
+  sync-src config forces the internal pull-down on, and that ~45 k in series with the 1 k parallels
+  R2. V_IL,max is 0.25·VDD = 0.825 V, so the pull-down is what buys the margin. Over the 10–80 k
+  R_PD spread the idle sits at 0.41–0.69 V. R2 = 4.7 k makes it R_PD-independent.
+- Node Thevenin ~6.6 k, τ ≈ 6 µs. Over a 1 µs pulse the level droops 15 %, ending at ~3.4 V
+  against V_IH 2.475 V — 1.4× margin. The falling edge lands at **+0.17 V**, i.e. it does not
+  undershoot below ground at this pulse width, so no BAT54S is needed; the 1 k does carry ~0.3 mA
+  of ESD-clamp current on the rising edge and must stay.
+- **74LVC1G17 Schmitt buffer (follower 3V3) between bias node and GPIO — fit it.** The S3 pad has
+  no input hysteresis, and a slow or ringing edge on a 6.6 k node beside a switching stage will
+  multi-trigger. A false edge is not cosmetic; see the dead-time hazard below.
 - Route away from the power stage; if shielded, tie the shield on one side only.
 
 ## Interaction with bsync

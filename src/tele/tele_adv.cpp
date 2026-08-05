@@ -18,7 +18,12 @@ extern MpptController mppt;
 static const char *TAG = "teleadv";
 
 static uint32_t intervalMs = 0;      // tele.conf adv_ms, 0 = off
-static bool nonConnOwned = false;    // we replaced the connectable adv with a non-connectable one
+
+// ble_gap_adv_active() can't tell a connectable adv from our non-connectable one, so the mode we
+// last established is tracked here. Unknown means unverified (boot, svc restart) and always
+// re-asserts — assuming "connectable" while a non-conn adv runs strands the device unreachable.
+enum class AdvMode : uint8_t { Unknown, Connectable, NonConn };
+static AdvMode advMode = AdvMode::Unknown;
 static uint8_t seq = 0;
 static time_ms lastRefreshMs = 0;
 static time_ms lastWarnMs = 0;
@@ -37,13 +42,17 @@ static constexpr uint8_t MAGIC = 0xF7;
 void teleAdvInit() {
     intervalMs = ConfFile{"/littlefs/conf/tele.conf"}.getLong("adv_ms", 500);
     if (intervalMs && intervalMs < 100) intervalMs = 100;
-    nonConnOwned = false; // stale across svc off/on — bleConsoleEnd stops the adv without us
+    // bleConsoleBegin just (re)started the connectable adv on every path that calls this, so
+    // Connectable is verified state — Unknown here would make the first tick stop+restart a
+    // correct adv, racing a CONNECT_IND already in flight. If the wrapper's start failed, the
+    // reconciler's !active branch resumes it.
+    advMode = AdvMode::Connectable;
     if (intervalMs) ESP_LOGI(TAG, "broadcast every %lu ms", (unsigned long) intervalMs);
 }
 
 bool teleAdvEnabled() { return intervalMs != 0; }
 
-bool teleAdvOwnsAdv() { return nonConnOwned; }
+bool teleAdvOwnsAdv() { return advMode == AdvMode::NonConn; }
 
 static void warnThrottled(const char *what, int rc) {
     time_ms now = millis();
@@ -54,17 +63,27 @@ static void warnThrottled(const char *what, int rc) {
 
 static int nonConnGapEvent(ble_gap_event *, void *) { return 0; }
 
+// The broadcast must keep the MAC of the connectable adv: observers cache the name per address, and
+// a second identity also hides the console from anything scanning by address. BLEDevice picks its
+// own address type at sync and exposes only the resulting address, so match on the address itself —
+// re-deriving its rule would inherit its quirks. (BLE_ADDR_*/BLE_OWN_ADDR_* share values here.)
+static uint8_t consoleOwnAddrType() {
+    uint8_t pub[6];
+    return ble_hs_id_copy_addr(BLE_ADDR_PUBLIC, pub, nullptr) == 0 &&
+           memcmp(pub, BLEDevice::getAddress().getNative(), 6) == 0
+           ? BLE_OWN_ADDR_PUBLIC : BLE_OWN_ADDR_RANDOM;
+}
+
 static bool startNonConn() {
-    uint8_t ownAddrType;
-    int rc = ble_hs_id_infer_auto(0, &ownAddrType);
-    if (rc != 0) { warnThrottled("infer_auto", rc); return false; }
     ble_gap_adv_params p{};
     p.conn_mode = BLE_GAP_CONN_MODE_NON;
     p.disc_mode = BLE_GAP_DISC_MODE_GEN;
     p.itvl_min = 160;   // 100 ms (0.625 ms units)
     p.itvl_max = 400;   // 250 ms
-    rc = ble_gap_adv_start(ownAddrType, nullptr, BLE_HS_FOREVER, &p, nonConnGapEvent, nullptr);
+    int rc = ble_gap_adv_start(consoleOwnAddrType(), nullptr, BLE_HS_FOREVER, &p,
+                               nonConnGapEvent, nullptr);
     if (rc != 0) { warnThrottled("nonconn adv start", rc); return false; }
+    ESP_LOGI(TAG, "nonconn adv as %s", BLEDevice::getAddress().toString().c_str());
     return true;
 }
 
@@ -116,20 +135,25 @@ static void refreshPayload() {
 
 void teleAdvTick(time_ms nowMs) {
     if (!intervalMs) return;
-    bool conn = bleConsoleConnected();
     bool active = ble_gap_adv_active();
+    // Connected: the controller stopped the connectable adv, and the broadcast must not pause.
+    AdvMode want = bleConsoleConnected() ? AdvMode::NonConn : AdvMode::Connectable;
 
-    if (conn) {
-        // Controller stopped the connectable adv on connect; broadcast must not pause.
-        if (!active && startNonConn()) nonConnOwned = true;
-    } else if (nonConnOwned) {
-        if (active) ble_gap_adv_stop();
-        nonConnOwned = false;
-        bleConsoleResumeAdv();
-    } else if (!active) {
-        // Reconciler: never rely on the disconnect event alone — a missed restore would
-        // leave the device unreachable (while telemetry keeps flowing and looks healthy).
-        bleConsoleResumeAdv();
+    if (advMode != want || !active) {
+        // First attempt of a transition runs immediately; only RETRIES after a failed start
+        // back off (a tick-rate ble_gap_adv_start loop hammers the HCI queue under pressure).
+        static time_ms lastTryMs = 0;
+        if (advMode != AdvMode::Unknown || nowMs - lastTryMs >= 1000) {
+            lastTryMs = nowMs;
+            if (active) ble_gap_adv_stop();
+            advMode = AdvMode::Unknown;    // re-asserted below; a failed start retries with backoff
+            if (want == AdvMode::NonConn) {
+                if (startNonConn()) advMode = AdvMode::NonConn;
+            } else {
+                bleConsoleResumeAdv();
+                advMode = AdvMode::Connectable;
+            }
+        }
     }
 
     if (nowMs - lastRefreshMs >= intervalMs) {

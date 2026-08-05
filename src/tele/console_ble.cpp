@@ -12,6 +12,9 @@
 #include <BLE2902.h>
 #include <BLESecurity.h>
 #include <os/os_mbuf.h> // os_msys_num_free(): peek NimBLE's free mbuf pool before notifying
+#if !defined(CONFIG_BLUEDROID_ENABLED)
+#include <host/ble_gap.h> // ble_gap_conn_find(): connection state from the stack, not our callbacks
+#endif
 
 #include "console.h"   // loopConsole
 #include "util.h"      // wallClockMs
@@ -189,9 +192,11 @@ class ServerCallbacks : public BLEServerCallbacks {
         removeLogCallback(bleLogWrite);
         { std::lock_guard<std::recursive_mutex> lk(txMutex); txBuf.clear(); txHead = 0; }
         ESP_LOGI(TAG, "client disconnected, re-advertising");
-        // While the broadcast owns a non-connectable adv, restarting the connectable one here
-        // would fail with EALREADY — the teleAdvTick reconciler swaps modes instead.
-        if (!teleAdvOwnsAdv()) s->startAdvertising();
+        // With the broadcast enabled, the teleAdvTick reconciler is the ONLY caller of GAP
+        // advertising APIs: a start here runs on the NimBLE host task and would race the
+        // network-loop tick's stop/start (same cross-task class as the lld_con.c:3275 assert
+        // that forced connParamsPending off this callback).
+        if (!teleAdvEnabled()) s->startAdvertising();
     }
 };
 
@@ -315,7 +320,16 @@ void bleConsoleLoop(time_ms nowMs) {
     teleAdvTick(nowMs); // broadcast payload refresh + adv-mode reconciler (no-op unless enabled)
 }
 
-bool bleConsoleConnected() { return deviceConnected; }
+bool bleConsoleConnected() {
+    if (!deviceConnected || !bleServer) return false;
+#if !defined(CONFIG_BLUEDROID_ENABLED)
+    // Ask the stack, not the callback flag: a missed onDisconnect would otherwise pin the
+    // advertising reconciler to the connected branch, i.e. non-connectable adv forever.
+    ble_gap_conn_desc d;
+    if (ble_gap_conn_find(bleServer->getConnId(), &d) != 0) return false;
+#endif
+    return true;
+}
 
 void bleConsoleResumeAdv() {
     if (bleStarted) BLEDevice::startAdvertising();

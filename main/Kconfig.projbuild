@@ -43,6 +43,17 @@ config FUGU_WITH_BLE_TELE
         (BLE→InfluxDB bridge) or etc/fugu_console.py --tele. Enable on the device with the
         `set-time` + `tele-ble 1` console commands.
 
+config FUGU_WITH_BLE_ADV
+    bool "BLE telemetry broadcast (advertising data)"
+    default n
+    depends on FUGU_WITH_BLE
+    help
+        Connectionless telemetry: a packed snapshot record in the advertisement's
+        manufacturer data, readable by any number of passive observers without connecting
+        (the NUS link is exclusive with MAX_CONNECTIONS=1). Keeps broadcasting while a
+        client is connected (non-connectable adv). tele.conf::adv_ms sets the refresh
+        interval (0 = off). Host side: etc/influx_binary_proxy.py --adv.
+
 config FUGU_WITH_MCPWM
     bool "MCPWM gate driver"
     default n

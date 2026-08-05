@@ -91,6 +91,9 @@ endif ()
 if (CONFIG_FUGU_WITH_BLE_TELE)
     list(APPEND BLE_SRC "../src/tele/tele_ble.cpp")
 endif ()
+if (CONFIG_FUGU_WITH_BLE_ADV)
+    list(APPEND BLE_SRC "../src/tele/tele_adv.cpp")
+endif ()
 
 # CONFIG_FUGU_WITH_VCONV replaces the physical gate driver + ADC with a software converter plant
 # (src/sim/vconv.*). Kconfig enforces mutual exclusion with the MCPWM driver. See
@@ -160,6 +163,9 @@ endif ()
 
 if (WITH_BLE)
     component_compile_definitions("WITH_BLE=1")
+endif ()
+if (CONFIG_FUGU_WITH_BLE_ADV)
+    component_compile_definitions("WITH_BLE_ADV=1")
 endif ()
 if (CONFIG_FUGU_WITH_BLE_TELE)
     component_compile_definitions("WITH_BLE_TELE=1")

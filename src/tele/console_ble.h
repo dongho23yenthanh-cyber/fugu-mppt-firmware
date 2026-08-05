@@ -24,6 +24,7 @@ bool bleConsoleConnected();
 
 size_t bleConsoleChunk();       // usable notify payload: negotiated MTU-3, else 20
 bool bleConsoleLinkSettled();   // connected + post-connect settle window elapsed
+void bleConsoleResumeAdv();     // (re)start the connectable advertisement (tele_adv reconciler)
 
 // Pump the TX FIFO until its backlog drops below `lowWater` bytes (or `timeoutMs` elapses / the client
 // disconnects), yielding so NimBLE can transmit and free mbufs. A long command that emits more than

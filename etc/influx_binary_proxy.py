@@ -174,6 +174,54 @@ def serve_ble_all(args, fwd):
         time.sleep(args.scan_interval)
 
 
+def serve_adv(args, fwd):
+    """Connectionless: decode the telemetry broadcast (WITH_BLE_ADV) from advertising
+    manufacturer data — any number of observers, no connection, works while another host
+    holds the (exclusive) NUS link. Observer stamps the time. Record: see src/tele/tele_adv.h."""
+    import asyncio, struct, queue, threading
+    from bleak import BleakScanner
+
+    lineq = queue.Queue()
+
+    def sender():
+        while True:
+            lines = [lineq.get()]
+            while not lineq.empty():
+                lines.append(lineq.get_nowait())
+            emit(fwd, lines)
+    threading.Thread(target=sender, daemon=True).start()
+
+    names, lastseq = {}, {}
+
+    def on_adv(dev, adv):
+        blob = (adv.manufacturer_data or {}).get(0xFFFF)
+        if not blob or len(blob) != 17 or blob[0] != 0xF7:
+            return
+        nm = adv.local_name or getattr(dev, 'name', None)
+        if nm:
+            names[dev.address] = nm   # name arrives via scan response (connectable phases only)
+        if lastseq.get(dev.address) == blob[1]:
+            return                    # same record re-broadcast (adv interval < adv_ms)
+        lastseq[dev.address] = blob[1]
+        _, seq, ui, uo, i, p, mcu, ntc, duty, lag, state = struct.unpack('<BB4e2b2HB', blob)
+        name = names.get(dev.address) or 'fugu-' + dev.address.replace(':', '')[-6:].lower()
+        ts = int(time.time() * 1000)
+        lineq.put(f"mppt,device={name} Ui={ui:.2f},Uo={uo:.2f},I={i:.3f},P={p:.2f},"
+                  f"mcu_temp={mcu:.1f},ntc_temp={ntc:.1f},pwm_duty={duty}i,lag={lag}i,"
+                  f"mppt_state={state & 0xF}i,cv_lim_idx={state >> 4}i {ts}")
+        if args.verbose:
+            print(f"[{name}] seq={seq} P={p:.1f}W Ui={ui:.1f} Uo={uo:.1f}", file=sys.stderr)
+
+    async def run():
+        scanner = BleakScanner(detection_callback=on_adv)
+        await scanner.start()
+        print("observing telemetry broadcasts (BLE adv, mfr id 0xFFFF)…", file=sys.stderr)
+        while True:
+            await asyncio.sleep(3600)
+
+    asyncio.run(run())
+
+
 def serve_ble(args, fwd):
     import queue
     from fugu.transport import BleTransport
@@ -211,6 +259,9 @@ if __name__ == '__main__':
     ap.add_argument('--ble', metavar='NAME', help='pull over BLE from this device instead of UDP')
     ap.add_argument('--ble-all', action='store_true',
                     help='pull over BLE from EVERY fugu/NUS device in range (continuous discovery)')
+    ap.add_argument('--adv', action='store_true',
+                    help='observe the connectionless telemetry broadcast (WITH_BLE_ADV, no connection)')
+    ap.add_argument('--verbose', action='store_true', help='--adv: print each decoded record')
     ap.add_argument('--scan-interval', type=int, default=30, help='--ble-all rescan period (s)')
     ap.add_argument('--address', action='store_true', help='--ble arg is a MAC address, not a name')
     ap.add_argument('--forward-udp', metavar='HOST:PORT',
@@ -222,6 +273,7 @@ if __name__ == '__main__':
     a = ap.parse_args()
     fwd = make_fwd(a)
     if a.test: self_test(a.test)
+    elif a.adv: serve_adv(a, fwd)
     elif a.ble_all: serve_ble_all(a, fwd)
     elif a.ble: serve_ble(a, fwd)
     else: serve_udp(a, fwd)

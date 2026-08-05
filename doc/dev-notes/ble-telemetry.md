@@ -63,6 +63,36 @@ has no encryption gate, but `tele-ble` arrives over the (optionally encrypted) R
 ~50 pts/s × ~40-60 B ≈ 2-3 KB/s raw (tamp ~2x) vs a ~15-30 KB/s practical BLE ceiling shared
 with the console log mirror. Partial batches flush after 250 ms.
 
+## Advertising broadcast (CONFIG_FUGU_WITH_BLE_ADV)
+
+Connectionless one-to-many complement to the NUS stream: with `MAX_CONNECTIONS=1` the NUS
+link is exclusive (whoever connects owns the device), so telemetry-only observers use the
+advertisement instead. A 17 B packed record rides in the manufacturer-data AD
+(company id 0xFFFF, magic 0xF7): `u8 magic, u8 seq, f16 Ui Uo I P, i8 mcu ntc, u16 duty,
+u16 lag_us, u8 mppt_state|cv_lim_idx<<4`. No clock needed — the observer stamps time.
+`lag_us` saturates at 65535 (read as "≥65.5 ms"); saturation is real on an idle converter,
+where the loop-latency watchdog is off and peak lag runs ~100 ms.
+`tele.conf::adv_ms` (default 500, 0 = off) sets the refresh; `svc rs ble` re-reads it.
+Decode: `influx_binary_proxy.py --adv [--verbose]` (passive scan, dedupe by seq,
+struct `<BB4e2b2HB`).
+
+While a client is connected the tick swaps the (controller-stopped) connectable
+advertisement for a **non-connectable** one — legacy NimBLE allows that during a connection
+(only connectable modes are blocked via `ble_hs_conn_can_alloc`), so the broadcast never
+pauses — though it thins under RF contention: bench-measured (8-05), a live console session
+(log-mirror notifies + WiFi coex) degrades observer delivery from every 0.5 s to every
+~1.5-4 s; it recovers immediately on disconnect. The `teleAdvTick` reconciler, not the disconnect event, is the authority for
+restoring the connectable adv: a missed restore would leave the device unreachable while
+telemetry keeps flowing (looks healthy). Scan responses (device name) are only answered in
+the connectable phase; observers cache MAC→name, falling back to a MAC-suffix tag.
+
+Deliberately NOT `CONFIG_BT_NIMBLE_EXT_ADV`: with it, the legacy `ble_gap_adv_*` API still
+links but silently returns `BLE_HS_ENOTSUP` (the NUS console would stop advertising with
+nothing to see), and porting the connectable set needs private wrapper internals
+(`BLEServer::handleGATTServerEvent`). Limits: broadcast is lossy and unencrypted; this
+fixes telemetry fan-out only — a second console still needs the one NUS slot
+(MAX_CONNECTIONS>1 is a separate question).
+
 ## Vendored NimBLE patch (mbuf exhaustion = panic)
 
 IDF's NimBLE hard-asserts in `ble_att_tx_with_conn` (`ble_att_cmd.c:91`, `assert(rc == 0)`

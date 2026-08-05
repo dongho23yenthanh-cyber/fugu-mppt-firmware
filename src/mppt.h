@@ -275,6 +275,20 @@ public:
     void begin(const ConfFile &trackerConf, const ConfFile &boardConf, const Limits &limits_, const TeleConf &tele_);
 
     [[nodiscard]] MpptControlMode getState() const { return ctrlState.mode; }
+
+    struct TeleSnap {
+        float Ui, Uo, I, P, mcuTemp, ntcTemp;
+        uint16_t duty;
+        uint8_t mode, limIdx;
+    };
+
+    TeleSnap teleSnap() {
+        float i = sensorPhysicalI->med3.get();
+        return {.Ui = sensors.Vin->med3.get(), .Uo = sensors.Vout->med3.get(), .I = i,
+                .P = i * sensorPhysicalU->med3.get(), .mcuTemp = ucTemp.last(), .ntcTemp = ntc.last(),
+                .duty = (uint16_t) converter.getCtrlOnPwmCnt(),
+                .mode = (uint8_t) ctrlState.mode, .limIdx = ctrlState.limIdx};
+    }
     [[nodiscard]] bool active() const { return _sweeping or sampler.isCalibrating() or !converter.disabled(); }
     [[nodiscard]] bool isSweeping() const { return _sweeping; }
 

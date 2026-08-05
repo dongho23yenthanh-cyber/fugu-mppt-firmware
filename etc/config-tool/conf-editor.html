@@ -355,6 +355,7 @@ const META = {
   influxdb_host:{unit:"",desc:"InfluxDB host IP for UDP telemetry (port 8086)",type:"string"},
   binary:{unit:"",desc:"1 = binary symbol-table wire (sym_line_protocol.h, tamp-compressed); 0 = text influx",type:"bool"},
   ble:{unit:"",desc:"Allow the BLE telemetry stream (tele-ble command; needs CONFIG_FUGU_WITH_BLE_TELE)",type:"bool"},
+  adv_ms:{unit:"ms",desc:"BLE advertising telemetry broadcast refresh (CONFIG_FUGU_WITH_BLE_ADV), 0=off, min 100",type:"int"},
 
   // ftp.conf (nvs takes precedence; conf is the fallback)
   ftp_user:{unit:"",desc:"FTP username for config access over LAN",type:"string"},
@@ -430,7 +431,7 @@ const FILE_KEYS = {
   "tracker.conf":["sweep_speed","target_duty_cycle"],
   "mqtt.conf":["broker_uri","cell_voltages_max_topic","cmd_input","enabled","ibat_lim_topic",
     "ibat_topic","log_level","password","username"],
-  "tele.conf":["binary","ble","enabled","influxdb_host","log_level"],
+  "tele.conf":["adv_ms","binary","ble","enabled","influxdb_host","log_level"],
   "ftp.conf":["enabled","ftp_pass","ftp_user","log_level"],
   "telnet.conf":["enabled","log_level"],
   "scope.conf":["enabled","log_level"],

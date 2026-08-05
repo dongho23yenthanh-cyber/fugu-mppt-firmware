@@ -19,6 +19,7 @@
 #include "etc/readerwriterqueue.h"
 #include "etc/ota_ble.h" // OTA-over-BLE firmware push (FW characteristic data sink)
 #include "tele_ble.h"    // BLE telemetry stream (TELE characteristic, WITH_BLE_TELE)
+#include "tele_adv.h"    // advertising telemetry broadcast (WITH_BLE_ADV)
 
 // Nordic UART Service. RX = client->device (write commands), TX = device->client (notify output).
 // FW = client->device write-no-response firmware bytes (OTA push, bypasses the console line parser).
@@ -187,7 +188,9 @@ class ServerCallbacks : public BLEServerCallbacks {
         removeLogCallback(bleLogWrite);
         { std::lock_guard<std::recursive_mutex> lk(txMutex); txBuf.clear(); txHead = 0; }
         ESP_LOGI(TAG, "client disconnected, re-advertising");
-        s->startAdvertising();
+        // While the broadcast owns a non-connectable adv, restarting the connectable one here
+        // would fail with EALREADY — the teleAdvTick reconciler swaps modes instead.
+        if (!teleAdvOwnsAdv()) s->startAdvertising();
     }
 };
 
@@ -211,6 +214,7 @@ void bleConsoleBegin(const std::string &deviceName, const std::string &security,
         // Stack is already up from a previous start; just resume advertising (see bleInited note).
         BLEDevice::startAdvertising();
         bleStarted = true;
+        teleAdvInit(); // `svc rs ble` re-reads tele.conf::adv_ms
         ESP_LOGI(TAG, "re-advertising as '%s' (NUS console)", deviceName.c_str());
         return;
     }
@@ -279,6 +283,7 @@ void bleConsoleBegin(const std::string &deviceName, const std::string &security,
 
     bleInited = true;
     bleStarted = true;
+    teleAdvInit();
     ESP_LOGI(TAG, "advertising as '%s' (NUS console)", deviceName.c_str());
 }
 
@@ -305,9 +310,14 @@ void bleConsoleLoop(time_ms nowMs) {
     bleTxDrain(nowMs); // flush queued console/log output, paced by NimBLE buffer availability
     otaBleTick(nowMs); // drain any staged OTA firmware bytes to flash (no-op when not updating)
     teleBleTick(nowMs); // batch + notify the telemetry stream (no-op unless streaming)
+    teleAdvTick(nowMs); // broadcast payload refresh + adv-mode reconciler (no-op unless enabled)
 }
 
 bool bleConsoleConnected() { return deviceConnected; }
+
+void bleConsoleResumeAdv() {
+    if (bleStarted) BLEDevice::startAdvertising();
+}
 
 size_t bleConsoleChunk() {
     if (!deviceConnected || !bleServer) return 20;
@@ -345,6 +355,8 @@ bool bleConsoleConnected() { return false; }
 size_t bleConsoleChunk() { return 20; }
 
 bool bleConsoleLinkSettled() { return false; }
+
+void bleConsoleResumeAdv() {}
 
 void bleConsoleAwaitTxDrain(unsigned, unsigned) {}
 

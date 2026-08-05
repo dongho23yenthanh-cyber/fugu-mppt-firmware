@@ -338,16 +338,25 @@ void enable_esp_log_to_telnet() {
 class TaskQueue {
     typedef std::function<void(void)> Fn;
     moodycamel::ReaderWriterQueue<Fn> q{1};
+    volatile uint32_t dropped_ = 0, reported_ = 0;
 
 public:
     inline void add(Fn &&fn) {
-        assert(q.enqueue(std::move(fn)));
+        // enqueue() mallocs a new block when full: on a tight heap that fails. All callers
+        // re-issue their work on later ticks — drop, never panic the RT loop over an alloc
+        // (took fboost down when BLE + a log storm exhausted the heap, coredump 8-05).
+        if (!q.enqueue(std::move(fn)))
+            ++dropped_;
     }
 
     inline void work() {
         Fn fn;
         while (q.try_dequeue(fn)) {
             fn();
+        }
+        if (uint32_t d = dropped_; d != reported_) {
+            reported_ = d;
+            ESP_LOGW("log", "task queue OOM, %lu deferred tasks dropped", (unsigned long) d);
         }
     }
 };

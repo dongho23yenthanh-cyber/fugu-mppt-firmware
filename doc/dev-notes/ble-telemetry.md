@@ -84,7 +84,11 @@ pauses — though it thins under RF contention: bench-measured (8-05), a live co
 ~1.5-4 s; it recovers immediately on disconnect. The `teleAdvTick` reconciler, not the disconnect event, is the authority for
 restoring the connectable adv: a missed restore would leave the device unreachable while
 telemetry keeps flowing (looks healthy). Scan responses (device name) are only answered in
-the connectable phase; observers cache MAC→name, falling back to a MAC-suffix tag.
+the connectable phase — and don't reach every kernel at all (the rpi scans effectively
+passively next to an active LE connection), so every 8th refresh slot broadcasts
+flags + complete name instead of the record; observers cache MAC→name (decoder strips
+the `fugu-` prefix so tags match the NUS/UDP hostname series), falling back to a
+MAC-suffix tag.
 
 Deliberately NOT `CONFIG_BT_NIMBLE_EXT_ADV`: with it, the legacy `ble_gap_adv_*` API still
 links but silently returns `BLE_HS_ENOTSUP` (the NUS console would stop advertising with

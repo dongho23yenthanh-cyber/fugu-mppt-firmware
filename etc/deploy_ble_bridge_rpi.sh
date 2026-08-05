@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Deploy the BLE->InfluxDB telemetry bridge to the rpi (run from the repo root):
 #   ./etc/deploy_ble_bridge_rpi.sh [rpi.local]
-# ONE service (fugu-ble-bridge) that discovers every fugu/NUS device in range, streams its
-# binary telemetry, and feeds decoded points to the EXISTING influxdb-udp-relay on
-# 127.0.0.1:8086 (which owns batching + InfluxDB auth).
+# ONE service (fugu-ble-bridge) that passively observes the telemetry BROADCAST
+# (WITH_BLE_ADV mfr adv data) of every fugu device in range — no connections held, the NUS
+# link stays free for consoles/OTA — and feeds decoded points to the EXISTING
+# influxdb-udp-relay on 127.0.0.1:8086 (which owns batching + InfluxDB auth).
+# (The connection-based --ble-all mode remains available for pre-BLE_ADV firmware.)
 set -e
 RPI=${1:-rpi.local}
 DIR=/opt/fugu-ble-bridge
@@ -30,7 +32,7 @@ WorkingDirectory=$DIR
 # bluetoothd keeps BLE connections alive when the previous bridge process died; a connected
 # device stops advertising and can never be re-discovered — drop stale fugu links first.
 ExecStartPre=-/bin/sh -c 'bluetoothctl devices Connected | grep -i fugu | cut -d" " -f2 | xargs -rn1 timeout 10 bluetoothctl disconnect'
-ExecStart=$DIR/venv/bin/python3 $DIR/influx_binary_proxy.py --ble-all --forward-udp 127.0.0.1:8086
+ExecStart=$DIR/venv/bin/python3 $DIR/influx_binary_proxy.py --adv --forward-udp 127.0.0.1:8086
 Restart=always
 RestartSec=15
 

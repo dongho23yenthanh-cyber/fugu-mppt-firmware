@@ -68,7 +68,27 @@ static bool startNonConn() {
     return true;
 }
 
+// Every 8th slot broadcasts flags + complete name instead of the record: scan responses
+// don't reach every observer (rpi kernel scans effectively passively next to an active LE
+// connection), so the name must ride the adv payload itself. Observers cache it per MAC.
+static bool namePayload() {
+    static uint8_t slot = 0;
+    if (++slot % 8 != 0) return false;
+    const char *name = bleConsoleName();
+    size_t n = std::min(strlen(name), (size_t) 26);
+    if (!n) return false;
+    uint8_t ad[31];
+    ad[0] = 2; ad[1] = 0x01; ad[2] = 0x06;
+    ad[3] = (uint8_t) (n + 1);
+    ad[4] = strlen(name) > 26 ? 0x08 : 0x09;   // shortened / complete local name
+    memcpy(&ad[5], name, n);
+    int rc = ble_gap_adv_set_data(ad, 5 + n);
+    if (rc != 0) warnThrottled("set name data", rc);
+    return true;
+}
+
 static void refreshPayload() {
+    if (namePayload()) return;
     // Sensor setup can fail (setupErr) with the BLE service still up — the console must
     // survive to debug exactly that (same guard as MQTT.tickHook).
     if (!mppt.sensorPhysicalI || !mppt.sensorPhysicalU) return;

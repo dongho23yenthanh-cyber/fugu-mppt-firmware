@@ -204,7 +204,10 @@ def serve_adv(args, fwd):
             return                    # same record re-broadcast (adv interval < adv_ms)
         lastseq[dev.address] = blob[1]
         _, seq, ui, uo, i, p, mcu, ntc, duty, lag, state = struct.unpack('<BB4e2b2HB', blob)
+        # tag = hostname, matching the NUS/UDP telemetry series (BLE name is "fugu-<hostname>";
+        # the name rides the adv payload every 8th slot — scan responses don't reach every kernel)
         name = names.get(dev.address) or 'fugu-' + dev.address.replace(':', '')[-6:].lower()
+        name = name[5:] if name.startswith('fugu-') and len(name) > 5 else name
         ts = int(time.time() * 1000)
         temps = ''.join(f",{k}={v:.1f}" for k, v in (('mcu_temp', mcu), ('ntc_temp', ntc))
                         if v != -128)   # -128 = NaN sentinel (e.g. no NTC fitted)

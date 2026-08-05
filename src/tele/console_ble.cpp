@@ -65,6 +65,7 @@ static std::recursive_mutex txMutex;
 // loop) sends 20-byte chunks with backpressure — it stops the moment a notify fails and leaves the
 // rest queued for the next tick, by when the pool has refilled.
 static std::string txBuf;
+static std::string advName;
 static size_t txHead = 0;                    // consumed-prefix offset, amortizes pop-front
 static constexpr size_t TX_BUF_CAP = 8192;   // bound the unsent backlog if a client stalls
 static bool lastNotifyOk = true;             // set by TxCallbacks::onStatus, read right after notify()
@@ -219,6 +220,7 @@ void bleConsoleBegin(const std::string &deviceName, const std::string &security,
         return;
     }
 
+    advName = deviceName;
     BLEDevice::init(deviceName.c_str()); // const char* -> Arduino String
     BLEDevice::setMTU(247); // prefer a large ATT MTU so the client negotiates up from the 23-byte default
 
@@ -319,6 +321,8 @@ void bleConsoleResumeAdv() {
     if (bleStarted) BLEDevice::startAdvertising();
 }
 
+const char *bleConsoleName() { return advName.c_str(); }
+
 size_t bleConsoleChunk() {
     if (!deviceConnected || !bleServer) return 20;
     uint16_t mtu = bleServer->getPeerMTU(bleServer->getConnId());
@@ -357,6 +361,8 @@ size_t bleConsoleChunk() { return 20; }
 bool bleConsoleLinkSettled() { return false; }
 
 void bleConsoleResumeAdv() {}
+
+const char *bleConsoleName() { return ""; }
 
 void bleConsoleAwaitTxDrain(unsigned, unsigned) {}
 

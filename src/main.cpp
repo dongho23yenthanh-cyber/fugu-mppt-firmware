@@ -844,10 +844,21 @@ static void lfUpdateLed(time_us nowUs) {
     }
 }
 
-void loopLF(const time_us &nowUs) {
+void loopLF(const time_us &nowUs, bool interim = false) {
     auto &nSamples(sensors.Vout ? sensors.Vout->numSamples : lastNSamples);
     auto dt = nowUs - lastTimeOutUs;
-    uint32_t sps = (dt > 20000) ? (uint64_t) (nSamples - lastNSamples) * 1000000llu / dt : 0;
+    static uint32_t lastSps = 0;
+
+    // Console commands print an immediate status line (cli.cpp). Those interim passes must not
+    // touch the rate window: resetting lastNSamples without lastTimeOutUs made the next line
+    // divide a fresh numerator by the stale periodic window — the notorious bogus "0sps".
+    if (interim) {
+        lfStatusLine(nSamples, lastSps, dt);
+        return;
+    }
+
+    uint32_t sps = (dt > 20000) ? (uint64_t) (nSamples - lastNSamples) * 1000000llu / dt : lastSps;
+    lastSps = sps;
 
     lfWatchdog(nowUs, dt, sps, nSamples);
     lfStuckWatchdog();

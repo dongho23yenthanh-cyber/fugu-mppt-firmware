@@ -78,7 +78,7 @@ void systemRestart();
 
 void stopAndBackoff(uint32_t secondsDelay);
 
-void loopLF(const time_us &nowUs);
+void loopLF(const time_us &nowUs, bool interim = false);
 
 static SimpleCLI cli;
 
@@ -1566,7 +1566,7 @@ bool handleCommand(const String &inp) {
         if (target < 0) target = 0;
         mppt.setTargetDutyCycle((uint16_t) target);
         ESP_LOGI("main", "Manual PWM step %i -> target %i", pwmStep, target);
-        loopLF(wallClockUs());
+        loopLF(wallClockUs(), true);
         return true;
     }
 
@@ -1587,6 +1587,6 @@ bool handleCommand(const String &inp) {
     }
     if (s_cmdFailed) return false; // handler rejected its input (CMD_FAIL)
 
-    loopLF(wallClockUs());
+    loopLF(wallClockUs(), true); // interim status snapshot; must not disturb the sps window
     return true;
 }

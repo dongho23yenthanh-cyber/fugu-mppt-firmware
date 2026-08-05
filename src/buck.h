@@ -190,6 +190,9 @@ class SynchronousConverter {
                     // follower reload is fixed at count 0 (see initSyncIn); phase shifts live on the leader
                     if (syncPhaseNs != 0)
                         ESP_LOGW("converter", "%s", "sync_phase_* is leader-only, ignored on follower");
+                    // armed here, before start(): both gates are still idle, so the one
+                    // unavoidable arbitrary-phase jump (first lock) happens with nothing switching
+                    mcpwmDrv.initSyncFilter(syncPin);
                     mcpwmDrv.initSyncIn(syncPin, pwmEnLogic);
                     wsyncFollower = true;
                 } else {

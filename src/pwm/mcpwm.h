@@ -2,6 +2,9 @@
 
 #include <array>
 #include "driver/mcpwm_prelude.h"
+#if WITH_WSYNC
+#include "driver/gpio_filter.h"
+#endif
 #include "hal/mcpwm_ll.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -64,6 +67,7 @@ class MCPWM_SyncLeg {
     mcpwm_cmpr_handle_t  syncCmp_  = nullptr, syncCmpA_ = nullptr;
     mcpwm_gen_handle_t   syncGen_  = nullptr;
     mcpwm_sync_handle_t  syncIn_   = nullptr;
+    gpio_glitch_filter_handle_t syncFilt_ = nullptr;
 #endif
     uint16_t dtTicks_  = 0;
     int group_ = 0;
@@ -72,6 +76,7 @@ public:
     const char *name = "mcpwm";
     uint16_t pwmMax     = 0;   // commandable span: period_ticks (InEn) or period_ticks-dtTicks (HiLi)
     uint16_t periodTicks = 0;  // true timer period; phase math must use this, not pwmMax
+    static constexpr uint16_t wsyncLeadTicks = 2;  // follower period shortening, see init()
     uint32_t resolutionHz = 0; // timer tick rate (counts/sec)
 
     mcpwm_oper_handle_t  oper()  const { return oper_; }
@@ -93,6 +98,17 @@ public:
                  group, (unsigned) freq, pinHS, pinLS, (unsigned) dtTicks, enLogic, (unsigned) fixedTicks);
         PwmTiming t = fixedTicks ? PwmTiming{freq * fixedTicks, fixedTicks, freq}
                                  : bestTiming(freq);
+        // A follower runs deliberately FAST (period short by wsyncLeadTicks) so that its own TEZ
+        // always fires before the leader's sync edge arrives. The sync then only truncates an
+        // already-wrapped period instead of pre-empting it, which matters twice over: the gates
+        // get their normal TEZ actions with the software-reserved LS->HS dead-band, and the sync
+        // never has to drive HS itself (a sync-driven HS turn-on has no dead-time against the LS
+        // it switches off in the same clock). 2 ticks = ~490 ppm at 39 kHz, far above the ~40 ppm
+        // worst-case crystal mismatch plus one tick of resync quantization.
+        if (syncFollower) {
+            assert_throw(t.period_ticks > wsyncLeadTicks + 1, "pwm_freq too high for wired sync");
+            t.period_ticks -= wsyncLeadTicks;
+        }
         pwmMax      = (uint16_t) t.period_ticks;
         periodTicks = (uint16_t) t.period_ticks;
         resolutionHz = t.resolution_hz;
@@ -243,11 +259,29 @@ public:
             .direction   = MCPWM_TIMER_DIRECTION_UP,
         };
         ESP_ERROR_CHECK(mcpwm_timer_set_phase_on_sync(timer_, &pc));
+        // LS to its period-start state on sync. There is deliberately NO HS action here: driving
+        // HS high on the sync edge would switch it on in the same clock that switches LS off,
+        // with zero dead time (the LS->HS band is reserved in software as pwmMax -= dtTicks,
+        // which only holds at a real period boundary). HS turn-on stays with TEZ, which the
+        // follower always reaches first thanks to wsyncLeadTicks.
         ESP_ERROR_CHECK(mcpwm_generator_set_action_on_sync_event(genLS_,
             MCPWM_GEN_SYNC_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, syncIn_,
                                         enLogic ? MCPWM_GEN_ACTION_HIGH : MCPWM_GEN_ACTION_LOW)));
-        mcpwm_ll_generator_set_action_on_trigger_event(MCPWM_LL_GET_HW(group_), 0, 0,
-            MCPWM_TIMER_DIRECTION_UP, 0, MCPWM_GEN_ACTION_HIGH);
+    }
+
+    // Glitch filter on the sync pad. The receiver has no input hysteresis and a noise-induced
+    // edge is not cosmetic: it re-phases the timer mid-cycle. The S3 has only the fixed-width
+    // PIN filter (~2 IO-MUX clocks, ~25 ns at 80 MHz) -- not the flex filter, so a 200 ns window
+    // is not reachable in hardware here. That rejects fast spikes only; slow ringing on the
+    // high-impedance bias node still needs the external Schmitt buffer. The filter's own
+    // propagation delay is fixed and lands in what sync_phase_ns exists to trim out.
+    void initSyncFilter(int gpio) {
+        gpio_pin_glitch_filter_config_t fc = {
+            .clk_src  = GLITCH_FILTER_CLK_SRC_DEFAULT,
+            .gpio_num = (gpio_num_t) gpio,
+        };
+        ESP_ERROR_CHECK(gpio_new_pin_glitch_filter(&fc, &syncFilt_));
+        ESP_ERROR_CHECK(gpio_glitch_filter_enable(syncFilt_));
     }
 #endif // WITH_WSYNC
 
@@ -295,6 +329,7 @@ public:
         if (syncCmpA_) mcpwm_del_comparator(syncCmpA_);
         if (syncOper_) mcpwm_del_operator(syncOper_);
         if (syncIn_)   mcpwm_del_sync_src(syncIn_);
+        if (syncFilt_) { gpio_glitch_filter_disable(syncFilt_); gpio_del_glitch_filter(syncFilt_); }
 #endif
         if (genHS_) mcpwm_del_generator(genHS_);
         if (genLS_) mcpwm_del_generator(genLS_);

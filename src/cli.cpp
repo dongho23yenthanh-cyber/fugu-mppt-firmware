@@ -78,7 +78,7 @@ void systemRestart();
 
 void stopAndBackoff(uint32_t secondsDelay);
 
-void loopLF(const time_us &nowUs, bool interim = false);
+void loopLF(const time_us &nowUs, bool interim); // both call sites pass interim explicitly
 
 static SimpleCLI cli;
 

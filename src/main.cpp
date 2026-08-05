@@ -844,14 +844,18 @@ static void lfUpdateLed(time_us nowUs) {
     }
 }
 
-void loopLF(const time_us &nowUs, bool interim = false) {
+void loopLF(const time_us &nowUs, bool interim) {
     auto &nSamples(sensors.Vout ? sensors.Vout->numSamples : lastNSamples);
-    auto dt = nowUs - lastTimeOutUs;
+    // The sps/throughput window keeps its OWN baseline: lastTimeOutUs is shared cadence state
+    // that other code legitimately stomps (console.cpp pushes it per input byte to pause logs,
+    // telnet onConnect zeroes it to force output) — deriving the rate from it produced the
+    // notorious bogus "0sps" (and fed lfWatchdog a corrupted rate).
+    static time_us lastWindowUs = 0;
     static uint32_t lastSps = 0;
+    auto dt = nowUs - lastWindowUs;
 
-    // Console commands print an immediate status line (cli.cpp). Those interim passes must not
-    // touch the rate window: resetting lastNSamples without lastTimeOutUs made the next line
-    // divide a fresh numerator by the stale periodic window — the notorious bogus "0sps".
+    // Console commands print an immediate status line (cli.cpp): a read-only snapshot with the
+    // last full-window rate — it must not consume the window.
     if (interim) {
         lfStatusLine(nSamples, lastSps, dt);
         return;
@@ -880,6 +884,7 @@ void loopLF(const time_us &nowUs, bool interim = false) {
     lfStatusLine(nSamples, sps, dt);
 
     lastNSamples = nSamples;
+    lastWindowUs = nowUs;
     bytesSent = 0;
 
     if (mppt.converter.disabled())
@@ -1067,7 +1072,7 @@ static void loopNetwork_task(void *arg) {
 
 
     if ((wallClockUs() - lastTimeOutUs) >= (mppt.converter.disabled() ? (lfPeriod * 8) : lfPeriod) or !lastTimeOutUs) {
-        loopLF(wallClockUs());
+        loopLF(wallClockUs(), false);
         // HA power publish moved to MqttService::onTick (MQTT.tickHook, wired in setup()).
         lastTimeOutUs = wallClockUs();
     }

@@ -182,8 +182,14 @@ public:
     // offsetTicks shifts the follower's period start relative to the leader's for interleaving.
     // Call before start().
     void initSyncOut(int gpio, uint16_t pulseTicks, uint16_t offsetTicks) {
-        if ((uint32_t) offsetTicks + pulseTicks >= periodTicks)
-            offsetTicks = (uint16_t) (periodTicks - pulseTicks - 1); // pulse must fit the period
+        // the pulse must fit the period. Guard pulseTicks first: periodTicks - pulseTicks - 1
+        // underflows to a huge uint16_t if the pulse alone is longer than the period.
+        assert_throw(periodTicks > 1, "initSyncOut before init()");
+        if (pulseTicks >= periodTicks) pulseTicks = (uint16_t) (periodTicks - 1);
+        if ((uint32_t) offsetTicks + pulseTicks >= periodTicks) {
+            offsetTicks = (uint16_t) (periodTicks - pulseTicks - 1);
+            ESP_LOGW("mcpwm-leg", "sync pulse offset clamped to %u ticks", offsetTicks);
+        }
         mcpwm_operator_config_t oc = {.group_id = group_, .intr_priority = 0, .flags = {}};
         ESP_ERROR_CHECK(mcpwm_new_operator(&oc, &syncOper_));
         ESP_ERROR_CHECK(mcpwm_operator_connect_timer(syncOper_, timer_));

@@ -343,17 +343,34 @@ public:
 #if WITH_WSYNC
     pcnt_unit_handle_t wsyncPcnt_ = nullptr;
 #endif
-    // sync-pin edges since the last call (follower bench diagnostic); -1 = no counter
-    int wsyncEdges() {
+    // A wired-sync edge counter exists (sync_role != none on a WSYNC build). Separate from the
+    // count itself: a count is a valid non-negative number, so it cannot double as a sentinel.
+    [[nodiscard]] bool wsyncHasCounter() const {
 #if WITH_WSYNC
-        if (wsyncPcnt_) {
-            int c = 0;
-            pcnt_unit_get_count(wsyncPcnt_, &c);
-            pcnt_unit_clear_count(wsyncPcnt_);
-            return c;
-        }
+        return wsyncPcnt_ != nullptr;
+#else
+        return false;
 #endif
-        return -1;
+    }
+
+    // Sync-pin edge count, sampled between wsyncClear() and here. The PCNT count register is
+    // 16 bit and this unit does not accumulate across overflow, so the caller must keep the
+    // window short enough that the count stays below wsyncCountMax -- a wrapped count reads as
+    // a plausible-but-low edge rate, i.e. a healthy wire looks broken.
+    static constexpr int wsyncCountMax = 32767;
+
+    void wsyncClear() {
+#if WITH_WSYNC
+        if (wsyncPcnt_) pcnt_unit_clear_count(wsyncPcnt_);
+#endif
+    }
+
+    [[nodiscard]] int wsyncCount() const {
+        int c = 0;
+#if WITH_WSYNC
+        if (wsyncPcnt_) pcnt_unit_get_count(wsyncPcnt_, &c);
+#endif
+        return c;
     }
 
     [[nodiscard]] uint16_t getDtTicks() const {
@@ -506,7 +523,9 @@ public:
         float periodNs = 1e9f / (float) pwmFrequency;
         float syncPhaseDeg = converterConf.getFloat("sync_phase_deg", 0.f);
         float trimNs = converterConf.getFloat("sync_phase_ns", 0.f);
-        assert_throw(std::abs(syncPhaseDeg) <= 3600.f, "sync_phase_deg out of range");
+        // one turn only: periodNs comes from the nominal pwm_freq, not the realized
+        // resolutionHz/periodTicks (~100 ppm apart), and that error compounds past 360 deg
+        assert_throw(std::abs(syncPhaseDeg) <= 360.f, "sync_phase_deg out of range");
         assert_throw(std::abs(trimNs) <= periodNs, "sync_phase_ns out of range");
         syncPhaseNs = syncPhaseDeg * (periodNs / 360.f) + trimNs;
 #else

@@ -809,16 +809,23 @@ static void cmdRtStats(cmd *) {
     print_real_time_stats_blocking();
 }
 
-// wired-sync follower diagnostic: edge rate on the sync pin (PCNT)
+// wired-sync diagnostic: edge rate on the sync pin (PCNT). Leader = self-check of its own
+// pulse, follower = wire delivery check. Expect the converter's own pwm_freq.
 static void cmdWsync(cmd *) {
-    int since = converter.wsyncEdges();
-    if (since < 0) {
-        UART_LOG("wsync: no edge counter (not a wired-sync follower, or WITH_WSYNC off)");
+    if (!converter.wsyncHasCounter()) {
+        UART_LOG("wsync: no edge counter (sync_role=none, or WITH_WSYNC off)");
         return;
     }
-    vTaskDelay(pdMS_TO_TICKS(250));
-    int n = converter.wsyncEdges();
-    UART_LOG("wsync edges: %d in 250ms (%.2f kHz), %d since last query", n, n * 4e-3, since);
+    // shorten the window at high pwm_freq so the 16-bit count cannot wrap (a wrapped count
+    // would read as a low edge rate, i.e. a healthy wire reported as broken)
+    uint32_t f = converter.getPwmFrequency();
+    uint32_t ms = (f && converter.wsyncCountMax * 800ull / f < 250) ? converter.wsyncCountMax * 800u / f : 250u;
+    converter.wsyncClear();
+    vTaskDelay(pdMS_TO_TICKS(ms));
+    int n = converter.wsyncCount();
+    if (n >= converter.wsyncCountMax)
+        CMD_FAIL_RETURN("wsync: count saturated at %d in %ums, rate unknown", n, (unsigned) ms);
+    UART_LOG("wsync edges: %d in %ums (%.2f kHz)", n, (unsigned) ms, (float) n / (float) ms);
 }
 
 // monotonic seconds since boot; resets only on reboot (unlike status N, which zeroes on each sweep)

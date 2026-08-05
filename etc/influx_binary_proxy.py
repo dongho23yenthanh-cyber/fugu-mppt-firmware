@@ -21,9 +21,9 @@ import argparse, socket, sys, time
 
 def use_bluek():
     """Shadow bleak with fl4p/bluek (kernel-direct, no bluetoothd D-Bus races; connections die
-    with the process). Only for the CONNECTION modes — the --adv observer stays on stock bleak:
-    bluetoothd discovery reports duplicates steadily, while raw mgmt discovery gets kernel-
-    deduped into rare bursts (and holds no connections, so its pathologies don't apply)."""
+    with the process). Needs bluek's duplicate-reporting scanner (Start Service Discovery with
+    a no-op filter) — plain mgmt discovery gets kernel-deduped to one report per scan cycle,
+    which starves continuous observers."""
     if sys.platform == 'linux':
         try:
             import bluek.shadow  # noqa: F401
@@ -184,6 +184,7 @@ def serve_adv(args, fwd):
     """Connectionless: decode the telemetry broadcast (WITH_BLE_ADV) from advertising
     manufacturer data — any number of observers, no connection, works while another host
     holds the (exclusive) NUS link. Observer stamps the time. Record: see src/tele/tele_adv.h."""
+    use_bluek()
     import asyncio, struct, queue, threading
     from bleak import BleakScanner
 

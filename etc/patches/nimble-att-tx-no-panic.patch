@@ -1,0 +1,24 @@
+diff --git a/nimble/host/src/ble_att_cmd.c b/nimble/host/src/ble_att_cmd.c
+index 36f7c9aa..1ac02a9c 100644
+--- a/nimble/host/src/ble_att_cmd.c
++++ b/nimble/host/src/ble_att_cmd.c
+@@ -87,8 +87,17 @@ ble_att_tx_with_conn(struct ble_hs_conn *conn, struct ble_l2cap_chan *chan, stru
+     ble_att_inc_tx_stat(txom->om_data[0]);
+ 
+     ble_att_truncate_to_mtu(chan, txom);
+-    rc = ble_l2cap_tx(conn, chan, txom);
+-    assert(rc == 0);
++    /* PATCHED (fugu): ble_l2cap_tx fails with ENOMEM when the msys pool runs dry
++     * mid-fragmentation; upstream assert(rc == 0) panics the whole device. The mbuf
++     * is consumed either way — report the error instead. Undo client_att_busy if we
++     * just set it for this request, else the ATT client wedges. */
++    {
++        uint8_t patched_op = txom->om_data[0];
++        rc = ble_l2cap_tx(conn, chan, txom);
++        if (rc != 0 && ble_att_is_request_op(patched_op)) {
++            conn->client_att_busy = false;
++        }
++    }
+     return rc;
+ }
+ 

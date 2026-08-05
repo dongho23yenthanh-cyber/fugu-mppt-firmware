@@ -37,6 +37,7 @@ static constexpr uint8_t MAGIC = 0xF7;
 void teleAdvInit() {
     intervalMs = ConfFile{"/littlefs/conf/tele.conf"}.getLong("adv_ms", 500);
     if (intervalMs && intervalMs < 100) intervalMs = 100;
+    nonConnOwned = false; // stale across svc off/on — bleConsoleEnd stops the adv without us
     if (intervalMs) ESP_LOGI(TAG, "broadcast every %lu ms", (unsigned long) intervalMs);
 }
 
@@ -68,8 +69,15 @@ static bool startNonConn() {
 }
 
 static void refreshPayload() {
+    // Sensor setup can fail (setupErr) with the BLE service still up — the console must
+    // survive to debug exactly that (same guard as MQTT.tickHook).
+    if (!mppt.sensorPhysicalI || !mppt.sensorPhysicalU) return;
     auto s = mppt.teleSnap();
-    auto i8 = [](float f) { return (int8_t) std::max(-128.f, std::min(127.f, f)); };
+    // med3 seeds NaN until the first sample; every other telemetry path isnan-guards.
+    if (std::isnan(s.Ui) || std::isnan(s.Uo) || std::isnan(s.I)) return;
+    // NaN temp (e.g. no NTC fitted) -> -128 sentinel, decoder omits the field.
+    auto i8 = [](float f) { return std::isnan(f) ? (int8_t) -128
+                                                 : (int8_t) std::max(-127.f, std::min(127.f, f)); };
     Rec r{.magic = MAGIC, .seq = seq++,
           .Ui = float16(s.Ui).getBinary(), .Uo = float16(s.Uo).getBinary(),
           .I = float16(s.I).getBinary(), .P = float16(s.P).getBinary(),

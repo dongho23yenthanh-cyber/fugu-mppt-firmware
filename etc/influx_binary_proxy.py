@@ -206,8 +206,10 @@ def serve_adv(args, fwd):
         _, seq, ui, uo, i, p, mcu, ntc, duty, lag, state = struct.unpack('<BB4e2b2HB', blob)
         name = names.get(dev.address) or 'fugu-' + dev.address.replace(':', '')[-6:].lower()
         ts = int(time.time() * 1000)
-        lineq.put(f"mppt,device={name} Ui={ui:.2f},Uo={uo:.2f},I={i:.3f},P={p:.2f},"
-                  f"mcu_temp={mcu:.1f},ntc_temp={ntc:.1f},pwm_duty={duty}i,lag={lag}i,"
+        temps = ''.join(f",{k}={v:.1f}" for k, v in (('mcu_temp', mcu), ('ntc_temp', ntc))
+                        if v != -128)   # -128 = NaN sentinel (e.g. no NTC fitted)
+        lineq.put(f"mppt,device={name} Ui={ui:.2f},Uo={uo:.2f},I={i:.3f},P={p:.2f}{temps},"
+                  f"pwm_duty={duty}i,lag={lag}i,"
                   f"mppt_state={state & 0xF}i,cv_lim_idx={state >> 4}i {ts}")
         if args.verbose:
             print(f"[{name}] seq={seq} P={p:.1f}W Ui={ui:.1f} Uo={uo:.1f}", file=sys.stderr)

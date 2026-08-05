@@ -53,6 +53,8 @@
 #include <errno.h>
 #endif
 #include "etc/ota_ble.h"        // otaBleBegin/End/Abort (OTA push over BLE)
+#include "tele/tele_ble.h"      // teleBleSetStreaming/teleBleStreaming (BLE telemetry stream)
+#include <sys/time.h>
 #if WITH_VCONV
 #include "sim/vconv.h"
 #endif
@@ -516,6 +518,37 @@ static void cmdOtaBle(cmd *c) {
     } else {
         CMD_FAIL_RETURN("otab: expected begin|end|abort");
     }
+}
+#endif
+
+#if defined(WITH_NETW) || defined(WITH_BLE_TELE)
+// set-time <epoch_ms>  — set the wall clock without NTP (BLE-only telemetry). SNTP still runs
+// when WiFi comes up (may step the clock); TZ is set here so localtime-based code works.
+static void cmdSetTime(cmd *c) {
+    uint64_t ms = strtoull(Command(c).getArg(0).getValue().c_str(), nullptr, 10);
+    if (ms < 1000000000000ULL)
+        CMD_FAIL_RETURN("set-time: expected epoch milliseconds");
+    timeval tv{.tv_sec = (time_t) (ms / 1000), .tv_usec = (suseconds_t) ((ms % 1000) * 1000)};
+    settimeofday(&tv, nullptr);
+    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+    tzset();
+    timeSynced = true;
+    UART_LOG("time set: %lu s", (unsigned long) (ms / 1000));
+}
+#endif
+
+#ifdef WITH_BLE_TELE
+// tele-ble [0|1]  — start/stop the BLE telemetry stream (NUS TELE notify char). Requires a set
+// clock (`set-time`) and a connected client; no arg prints status.
+static void cmdTeleBle(cmd *c) {
+    auto v = Command(c).getArg(0).getValue();
+    if (v.length()) {
+        const char *err = teleBleSetStreaming(v.toInt() != 0);
+        if (err)
+            CMD_FAIL_RETURN("tele-ble: %s", err);
+    }
+    UART_LOG("tele-ble: %s (dropped %u B)", teleBleStreaming() ? "on" : "off",
+             (unsigned) teleBleDropped());
 }
 #endif
 
@@ -1506,6 +1539,12 @@ void setupCli() {
     cli.addBoundlessCmd("service,svc", cmdService);
 #ifdef WITH_BLE
     cli.addBoundlessCmd("ota-ble", cmdOtaBle);
+#endif
+#if defined(WITH_NETW) || defined(WITH_BLE_TELE)
+    cli.addSingleArgCmd("set-time", cmdSetTime);
+#endif
+#ifdef WITH_BLE_TELE
+    cli.addSingleArgCmd("tele-ble", cmdTeleBle);
 #endif
 #ifdef WITH_MEASURE_COIL
     cli.addBoundlessCmd("measure-coil", cmdMeasureCoil); // measure-coil l0|ls [steps|hs] [dwell_ms] [apply]

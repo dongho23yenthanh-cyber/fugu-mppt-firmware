@@ -2,6 +2,9 @@
 
 #include "app_state.h"        // g_app.maxLoopLag (peak RT-loop lag for telemetry)
 #include "tele/telemetry.h"   // makeTelePoint / TelePoint (text or binary wire, build-time)
+#ifdef WITH_BLE_TELE
+#include "tele/tele_ble.h"    // teleBleStreaming gate
+#endif
 
 
 constexpr auto withDebugFields = false;
@@ -411,7 +414,8 @@ void MpptController::begin(const ConfFile &trackerConf, const ConfFile &boardCon
 
     if (tele.influxdbHost) {
         ESP_LOGI("main", "Influxdb telemetry to host %s", tele.influxdbHost.toString().c_str());
-        // sampler.onNewSample = dcdcDataChanged;
+        // sampler.onNewSample = dcdcDataChanged;  // runs on the RT sampler task — would cross
+        // tasks into teleBleEnqueue (single-task invariant, see tele_ble.cpp) if re-enabled
     }
     //flags.noPanelSwitch = boardConf
 
@@ -430,8 +434,18 @@ void MpptController::begin(const ConfFile &trackerConf, const ConfFile &boardCon
 }
 
 void MpptController::telemetry() {
+#if defined(WITH_NETW) || defined(WITH_BLE_TELE)
 #ifdef WITH_NETW
-    if (!WiFi.isConnected() || !tele.influxdbHost || !timeSynced || sampler.halted)
+    bool netReady = WiFi.isConnected() && tele.influxdbHost && timeSynced;
+#else
+    constexpr bool netReady = false;
+#endif
+#ifdef WITH_BLE_TELE
+    bool bleReady = teleBleStreaming();
+#else
+    constexpr bool bleReady = false;
+#endif
+    if ((!netReady && !bleReady) || sampler.halted)
         return;
 
     if (wallClockUs() - _lastPointWrite < 20'000) {

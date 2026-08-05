@@ -18,6 +18,7 @@
 #include "logging.h"   // addLogCallback / removeLogCallback, ESP_LOG*
 #include "etc/readerwriterqueue.h"
 #include "etc/ota_ble.h" // OTA-over-BLE firmware push (FW characteristic data sink)
+#include "tele_ble.h"    // BLE telemetry stream (TELE characteristic, WITH_BLE_TELE)
 
 // Nordic UART Service. RX = client->device (write commands), TX = device->client (notify output).
 // FW = client->device write-no-response firmware bytes (OTA push, bypasses the console line parser).
@@ -87,10 +88,14 @@ static int bleWrite(const char *buf, size_t len) {
     if (!deviceConnected || !txChar) return 0;
     std::lock_guard<std::recursive_mutex> lk(txMutex);
     if (txHead == txBuf.size()) { txBuf.clear(); txHead = 0; } // fully drained: reclaim
+    // Compact the consumed prefix before growing: without this txBuf's *capacity* is unbounded
+    // (backlog is capped but size = head + backlog isn't) and the doubling realloc bad_alloc'd
+    // at 16 KB on a 27 KB-free no-PSRAM heap (fboost coredump 8-05, log backlog on connect).
+    else if (txHead && txBuf.size() + len > TX_BUF_CAP) { txBuf.erase(0, txHead); txHead = 0; }
     size_t backlog = txBuf.size() - txHead;
     if (backlog + len > TX_BUF_CAP) len = backlog < TX_BUF_CAP ? TX_BUF_CAP - backlog : 0; // drop overflow
-    txBuf.append(buf, len);
-    return (int) len;
+    try { txBuf.append(buf, len); } catch (const std::bad_alloc &) { return 0; } // OOM: drop, never
+    return (int) len;                                    // throw into the log path (would terminate)
 }
 
 // Push queued output to the client, paced by NimBLE's buffer availability. Pump from the network loop.
@@ -115,9 +120,11 @@ static void bleTxDrain(time_ms nowMs) {
         // Peek NimBLE's free mbuf count first. Right after connect the connection interval is still
         // slow and the pool drains faster than it refills; calling notify() into an empty pool returns
         // BLE_HS_ENOMEM (rc=6) and logs an [E] from the BLE wrapper. So skip the call entirely when the
-        // pool is low and retry next tick — no failed call, no error spam, no dropped bytes. (4 mirrors
-        // the NimBLE btshell throughput guard: one notify needs a couple of mbufs across ATT/L2CAP.)
-        if (os_msys_num_free() < 4) break;
+        // pool is low and retry next tick — no failed call, no error spam, no dropped bytes.
+        // Floor 8: an MTU-sized notify can consume ~4 blocks across ATT/L2CAP fragmentation, and
+        // IDF's NimBLE hard-asserts (ble_att_cmd.c:91) if ble_l2cap_tx runs dry mid-send — an
+        // exhausted pool there PANICS the device (fboost coredump 8-05), it doesn't just drop.
+        if (os_msys_num_free() < 8) break;
         size_t n = std::min(chunk, txBuf.size() - txHead);
         // Don't split a multi-byte UTF-8 sequence across notifications: clients that decode each
         // notification independently would render the split halves as replacement chars. If the next
@@ -136,7 +143,11 @@ static void bleTxDrain(time_ms nowMs) {
 // Mirror logs to the connected client (registered as a log sink on connect, like telnet). Just queues;
 // the error log a failed notify() emits re-enters here and is appended (bounded by TX_BUF_CAP), never
 // re-notified, so there is no feedback storm — NimBLE's own INFO notify log is silenced to WARN below.
+// The mirror only gets half the FIFO: with drop-newest a sustained log storm would otherwise fill
+// the buffer and starve console replies — the client sees its commands time out (rpi bridge 8-05).
 static void bleLogWrite(const char *str, uint16_t len) {
+    std::lock_guard<std::recursive_mutex> lk(txMutex);
+    if (txBuf.size() - txHead + len > TX_BUF_CAP / 2) return;
     bleWrite(str, len);
 }
 
@@ -172,6 +183,7 @@ class ServerCallbacks : public BLEServerCallbacks {
     void onDisconnect(BLEServer *s) override {
         deviceConnected = false;
         if (otaBleActive()) otaBleRequestAbort(); // net-loop tick aborts; never free OTA state on the host task
+        teleBleRequestStop(); // ditto: net-loop tick frees the stream buffers, not the host task
         removeLogCallback(bleLogWrite);
         { std::lock_guard<std::recursive_mutex> lk(txMutex); txBuf.clear(); txHead = 0; }
         ESP_LOGI(TAG, "client disconnected, re-advertising");
@@ -205,6 +217,12 @@ void bleConsoleBegin(const std::string &deviceName, const std::string &security,
 
     BLEDevice::init(deviceName.c_str()); // const char* -> Arduino String
     BLEDevice::setMTU(247); // prefer a large ATT MTU so the client negotiates up from the 23-byte default
+
+    // Reserve the TX FIFO once, at init, while the heap is still roomy. With size bounded to
+    // TX_BUF_CAP (compaction in bleWrite) the append path then never reallocates — growing the
+    // string mid-connect (log backlog burst) needed a ~16 KB doubling alloc that bad_alloc'd
+    // and took the device down on a ~27 KB-free no-PSRAM heap (fboost coredumps 8-05).
+    txBuf.reserve(TX_BUF_CAP + 64);
 
     // NimBLE logs "GAP procedure initiated: notify;" at INFO on *every* notification. Because we
     // mirror logs to the BLE link, that feeds back into more notifications — a self-sustaining storm
@@ -250,6 +268,8 @@ void bleConsoleBegin(const std::string &deviceName, const std::string &security,
     BLECharacteristic *fwChar = svc->createCharacteristic(NUS_FW_CHAR_UUID, fwProps);
     fwChar->setCallbacks(&fwRxCallbacks);
 
+    teleBleCreateChar(svc); // telemetry notify char (no-op unless WITH_BLE_TELE)
+
     svc->start();
 
     BLEAdvertising *adv = BLEDevice::getAdvertising();
@@ -284,9 +304,20 @@ void bleConsoleLoop(time_ms nowMs) {
     consoleFlushHook = nullptr;
     bleTxDrain(nowMs); // flush queued console/log output, paced by NimBLE buffer availability
     otaBleTick(nowMs); // drain any staged OTA firmware bytes to flash (no-op when not updating)
+    teleBleTick(nowMs); // batch + notify the telemetry stream (no-op unless streaming)
 }
 
 bool bleConsoleConnected() { return deviceConnected; }
+
+size_t bleConsoleChunk() {
+    if (!deviceConnected || !bleServer) return 20;
+    uint16_t mtu = bleServer->getPeerMTU(bleServer->getConnId());
+    return mtu > 23 ? (size_t) (mtu - 3) : 20;
+}
+
+bool bleConsoleLinkSettled() {
+    return deviceConnected && !txArmSettle && wallClockMs() - txConnectMs >= TX_SETTLE_MS;
+}
 
 void bleConsoleAwaitTxDrain(unsigned lowWater, unsigned timeoutMs) {
     if (!bleStarted || !deviceConnected) return;
@@ -310,6 +341,10 @@ void bleConsoleEnd() {}
 void bleConsoleLoop(time_ms) {}
 
 bool bleConsoleConnected() { return false; }
+
+size_t bleConsoleChunk() { return 20; }
+
+bool bleConsoleLinkSettled() { return false; }
 
 void bleConsoleAwaitTxDrain(unsigned, unsigned) {}
 

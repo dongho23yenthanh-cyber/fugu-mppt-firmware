@@ -22,8 +22,7 @@
 
 #include "compress.h"
 #include "../conf.h"
-SymbolTable g_symtab;                    // shared interning table for the binary wire (telemetry.h)
-bool g_teleBinary = false;               // set by TelemetryService::onStart; default = text
+#include "tele_core.h"
 static Compressor *s_teleCompressor = nullptr;   // cached compressor for the binary wire
 
 
@@ -32,7 +31,8 @@ WiFiMulti wifiMulti;
 AsyncUDP asyncUdp;
 
 bool noSsid = true;
-bool timeSynced = false;
+static bool sntpSynced = false;   // SNTP ran to completion; separate from timeSynced, which a
+                                  // BLE `set-time` can also set (must not suppress NTP)
 
 // Grace period to keep retrying the AP we lost before roaming to another configured network
 // (the router might just be rebooting). 0 disables. Set via wifi.conf::switch_delay (seconds).
@@ -108,22 +108,8 @@ bool add_ap(const std::string &ssid, const std::string &psk) {
     return true;
 }
 
-std::string getDeviceId() {
-    return "fugu-" + std::string(getChipId());
-}
-
-const std::string &getHostname(bool reload) {
-    static std::string hostname{};
-    if (hostname.empty() or reload) {
-        nvs.open();
-        hostname = nvs.readString("hostname", getDeviceId());
-        nvs.close();
-    }
-    return hostname;
-}
-
 void connect_wifi_async() {
-    timeSynced = false;
+    sntpSynced = false;   // force a fresh NTP sync after (re)connect; clock stays valid
     if (noSsid) wifi_load_conf();
     if (!noSsid) {
         NetworkManager::setHostname(getHostname().c_str());
@@ -191,8 +177,9 @@ void wifiLoop(bool connect) {
         wait_for_wifi();
     }
 
-    if (unlikely(!timeSynced)) {
+    if (unlikely(!sntpSynced)) {
         if (timeSyncAsync("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.nis.gov")) {
+            sntpSynced = true;
             timeSynced = true;
         }
     }
@@ -260,12 +247,9 @@ static void udpFlushString(const IPAddress &host, uint16_t port, String &msg) {
     msg.clear();
 }
 
-// Load tele.conf::binary at service start; cache so the hot path doesn't read
-// littlefs per point. The binary wire is always tamp-compressed; on text the
-// compressor stays null.
-void teleLoadWireConf() {
-    ConfFile conf{"/littlefs/conf/tele.conf"};
-    g_teleBinary = conf.getLong("binary", 0) != 0;
+// Cache the UDP wire's compressor at service start (after teleLoadWireConf). The binary
+// wire is always tamp-compressed; on text the compressor stays null.
+void teleUdpLoadCompressor() {
     s_teleCompressor = g_teleBinary ? &compressorByName("tamp") : nullptr;
 }
 
@@ -283,28 +267,6 @@ static void sendBinaryBatch(const IPAddress &dst, uint16_t port, Compressor &com
         bytesSent += asyncUdp.writeTo((const uint8_t *) out.data(), out.size(), dst, port);
     }
     raw.clear();
-}
-
-const char *getChipId() {
-    static char ssid[25]{0};
-    if (!strlen(ssid)) {
-        // newlib-nano printf has no 64-bit support; split MAC into hi/lo 32-bit
-        // words so the result stays identical to "%llX" for any 48-bit MAC.
-        uint64_t mac = ESP.getEfuseMac();
-        snprintf(ssid, 25, "%s-%lX%08lX", CONFIG_IDF_TARGET,
-                 (unsigned long) (mac >> 32), (unsigned long) (mac & 0xFFFFFFFF));
-    }
-    return ssid;
-}
-
-
-moodycamel::ReaderWriterQueue<std::string> pointsQ{};
-
-void telemetryAddPoint(TelePoint &p, uint16_t maxQueue) {
-    assert(p.hasTime());
-
-    if (pointsQ.size_approx() < maxQueue)
-        pointsQ.enqueue(p.takeWire());
 }
 
 // TelemetryService transport lives here (where the queue/UDP/compressor statics are file-local);

@@ -48,7 +48,6 @@ set(NETW_SRC
         "../src/tele/mqtt.cpp"
         "../src/tele/HAMqttDevice.cpp"
         "../src/tele/home_assistant.cpp"
-        "../src/tele/tamp_compress.cpp"
         "../src/web/server.cpp"
         "../src/etc/ota.cpp"
 )
@@ -80,6 +79,19 @@ else ()
     set(BLE_SRC "")
 endif ()
 
+# WiFi-free telemetry core (point queue, symbol table, wire conf, tamp) — needed by the UDP path
+# (NETW) and the BLE stream (CONFIG_FUGU_WITH_BLE_TELE, adds src/tele/tele_ble.cpp to BLE_SRC).
+set(TELE_CORE_SRC "")
+if (WITH_NETW OR CONFIG_FUGU_WITH_BLE_TELE)
+    set(TELE_CORE_SRC
+            "../src/tele/tele_core.cpp"
+            "../src/tele/tamp_compress.cpp"
+    )
+endif ()
+if (CONFIG_FUGU_WITH_BLE_TELE)
+    list(APPEND BLE_SRC "../src/tele/tele_ble.cpp")
+endif ()
+
 # CONFIG_FUGU_WITH_VCONV replaces the physical gate driver + ADC with a software converter plant
 # (src/sim/vconv.*). Kconfig enforces mutual exclusion with the MCPWM driver. See
 # docs/superpowers/specs/2026-05-23-virtual-converter-design.md.
@@ -105,6 +117,7 @@ idf_component_register(SRCS
         "../src/math/float16.cpp"
         ${NETW_SRC}
         ${BLE_SRC}
+        ${TELE_CORE_SRC}
         INCLUDE_DIRS "." "../src"
         REQUIRES
         # if we start to list components here we need to list them all
@@ -147,6 +160,9 @@ endif ()
 
 if (WITH_BLE)
     component_compile_definitions("WITH_BLE=1")
+endif ()
+if (CONFIG_FUGU_WITH_BLE_TELE)
+    component_compile_definitions("WITH_BLE_TELE=1")
 endif ()
 
 # Gate-driver back-ends. CONFIG_FUGU_WITH_MCPWM (src/pwm/mcpwm.h): hardware dead-time, GPIO OST brake,
@@ -208,6 +224,7 @@ endif ()
 if (CONFIG_FUGU_WITH_MEASURE_COIL)
     list(APPEND _size_opt_srcs ../src/selftest/measure_coil.cpp)
 endif ()
+list(APPEND _size_opt_srcs ${TELE_CORE_SRC})
 set_source_files_properties(${_size_opt_srcs} PROPERTIES COMPILE_OPTIONS "-Os")
 
 component_compile_options(-Werror=missing-field-initializers)

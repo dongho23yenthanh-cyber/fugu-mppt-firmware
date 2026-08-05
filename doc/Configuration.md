@@ -183,7 +183,8 @@ SSIDs are pattern-based; add as many `ssid_<name>` / `ssid_<name>_psk` pairs as 
 |-----------------|------|--------|---------|----------------------------------------------------------------------|
 | `influxdb_host` |      | string | —       | InfluxDB host IP for UDP telemetry (port 8086)                       |
 | `binary`        |      | bool   | 0       | 1 = binary symbol-table wire (sym_line_protocol.h, tamp-compressed); 0 = text influx |
-| `enabled`       |      | bool   | 1       | Start this service at boot                                           |
+| `ble`           |      | bool   | 1       | Allow the BLE telemetry stream (`tele-ble` command; needs CONFIG_FUGU_WITH_BLE_TELE). Gates BLE only — `enabled` gates the UDP service only |
+| `enabled`       |      | bool   | 0       | Start the UDP flush service at boot                                  |
 | `log_level`     |      | enum   | info    | Verbosity: `error`, `warn` or `info`                                 |
 
 ## ftp.conf — config access over LAN

@@ -33,6 +33,16 @@ config FUGU_WITH_BLE
         tunings that Kconfig can't default from here live in sdkconfig.ble, layered by CMakeLists
         when this is on.
 
+config FUGU_WITH_BLE_TELE
+    bool "BLE telemetry stream (binary wire over NUS notify)"
+    default n
+    depends on FUGU_WITH_BLE
+    help
+        Stream InfluxDB points (binary sym_line_protocol, tamp-compressed) over a NUS notify
+        characteristic — telemetry without WiFi. Host side: etc/influx_binary_proxy.py --ble
+        (BLE→InfluxDB bridge) or etc/fugu_console.py --tele. Enable on the device with the
+        `set-time` + `tele-ble 1` console commands.
+
 config FUGU_WITH_MCPWM
     bool "MCPWM gate driver"
     default n

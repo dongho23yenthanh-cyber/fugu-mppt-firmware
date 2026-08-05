@@ -122,6 +122,8 @@ public:
     // the periodic heartbeat, or for a new-symbol resend. A new symbol schedules
     // kBurstCount consecutive sends (tight, single-loss cover) then kSpacedCount
     // sends at kResendMs (bursty-loss cover).
+    // Emit the full table with the next points (burst) — for a subscriber joining mid-stream.
+    void forceResend() { burstLeft_ = kBurstCount; spacedLeft_ = kSpacedCount; }
     bool tableDue(int64_t now, bool sawNew) {
         if (sawNew) { burstLeft_ = kBurstCount; spacedLeft_ = kSpacedCount; spacedNextMs_ = now + kResendMs; }
         bool full = (++pts_ >= kEveryPts) || (now - lastFullMs_ >= kEveryMs);

@@ -8,6 +8,7 @@
 
 #include "service.h"
 #include "console_ble.h"
+#include "tele_ble.h"
 #include "util.h"
 #ifdef WITH_NETW
 #include "tele/telemetry.h"
@@ -22,7 +23,10 @@ public:
                                   /*enabledDefault*/ false) { // it exposes the console, default off
     }
 
-    std::string statusDetail() const override { return bleConsoleConnected() ? "connected" : ""; }
+    std::string statusDetail() const override {
+        if (!bleConsoleConnected()) return "";
+        return teleBleStreaming() ? "connected, tele stream" : "connected";
+    }
 
 protected:
     bool onStart() override {
@@ -40,7 +44,9 @@ protected:
         return true;
     }
 
-    void onStop() override { bleConsoleEnd(); }
+    // Free the tele stream synchronously: bleConsoleEnd()'s disconnect only *requests* the stop,
+    // and a stopped service never ticks again to consume it (runs on the net loop, so it's safe).
+    void onStop() override { teleBleSetStreaming(false); bleConsoleEnd(); }
     void onTick() override { bleConsoleLoop(wallClockMs()); }
 };
 

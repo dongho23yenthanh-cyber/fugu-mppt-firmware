@@ -775,7 +775,16 @@ def make_transport(args):
                                    address=args.address, name=args.name)
     if args.ble:
         print(f"scanning for BLE NUS (name contains {args.name!r}) …")
-        return BleTransport(name=args.name, address=args.address)
+        tele_cb = None
+        if getattr(args, "tele", False):
+            try:
+                from fugu.teledec import TeleStream
+            except ImportError:
+                from etc.fugu.teledec import TeleStream
+            stream = TeleStream(on_error=lambda e: print(f"tele decode error: {e} (resync)",
+                                                         file=sys.stderr))
+            tele_cb = lambda data: [print("tele| " + ln) for ln in stream.feed(data)]
+        return BleTransport(name=args.name, address=args.address, tele_cb=tele_cb)
     if args.mqtt:
         ro = " (read-only)" if args.mqtt_readonly else ""
         print(f"connecting to MQTT broker {args.mqtt}:{args.mqtt_port}, device ~{args.name!r}{ro}")
@@ -824,6 +833,10 @@ def main():
     ap.add_argument("--elf", default=None,
                     help="firmware ELF for `peek <symbol>`/`sym` resolution (default: $FUGU_ELF or "
                          "newest build*/fugu-firmware.elf)")
+    ap.add_argument("--tele", action="store_true",
+                    help="with --ble: subscribe the telemetry stream (sends set-time + tele-ble 1) "
+                         "and print decoded points as 'tele| <influx line>' (needs "
+                         "CONFIG_FUGU_WITH_BLE_TELE firmware)")
     ap.add_argument("--coredump", nargs="?", const="info", metavar="info|get|erase",
                     help="pull the saved panic core dump: `info` (default) shows presence/size, "
                          "`get` streams it (base64), decodes to coredump.bin and runs esp-coredump, "
@@ -832,6 +845,10 @@ def main():
 
     if len(sys.argv) == 1:  # no arguments: search every transport, don't connect
         return discover_devices()
+
+    if args.tele and not args.ble:
+        print("--tele requires --ble", file=sys.stderr)
+        return 1
 
     try:
         transport = make_transport(args)
@@ -842,6 +859,12 @@ def main():
         return 1
     elf_path = peek_symbols.find_elf(args.elf)
     try:
+        if args.tele:
+            for cmd in (f"set-time {int(time.time() * 1000)}", "tele-ble 1"):
+                r = con.command(cmd)
+                print(f"{cmd} -> {'OK' if r.ok else 'ERR'}: {r.text.strip()}")
+                if not r.ok:
+                    return 1
         commands = list(args.command or [])
         read_stdin, active, delimit = resolve_command_mode(
             commands, args.stdin, bool(args.coredump), sys.stdin.isatty())

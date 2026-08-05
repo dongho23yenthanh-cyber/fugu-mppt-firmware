@@ -25,6 +25,8 @@ rejection message for invalid arguments / wrong context.
 | `ip` | Show the local IP address. |
 | `hostname <hostname>` | Set the device hostname (persisted in NVS, applied on next boot). |
 | `ota <url>` | Download and flash a new app image from an HTTP(S) URL. Halts the converter and ADC during the update. |
+| `set-time <epoch_ms>` | Set the wall clock without NTP (epoch milliseconds; sets TZ to CET). For BLE-only telemetry; SNTP still runs when WiFi comes up and may step the clock. |
+| `tele-ble [0\|1]` *(needs `CONFIG_FUGU_WITH_BLE_TELE`)* | Start/stop the BLE telemetry stream on the NUS TELE characteristic (binary wire, tamp-compressed). Requires a set clock (`set-time`) and a connected BLE client; no argument prints status + dropped bytes. Host side: `etc/influx_binary_proxy.py --ble` or `etc/fugu_console.py --ble --tele`. |
 | `curl [-X M] [-H k:v] [-d data] <url>` *(needs `CONFIG_FUGU_WITH_NETTOOLS`)* | Blocking HTTP(S) request — prints the status line and response body to the issuing console. TLS is verified against the mbedTLS certificate bundle. `-X` sets the method (GET/POST/PUT/DELETE/HEAD/PATCH); `-d` sends a request body (implies POST, defaults Content-Type to form-encoded unless a `-H Content-Type:…` is given); `-H` adds a header (up to 4, `key:value`). Flag values are single tokens — no spaces, so use compact JSON. The body is streamed and capped at 16 KB. |
 | `ping <host> [count]` *(needs `CONFIG_FUGU_WITH_NETTOOLS`)* | ICMP echo to an IPv4 host/IP (`count` 1–60, default 4). Prints per-reply lines (seq/ttl/time) and a sent/received/loss summary. |
 | `nslookup <host>` (alias `resolve`) *(needs `CONFIG_FUGU_WITH_NETTOOLS`)* | Print every IPv4 address the resolver returns for `<host>`. |

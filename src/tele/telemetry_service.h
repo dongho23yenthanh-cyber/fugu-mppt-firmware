@@ -8,6 +8,9 @@
 #include "../service.h"
 #include "../mppt.h"
 #include "telemetry.h"
+#include "tele_core.h"
+
+void teleUdpLoadCompressor();  // telemetry.cpp: cache the UDP wire's compressor
 
 extern MpptController mppt;
 
@@ -25,10 +28,18 @@ protected:
     bool onStart() override {
         if (!WiFi.isConnected()) return false;          // UDP is connectionless, nothing to open
         teleLoadWireConf();                              // pick text|binary from tele.conf (binary wire = tamp)
+        teleUdpLoadCompressor();
+        // A restarted service sends from a new UDP source port -> the proxy starts a fresh
+        // symbol table; burst the full table so it isn't blind until the 120 s heartbeat.
+        // (g_symtab is shared: the burst also lands on a concurrent BLE stream — harmless,
+        // the decoder tolerates repeated tables; costs it a few hundred bytes.)
+        g_symtab.forceResend();
         xTaskCreatePinnedToCore(flushTask, "teleflush", 4096, this, 1, &_flushTask, 0);
+        g_teleUdpActive = true;
         return true;
     }
     void onStop() override {                            // delete the task -> frees CPU + its stack
+        g_teleUdpActive = false;
         if (_flushTask) { vTaskDelete(_flushTask); _flushTask = nullptr; }
     }
     void onTick() override {

@@ -90,6 +90,9 @@ PLAN = [
     # --- service management: log level + restart (reversible; skip if the service isn't built) -
     ("svc log scope info", None, GROUP_ALWAYS, True),
     ("svc restart scope", None, GROUP_ALWAYS, True),
+    # --- BLE telemetry stream (CONFIG_FUGU_WITH_BLE_TELE; default off -> unknown cmd -> SKIP) ----
+    ("tele-ble", "tele-ble", GROUP_ALWAYS, True),  # status only; `tele-ble 1` needs a BLE client
+    # `set-time <ms>` intentionally omitted: it steps the device wall clock.
     # --- ADC backend re-init (brief; safe on a mock) ----------------------------------------
     ("adc-restart", None, GROUP_MOCK, True),
     ("adc-reset", None, GROUP_MOCK, True),

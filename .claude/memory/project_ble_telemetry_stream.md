@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: ee629fbc-82ce-4953-a3c7-f58db5aa12e1
-  modified: 2026-08-05T17:56:09.225Z
+  modified: 2026-08-05T18:57:17.105Z
 ---
 
 Implemented 2026-08-05 (uncommitted at time of writing). Binary telemetry (sym_line_protocol +
@@ -93,6 +93,15 @@ Also: MAX_CONNECTIONS=1, so a bridge holding the slot legitimately blocks every 
 Ground truth needs a Linux observer or the on-device `teleadv: nonconn adv as <mac>` log — macOS
 hides MACs behind per-host UUIDs. fbuck BLE MAC = 34:85:18:82:40:1a (public), fboost = random static.
 
+**Heap audit (8-05 night, closes the todo):** the "27 KB free" era is over. Measured with
+BLE_TELE+BLE_ADV builds: fbuck 82.6 KB free idle / 74.0 KB with BLE console + tele stream
+active (min-ever 73.2, largest block 32.8 KB — stream+connection ≈ 8.6 KB); fboost 70 KB free,
+min-ever 65.8 KB (wifi assoc, no client). Why it improved: adv broadcast means the bridge holds
+no connection/stream; txBuf + tele buffers are pre-reserved and capped; and recent builds had
+accidentally DROPPED BLE_TELE (sdkconfig regen lost CONFIG_FUGU_WITH_BLE_TELE=y — default n;
+re-enabled + reflashed 8-05). Levers if ever tight again: TX_BUF_CAP 8K, NimBLE msys pool, mdns.
+
 **Open:** fboost `0sps` sampler (likely tied to its wsync-bench wiring; see commit 6833fb5) →
 near-zero points. No-WiFi boot still mis-archives today-as-yesterday in DailyEnergyMeter until
-set-time. Heap optimization tracked as session todo.
+set-time. Smart-shunt not advertising on BLE after restore (spiffs erased / WIP build — Fab to
+check).

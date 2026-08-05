@@ -10,13 +10,15 @@ follower never free-runs more than one period from the leader, so crystal drift 
 as a sub-tick correction every cycle. The sync edge is resampled in the 160 MHz group clock, so
 relative jitter is up to one tick (6.25 ns), not under it.
 
-> **Unresolved hazard — do not run this on a live converter yet.** A sync edge sets LS LOW and HS
-> HIGH on the same clock. The LS→HS dead-band is *not* hardware dead-time: it comes from reserving
-> `pwmMax -= dtTicks` in software (`mcpwm.h` `init()`), which only holds when the edge coincides
-> with the period boundary. An out-of-phase edge — first lock, relock after a wire break, or any
-> noise glitch — therefore commands **zero** dead time, leaving 30–80 ns of real cross-conduction
-> at DC-link voltage. Steady-state lock is safe (sync coincides with the follower's own TEZ, LS
-> already off), which is why the bench leader test looked clean.
+The follower runs its period **2 ticks short** (`wsyncLeadTicks`), so its own TEZ always fires
+before the leader's edge arrives and the sync only ever *truncates* an already-wrapped period.
+This is what makes the sync safe: the gates take their normal TEZ actions with the software-
+reserved LS→HS dead-band intact, and the sync itself drives only LS. It must never drive HS —
+that would switch HS on in the same clock it switches LS off, and the LS→HS band is not hardware
+dead-time (it comes from `pwmMax -= dtTicks`, which only holds at a real period boundary), so an
+out-of-phase edge would command zero dead time and 30–80 ns of cross-conduction. 2 ticks is
+~490 ppm at 39 kHz, against ~40 ppm worst-case crystal mismatch plus one tick of resync
+quantization.
 
 ## Configuration
 
@@ -125,7 +127,9 @@ wireless-only setups.
 
 ## Bench checklist
 
-- [ ] scope leader pulse: ~1 µs, every period, rigid to leader HS rising edge
+- [x] scope leader pulse: ~1 µs, every period, rigid to leader HS rising edge
+- [x] wire delivers: `wsync` on the follower reads the leader's rate (38.98 kHz), and 0.00 kHz
+      with the leader's `sync_role` set to `none` — the diagnostic has been seen to fire
 - [ ] follower locks: both switch nodes stationary relative to each other, no beat
 - [ ] measure propagation delay (leader TEZ → follower reload) → subtract it via `sync_phase_ns`
 - [ ] pull the wire: follower free-runs (beat returns), reconnect → relock within one period

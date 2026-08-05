@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: ee629fbc-82ce-4953-a3c7-f58db5aa12e1
-  modified: 2026-08-05T16:50:06.022Z
+  modified: 2026-08-05T17:56:09.225Z
 ---
 
 Implemented 2026-08-05 (uncommitted at time of writing). Binary telemetry (sym_line_protocol +
@@ -80,6 +80,18 @@ disconnect event alone. Do NOT enable `CONFIG_BT_NIMBLE_EXT_ADV`: legacy `ble_ga
 then links but silently returns ENOTSUP (console stops advertising, no error). Host:
 `influx_binary_proxy.py --adv`. Bench-validated both units, incl. unconnectable fboost;
 delivery thins ~4x during an active console session (RF contention), recovers on disconnect.
+
+**Adv identity split (fixed b2d60f4, 8-05):** the non-conn adv chose its own address type
+(`ble_hs_id_infer_auto`) while the Arduino BLEDevice console adv may use a **random static**
+address — so during a connection the device broadcast under a SECOND MAC: bleak/BlueZ
+`find_device_by_address` fails ("device not found") though scans show it, and the every-8th-slot
+name lands on the wrong cached identity. Fix: derive the type by comparing `BLEDevice::getAddress()`
+against the public addr, never by re-deriving BLEDevice's rule. Adv mode is now tri-state
+(Unknown re-asserts) and `bleConsoleConnected()` cross-checks `ble_gap_conn_find` — `ble_gap_adv_active()`
+cannot distinguish connectable from non-connectable, so it must never be read as "console reachable".
+Also: MAX_CONNECTIONS=1, so a bridge holding the slot legitimately blocks every other central.
+Ground truth needs a Linux observer or the on-device `teleadv: nonconn adv as <mac>` log — macOS
+hides MACs behind per-host UUIDs. fbuck BLE MAC = 34:85:18:82:40:1a (public), fboost = random static.
 
 **Open:** fboost `0sps` sampler (likely tied to its wsync-bench wiring; see commit 6833fb5) →
 near-zero points. No-WiFi boot still mis-archives today-as-yesterday in DailyEnergyMeter until

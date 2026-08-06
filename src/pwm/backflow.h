@@ -14,6 +14,7 @@ class BackflowDriver {
     bool _state = false;
     int8_t panelEN;
     int8_t panelSD;
+
 public:
     void init(const ConfFile &pin) {
         panelEN = pin.getByte("panel_en", 0);
@@ -44,11 +45,11 @@ public:
         } else if (panelSD) {
             digitalWrite(panelSD, !enable);
         } else {
-            if (_state != enable) {
-                UART_LOG_ASYNC("Back-flow switch ignored");
-            }
+            //if (_state != enable) {
+            //  UART_LOG_ASYNC("Back-flow switch ignored");
+            //}
         }
-        if (_state != enable) {
+        if (_state != enable && (panelEN or panelSD)) {
             UART_LOG_ASYNC("Back-flow switch %s", enable ? "enabled" : "disabled");
         }
         _state = enable;
@@ -57,6 +58,6 @@ public:
     bool state() const { return _state; }
 
     explicit operator bool() const {
-        return panelSD != 0 and panelEN != 0;
+        return panelSD != 0 or panelEN != 0;   // init() asserts the two are mutually exclusive
     }
 };

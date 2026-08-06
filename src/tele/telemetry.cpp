@@ -128,6 +128,14 @@ static bool timeSyncAsync(const char *tzInfo, const char *ntpServer1, const char
                    const char *ntpServer3 = nullptr) {
     static unsigned long tSyncStarted = 0;
 
+    if (tSyncStarted && time(nullptr) > 1000000000l) {
+        // fall through to the success branch: a sync that completed just before a link
+        // drop still counts, no need to restart it
+    } else if (!WiFi.isConnected()) {
+        tSyncStarted = 0; // don't let a link drop age into a bogus timeout
+        return false;
+    }
+
     if (!tSyncStarted) {
         ESP_LOGI("tele", "Starting time sync");
         tSyncStarted = millis() + 1;

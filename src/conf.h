@@ -317,6 +317,13 @@ public:
         // strto_ error handling https://stackoverflow.com/questions/26080829/detecting-strtol-failure
         markAccessed_(key);
         if (auto *vp = find_(key)) {
+            // `key=` with nothing after it: strtoX("") returns 0 with endptr==str and no errno, so
+            // both checks below wave it through and the caller silently gets a deliberate-looking
+            // 0 instead of its default. A present-but-empty key means "unset", not "zero".
+            if (vp->empty()) {
+                ESP_LOGE(TAG, "%s:%s has an empty value", path, key.c_str());
+                throw std::runtime_error("empty value for key: " + key);
+            }
             char *endptr = nullptr;
             errno = 0; // reset
             T l = strto_(vp->c_str(), &endptr);

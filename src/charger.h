@@ -30,6 +30,12 @@ struct BatChargerParams {
     // offset Vout frame) it may pull. Without it a converter that reads Vout high pins a full pack above EOC
     // and trickles current into it indefinitely. See doc/Termination.md.
 
+    // Vbat_max doubles as the "battery not identified yet" flag (boot before auto-detect, a failed
+    // detect, a bad `vset`). Test it here rather than for NAN at each use: a 0 or negative is just
+    // as unusable, and treating it as a real ceiling clamps the OV threshold to ~0, which reads
+    // every output voltage as an over-voltage and locks the converter out of ever starting.
+    [[nodiscard]] bool haveVbatMax() const { return std::isfinite(Vbat_max) && Vbat_max > 0; }
+
     void load(const ConfFile &chargerConf) {
         Vbat_max = chargerConf.getFloat("vout_max", NAN, true);
         cv_eoc = chargerConf.getFloat("cv_eoc", 3.5f);

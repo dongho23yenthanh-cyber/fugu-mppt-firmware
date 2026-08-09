@@ -132,8 +132,6 @@ static void cmdMppt(cmd *) {
 // [ls] the low-side on-count is pinned to that value (bench LS-timing sweep). ls<0 -> auto.
 
 static void cmdDc(cmd *c) {
-    if (adcSampler.isCalibrating())
-        CMD_FAIL_RETURN("dc: busy calibrating");
 #ifdef WITH_MEASURE_COIL
     if (isMeasuring())
         CMD_FAIL_RETURN("dc: busy measuring");
@@ -145,6 +143,15 @@ static void cmdDc(cmd *c) {
     auto dc = v.toInt();
     if (dc < 0 || dc > converter.pwmCtrlMax || v.indexOf(',') != -1)
         CMD_FAIL_RETURN("dc: out of range [0,%i]", (int) converter.pwmCtrlMax);
+
+    // `dc 0` is the shutdown escape hatch and must always work — a sweep runs its calibration
+    // phase, so refusing it there is exactly when the user needs it (e.g. to break out of a
+    // converter that keeps tripping a protection). Only powering up needs a settled sampler.
+    if (dc != 0 && adcSampler.isCalibrating())
+        CMD_FAIL_RETURN("dc: busy calibrating");
+
+    // manual PWM overrides any running scan; don't leave it latched (mppt.active() would stay true)
+    mppt.abortSweep();
 
     if (!g_app.manualPwm || converter.disabled()) {
         ESP_LOGI("main", "Switched to manual PWM");
@@ -1252,9 +1259,10 @@ static void cmdConfCheck(cmd *) {
 
 static void cmdVset(cmd *c) {
     float v = Command(c).getArg(0).getValue().toFloat();
-    if (v >= 0 and v <= 999) mppt.charger.params.Vbat_max = v;
+    // 0 is not "no limit": it clamps the OV threshold to ~0 and wedges the converter (issue #58).
+    if (v > 0 and v <= 999) mppt.charger.params.Vbat_max = v;
     else
-        CMD_FAIL_RETURN("vset: out of range [0,999]");
+        CMD_FAIL_RETURN("vset: out of range (0,999]");
 }
 
 static void cmdIset(cmd *c) {

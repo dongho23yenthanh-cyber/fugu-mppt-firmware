@@ -200,6 +200,7 @@ private:
     time_ms lastTimeProtectPassed = 0;
     time_us _lastPointWrite = 0;
     time_us _backoffUntilUs = 0;
+    uint32_t _backoffArmedSec = 0; // length of the running backoff, so a repeat can't extend it
     unsigned short _teleNumPoints = 0;
 
     const VIinVout<const Sensor *> &sensors;
@@ -309,16 +310,42 @@ public:
             converter.disable();
         }
         if (backoffSec) {
-            auto until = wallClockUs() + static_cast<time_us>(backoffSec) * 1000000ULL;
-            ESP_LOGW("mppt", "backoff %lus [%s]%s", (unsigned long) backoffSec, who,
-                     _sweeping ? " mid-sweep" : "");
-            if (until > _backoffUntilUs) _backoffUntilUs = until;
+            // Arm and log on the *entry* to a backoff only. A condition that persists across ticks
+            // (supply-UV, OV) calls us every iteration; re-arming each time pushes the deadline
+            // forward indefinitely so it never expires to retry, and the log itself becomes the
+            // flood that makes the device unreachable over BLE (issue #58).
+            // Escalate on a longer trip (a 30 s Iout-OC must not be cut short by a 5 s one), but a
+            // repeat of the *same* length is not new information — re-arming on it would push the
+            // deadline out by another full period every tick, so it could never expire to retry.
+            if (!inBackoff() || backoffSec > _backoffArmedSec) {
+                _backoffUntilUs = wallClockUs() + static_cast<time_us>(backoffSec) * 1000000ULL;
+                _backoffArmedSec = backoffSec;
+                ESP_LOGW("mppt", "backoff %lus [%s]%s", (unsigned long) backoffSec, who,
+                         _sweeping ? " mid-sweep" : "");
+            }
+            // Abort the sweep: update()'s sweep branch re-enables the converter on every tick and
+            // doesn't consult the backoff, so leaving _sweeping set livelocks the trip
+            // (enable -> protect trip -> disable -> enable ...) at sample rate. The zero-backoff
+            // callers (calibration, user `dc 0`) want immediate resume and must keep sweeping —
+            // startSweep() itself calibrates, and that path calls us every tick.
+            _sweeping = false;
         }
     }
 
     // Manual override (console `sweep`): drop any pending backoff so the user's
     // intent isn't silently absorbed by a stale trip timer.
-    void clearBackoff() { _backoffUntilUs = 0; }
+    void clearBackoff() {
+        _backoffUntilUs = 0;
+        _backoffArmedSec = 0;
+    }
+
+    // Discard a running scan without committing its MPP. active() stays true while _sweeping is
+    // set, so a scan the user overrides (manual PWM) would otherwise keep the state machine in
+    // sweep mode until the next `mppt`.
+    void abortSweep() {
+        _sweeping = false;
+        maxPowerPoint = {};
+    }
 
     // Break a CV-floor lockup in place (no reboot): release the charger's Vout pinning and reset the
     // Vout controller + limit/target state so normal MPPT can climb again. Returns true if the
@@ -381,7 +408,7 @@ public:
 
         // detect battery voltage
         // TODO move this to charger ?
-        if (std::isnan(charger.params.Vbat_max)) {
+        if (!charger.params.haveVbatMax()) {
             auto vout = sensors.Vout->calibrationAvg;
             float detectedVout_max = detectMaxBatteryVoltage(vout);
             if (std::isnan(detectedVout_max)) {
@@ -416,8 +443,13 @@ public:
 
         // output over-voltage
         // todo introduce separate variable for reverse_current_paranoia
-        auto ovTh = std::min(charger.params.Vbat_max * (limits.reverse_current_paranoia ? 1.03f : 1.5f),
-                             limits.Vout_max);
+        // Until the battery is identified, the hard configured ceiling is the only threshold we
+        // have. Deriving one from an unusable Vbat_max instead would yield ~0 and trip OV on any
+        // output voltage — and protectLf()'s re-detect never runs, because a trip returns before it.
+        auto ovTh = charger.params.haveVbatMax()
+                        ? std::min(charger.params.Vbat_max * (limits.reverse_current_paranoia ? 1.03f : 1.5f),
+                                   limits.Vout_max)
+                        : limits.Vout_max;
         //if (adcSampler.med3.s.chVout.get() > ovTh) {
         if (sensors.Vout->last > ovTh) {
             //  && sensors.Vout->previous > ovTh * 0.9f

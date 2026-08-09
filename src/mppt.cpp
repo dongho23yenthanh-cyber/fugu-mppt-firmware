@@ -164,7 +164,12 @@ void MpptController::update() {
     rtcount("mppt.update.control");
 
     if (_sweeping && !sampler.isCalibrating()) {
-        if (converter.disabled()) converter.pwmPerturb(1);
+        if (converter.disabled()) {
+            // second gate on the trip timer (shutdownDcdc() already ends the sweep): re-enabling
+            // inside a backoff is what turns a repeating protection trip into a log flood
+            if (inBackoff()) return;
+            converter.pwmPerturb(1);
+        }
 
         if (controlMode == MpptControlMode::None) {
             controlMode = MpptControlMode::Sweep;

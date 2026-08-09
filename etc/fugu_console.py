@@ -630,7 +630,17 @@ class _PromptSafePrinter:
     returning the previously *accepted* line while idle at the next prompt, so every status line
     would redraw `prompt + "<last cmd>"` until the user starts typing. We blank the buffer while
     it still equals that command — the user hasn't typed anything new yet.
+
+    The trailing prompt is only re-drawn once the line stream goes quiet (`REDRAW_IDLE`). Erasing
+    it costs nothing on a well-behaved TTY, but a device that floods (a protection trip looping at
+    sample rate) emits hundreds of lines a second, and terminals that commit the pre-erase row to
+    scrollback instead of dropping it — the JetBrains terminal does — then interleave a prompt copy
+    between every log line. Deferring the redraw keeps a flood readable everywhere; the prompt is
+    still restored as soon as the device stops talking, and readline redraws it on the first
+    keypress regardless.
     """
+
+    REDRAW_IDLE = 0.15  # s of silence before the prompt is painted back
 
     def __init__(self):
         self.prompt = ""
@@ -638,6 +648,7 @@ class _PromptSafePrinter:
         self.last_command = ""
         self._istty = sys.stdout.isatty()  # redraw only makes sense on a real terminal
         self._lock = threading.Lock()
+        self._pending = None  # Timer that repaints the prompt once the flood stops
 
     def __call__(self, line: str) -> None:
         with self._lock:
@@ -647,15 +658,33 @@ class _PromptSafePrinter:
             if self.active and self._istty:
                 try:
                     import readline
-                    buf = readline.get_line_buffer()
-                    if buf == self.last_command:  # stale leftover, not fresh typing
-                        buf = ""
-                    sys.stdout.write("\r\x1b[K" + line + "\n" + self.prompt + buf)
-                    sys.stdout.flush()
-                    return
                 except ImportError:
                     pass
+                else:
+                    if self._pending is not None:
+                        self._pending.cancel()
+                    sys.stdout.write("\r\x1b[K" + line + "\n")
+                    sys.stdout.flush()
+                    self._pending = threading.Timer(self.REDRAW_IDLE, self._redraw_prompt)
+                    self._pending.daemon = True
+                    self._pending.start()
+                    return
             print(line)
+
+    def _redraw_prompt(self) -> None:
+        with self._lock:
+            self._pending = None
+            if not self.active:
+                return
+            try:
+                import readline
+                buf = readline.get_line_buffer()
+            except ImportError:
+                buf = ""
+            if buf == self.last_command:  # stale leftover, not fresh typing
+                buf = ""
+            sys.stdout.write("\r\x1b[K" + self.prompt + buf)
+            sys.stdout.flush()
 
 
 def interactive(con: Console, elf_path: str | None = None):

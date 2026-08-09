@@ -20,9 +20,42 @@
 #include "util.h"      // wallClockMs
 #include "logging.h"   // addLogCallback / removeLogCallback, ESP_LOG*
 #include "etc/readerwriterqueue.h"
-#include "etc/ota_ble.h" // OTA-over-BLE firmware push (FW characteristic data sink)
+#include <ota_ble.h>     // OTA-over-BLE firmware push (esp-ota-ble component; FW char data sink)
+#include "adc/sampling.h" // ADC_Sampler -- halted while flash is busy
 #include "tele_ble.h"    // BLE telemetry stream (TELE characteristic, WITH_BLE_TELE)
 #include "tele_adv.h"    // advertising telemetry broadcast (WITH_BLE_ADV)
+
+// esp-ota-ble host hooks. The status sink goes to ESP_LOG* at the level the module asked for, with
+// the tag still "otab" -- the wire protocol IS these log lines (they are mirrored to the client), so
+// the format and the severity both have to survive. Flattening FAIL lines to INFO would mean raising
+// this tag's level silently swallows exactly what the host needs to tell failure from a dead link.
+extern ADC_Sampler adcSampler;
+void stopAndBackoff(uint32_t secondsDelay);
+void systemRestart();
+
+static void otaStatusHook(OtaBleLevel level, const char *line) {
+    switch (level) {
+        case OtaBleLevel::Info:  ESP_LOGI("otab", "%s", line); break;
+        case OtaBleLevel::Warn:  ESP_LOGW("otab", "%s", line); break;
+        case OtaBleLevel::Error: ESP_LOGE("otab", "%s", line); break;
+    }
+}
+
+static void otaQuiesceHook(bool halt) {
+    // Flash erase/write disables the CPU cache and stalls the other core; at full power the RT
+    // loop-latency watchdog has no margin and resets the device mid-download. The converter goes
+    // down first, then the sampler.
+    if (halt) stopAndBackoff(10);
+    adcSampler.halted = halt;
+}
+
+static void otaBleInstallHooks() {
+    OtaBleHooks h;
+    h.status = &otaStatusHook;
+    h.quiesce = &otaQuiesceHook;
+    h.restart = &systemRestart;
+    otaBleInit(h);
+}
 
 // Nordic UART Service. RX = client->device (write commands), TX = device->client (notify output).
 // FW = client->device write-no-response firmware bytes (OTA push, bypasses the console line parser).
@@ -258,6 +291,8 @@ void bleConsoleBegin(const std::string &deviceName, const std::string &security,
     } else {
         ESP_LOGW(TAG, "security: none (open console)");
     }
+
+    otaBleInstallHooks();
 
     bleServer = BLEDevice::createServer();
     bleServer->setCallbacks(&serverCallbacks);

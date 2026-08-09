@@ -67,7 +67,6 @@ endif ()
 
 set(BLE_SRC
         "../src/tele/console_ble.cpp"
-        "../src/etc/ota_ble.cpp"
 )
 
 # CONFIG_FUGU_WITH_BLE (default y) compiles the NimBLE console + OTA path; the sdkconfig.ble layering

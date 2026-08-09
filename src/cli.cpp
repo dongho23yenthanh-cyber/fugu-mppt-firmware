@@ -52,7 +52,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #endif
-#include "etc/ota_ble.h"        // otaBleBegin/End/Abort (OTA push over BLE)
+#include <ota_ble.h>            // otaBleSubmitCommand (OTA push over BLE, esp-ota-ble component)
 #include "tele/tele_ble.h"      // teleBleSetStreaming/teleBleStreaming (BLE telemetry stream)
 #include <sys/time.h>
 #if WITH_VCONV
@@ -268,10 +268,14 @@ static void cmdWifi(cmd *c) {
     if (arg == "on") {
         g_app.wifiReenableMs = 0;
         g_app.disableWifi = false;
+        nvs.open();
+        if (!nvs.readString("wifi_off", "").empty())
+            nvs.writeString("wifi_off", "");
+        nvs.close();
         connect_wifi_async();
     } else if (arg == "off") {
         // "off <minutes>" disables temporarily and keeps the saved ssid for reconnect;
-        // bare "off" disables for good and forgets the sticky ssid.
+        // bare "off" disables for good (persisted in nvs, survives reboot) and forgets the sticky ssid.
         // The actual WiFi/netif teardown is deferred to networkLoopTick's WiFi-down edge so it never
         // runs inside this console/telnet input callback: deiniting the netif under the telnet socket
         // the command arrived on frees lwip pbufs out from under the log mirror (InstrFetch UAF).
@@ -285,7 +289,9 @@ static void cmdWifi(cmd *c) {
             nvs.open();
             if (!nvs.readString("wifi_ssid", "").empty())
                 nvs.writeString("wifi_ssid", "");
+            nvs.writeString("wifi_off", "1");
             nvs.close();
+            UART_LOG("WiFi off (persisted, `wifi on` to re-enable)");
         }
     } else {
         CMD_FAIL_RETURN("wifi: expected on|off [minutes]");
@@ -500,24 +506,19 @@ static void cmdOta(cmd *c) {
 // NUS FW characteristic; `end` verifies the SHA-256 and reboots. ADC halt/restore lives inside otaBle*.
 static void cmdOtaBle(cmd *c) {
     Command cc(c);
-    auto sub = cc.getArg(0).getValue();
-    if (sub == "begin") {
-        if (cc.countArgs() < 3)
-            CMD_FAIL_RETURN("otab: begin <size> <sha256hex>");
-        long size = cc.getArg(1).getValue().toInt();
-        auto sha = cc.getArg(2).getValue();
-        if (size <= 0 || sha.length() != 64)
-            CMD_FAIL_RETURN("otab: bad size/sha");
-        if (!otaBleBegin((uint32_t) size, sha.c_str()))
-            CMD_FAIL_RETURN("otab: begin rejected");
-    } else if (sub == "end") {
-        if (!otaBleEnd())
-            CMD_FAIL_RETURN("otab: end failed"); // on success this reboots and never returns
-    } else if (sub == "abort") {
-        otaBleAbort();
-    } else {
-        CMD_FAIL_RETURN("otab: expected begin|end|abort");
+    // Reassemble the line for the module's parser, which owns both the command words and the OTAB
+    // status words -- keeping them in one place is what stops them drifting apart again.
+    String line = cc.getArg(0).getValue();
+    for (int i = 1; i < cc.countArgs(); ++i) {
+        line += ' ';
+        line += cc.getArg(i).getValue();
     }
+    // Rejected means malformed, and is reported synchronously so the console's OK:/ERR: completion
+    // marker still tells the truth. Execution happens on the network loop -- esp_ota_begin blocks on
+    // flash for far too long to run from a command callback -- so real failures still arrive later
+    // as OTAB FAIL lines.
+    if (otaBleSubmitCommand(line.c_str()) == OtaBleSubmit::Rejected)
+        CMD_FAIL_RETURN("otab: expected begin <size> <sha256hex> | end | abort");
 }
 #endif
 

@@ -182,6 +182,13 @@ static TeleConf setupNetworkAtBoot() {
 #ifdef NO_WIFI
     g_app.disableWifi = true;
 #endif
+    // bare `wifi off` persists across reboots (nvs), `wifi off <minutes>` does not
+    nvs.open();
+    if (!nvs.readString("wifi_off", "").empty()) {
+        g_app.disableWifi = true;
+        ESP_LOGI("main", "WiFi disabled (wifi off), `wifi on` to re-enable");
+    }
+    nvs.close();
     if (!g_app.disableWifi) {
         connect_wifi_async();
         bool res = wait_for_wifi();

@@ -167,9 +167,16 @@ class SynchronousConverter {
                 // leader = self-check of its own pulse. Runs BEFORE the role init: enabling the
                 // pad's input/output here routes the matrix to plain GPIO, and initSyncOut must
                 // claim the output matrix LAST or the pulse never reaches the pad.
-                pcnt_unit_config_t upc = {.low_limit = -32768, .high_limit = 32767,
+                pcnt_unit_config_t upc = {.low_limit = -32768, .high_limit = wsyncCountMax,
                                           .intr_priority = 0, .flags = {}};
+                // accumulate across the 16-bit wrap: the hw counter resets to 0 at high_limit,
+                // so without this a noise-multiplied edge rate (>3.4x nominal at 39 kHz) wraps
+                // and reads back as a plausible healthy rate. The accumulator is maintained in
+                // the limit-event ISR, which needs the high limit registered as a watch point;
+                // pcnt_unit_clear_count() resets it along with the counter.
+                upc.flags.accum_count = 1;
                 ESP_ERROR_CHECK(pcnt_new_unit(&upc, &wsyncPcnt_));
+                ESP_ERROR_CHECK(pcnt_unit_add_watch_point(wsyncPcnt_, wsyncCountMax));
                 pcnt_chan_config_t cpc = {.edge_gpio_num = syncPin, .level_gpio_num = -1,
                                           .flags = {.invert_edge_input = 0, .invert_level_input = 0,
                                                     .virt_edge_io_level = 0, .virt_level_io_level = 1,
@@ -356,10 +363,9 @@ public:
 #endif
     }
 
-    // Sync-pin edge count, sampled between wsyncClear() and here. The PCNT count register is
-    // 16 bit and this unit does not accumulate across overflow, so the caller must keep the
-    // window short enough that the count stays below wsyncCountMax -- a wrapped count reads as
-    // a plausible-but-low edge rate, i.e. a healthy wire looks broken.
+    // Sync-pin edge count, sampled between wsyncClear() and here. The 16-bit hw counter wraps
+    // at wsyncCountMax, but the unit accumulates the overflow (see drvInit), so the returned
+    // count is the true edge count and an over-rate reads high, not plausibly low.
     static constexpr int wsyncCountMax = 32767;
 
     void wsyncClear() {

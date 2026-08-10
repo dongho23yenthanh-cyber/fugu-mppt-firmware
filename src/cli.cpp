@@ -858,16 +858,23 @@ static void cmdWsync(cmd *) {
         UART_LOG("wsync: no edge counter (sync_role=none, or WITH_WSYNC off)");
         return;
     }
-    // shorten the window at high pwm_freq so the 16-bit count cannot wrap (a wrapped count
-    // would read as a low edge rate, i.e. a healthy wire reported as broken)
+    // The RUNNING role, which only the driver knows: sync_role is read once at boot while
+    // set-config edits the file live, and a leader counts its own outgoing pulse at exactly
+    // pwm_freq -- indistinguishable from a locked follower unless the reply says which this is.
+    UART_LOG("wsync role=%s", converter.wsyncFollower ? "follower" : "leader");
+    // keep the window short at high pwm_freq: the count accumulates across the 16-bit wrap
+    // (see drvInit), but a shorter window still bounds the wrap-ISR load
     uint32_t f = converter.getPwmFrequency();
     uint32_t ms = (f && converter.wsyncCountMax * 800ull / f < 250) ? converter.wsyncCountMax * 800u / f : 250u;
     converter.wsyncClear();
+    int64_t t0 = esp_timer_get_time();
     vTaskDelay(pdMS_TO_TICKS(ms));
     int n = converter.wsyncCount();
-    if (n >= converter.wsyncCountMax)
-        CMD_FAIL_RETURN("wsync: count saturated at %d in %ums, rate unknown", n, (unsigned) ms);
-    UART_LOG("wsync edges: %d in %ums (%.2f kHz)", n, (unsigned) ms, (float) n / (float) ms);
+    // measured, not requested: a preempted console task overruns the delay, and dividing by the
+    // nominal window would report a healthy wire as over-rate
+    uint32_t msMeas = (uint32_t) ((esp_timer_get_time() - t0 + 500) / 1000);
+    if (!msMeas) CMD_FAIL_RETURN("wsync: zero-length window, rate unknown");
+    UART_LOG("wsync edges: %d in %ums (%.2f kHz)", n, (unsigned) msMeas, (float) n / (float) msMeas);
 }
 
 // monotonic seconds since boot; resets only on reboot (unlike status N, which zeroes on each sweep)

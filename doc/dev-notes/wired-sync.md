@@ -130,6 +130,15 @@ wireless-only setups.
 - [x] scope leader pulse: ~1 µs, every period, rigid to leader HS rising edge
 - [x] wire delivers: `wsync` on the follower reads the leader's rate (38.98 kHz), and 0.00 kHz
       with the leader's `sync_role` set to `none` — the diagnostic has been seen to fire
+
+`wsync` reports the **running** role (`wsync role=follower|leader`) before the count, because a
+leader counts its own outgoing pulse at exactly `pwm_freq` — identical to a locked follower — and
+`sync_role` is read once at boot, so the conf file can disagree with what the driver is doing. The
+count accumulates across the 16-bit PCNT wrap (`accum_count` + a high-limit watch point), so a
+noise-multiplied edge rate reads high instead of wrapping into a plausible healthy rate, and the
+rate is divided by the *measured* window, not the requested one. Host-side check:
+`FuguDevice.wsync_status()` in fugu-py, which is tri-state — it reports `None` (unverified)
+rather than a pass whenever the role, `pwm_freq` or the count cannot be established.
 - [ ] follower locks: both switch nodes stationary relative to each other, no beat
 - [ ] measure propagation delay (leader TEZ → follower reload) → subtract it via `sync_phase_ns`
 - [ ] pull the wire: follower free-runs (beat returns), reconnect → relock within one period

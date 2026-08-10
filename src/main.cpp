@@ -938,7 +938,6 @@ static void loopRTNewData(time_ms nowMs) {
                 }
             } else {
                 stopAndBackoff(4);
-                if (g_app.manualPwm) mppt.setTargetDutyCycle(0); // don't re-fade after a manual-mode trip
             }
         } else if (wallClockUs() > delayStartUntil && mppt.startCondition()) {
             if (!g_app.manualPwm) {

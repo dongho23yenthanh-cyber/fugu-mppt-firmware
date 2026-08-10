@@ -176,11 +176,11 @@ private:
 public:
     //MinSampler<MpptControlMode, MpptControlMode::Max> ctrlModeSampled{};
     MinSampler<uint8_t, 15> limIdxSampled{};
-    uint16_t targetDutyCycle = 0; // MPP from global scan
+    uint16_t targetDutyCycle = 0; // one-shot ramp target from sweep/MPP (cleared on arrival)
+    uint16_t manualTarget = 0;   // persistent manual-mode duty target (survives backoff, cleared only by dc 0)
 
 private:
     bool _sweeping = false; // global scan
-    bool _targetDisable = false; // ramp pwmCtrl down to pwmCtrlMin then disable(); set by setTargetDutyCycle(0)
 
 
     struct {
@@ -223,7 +223,7 @@ private:
 
     uint8_t ledPinSimple = 255;
 
-    uint16_t targetPwmCnt = 0;
+    uint16_t targetPwmCnt = 0; // config-derived boot duty; cleared on mppt/sweep to allow tracking
 
     float sweepSpeed = 4.0f; // global-sweep speed (tracker.conf::sweep_speed)
 
@@ -345,6 +345,7 @@ public:
     void abortSweep() {
         _sweeping = false;
         maxPowerPoint = {};
+        targetDutyCycle = 0;
     }
 
     // Break a CV-floor lockup in place (no reboot): release the charger's Vout pinning and reset the
@@ -637,7 +638,6 @@ public:
         converter.disable();
         ctrlState._limiting = false;
         targetDutyCycle = 0;
-        _targetDisable = false;
 
         VinController.reset();
         VoutController.reset();
@@ -665,10 +665,18 @@ public:
     // Called from the console task (core 0). Stores the target only; the RT loop
     // ramps pwmCtrl on core 1 — keeps all PWM writes on one core so a concurrent
     // disable() can't race an in-flight ledc_update_duty (LEDC has no force-low latch).
-    void setTargetDutyCycle(uint16_t dutyCycle) {
-        if (dutyCycle > converter.pwmCtrlMax) dutyCycle = converter.pwmCtrlMax;
-        targetDutyCycle = dutyCycle;
-        _targetDisable = (dutyCycle == 0);
+    void setManualTarget(uint16_t duty) {
+        if (duty > converter.pwmCtrlMax) duty = converter.pwmCtrlMax;
+        manualTarget = duty;
+    }
+
+    // Drop the config-derived boot duty cap so update() resumes normal MPPT tracking.
+    void clearBootTarget() { targetPwmCnt = 0; }
+
+    // One-shot automatic ramp target (consumed by update() sweep/MPP fade path).
+    void setAutoRampTarget(uint16_t duty) {
+        if (duty > converter.pwmCtrlMax) duty = converter.pwmCtrlMax;
+        targetDutyCycle = duty;
     }
 
     struct CVP {

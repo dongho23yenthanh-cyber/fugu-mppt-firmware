@@ -126,6 +126,7 @@ static void cmdMppt(cmd *) {
         CMD_FAIL_RETURN("MPPT already enabled");
     ESP_LOGI("main", "MPPT re-enabled");
     converter.setManualRect(-1); // drop any bench LS hold
+    mppt.clearBootTarget(); // drop config-derived duty cap so update() does real tracking
     g_app.manualPwm = false;
 }
 
@@ -162,7 +163,7 @@ static void cmdDc(cmd *c) {
         }
     }
     g_app.manualPwm = true;
-    mppt.setTargetDutyCycle(dc);
+    mppt.setManualTarget(dc);
 
     if (cc.countArgs() >= 2 && dc > 0) {
         int ls = cc.getArg(1).getValue().toInt();
@@ -177,6 +178,7 @@ static void cmdDc(cmd *c) {
 static void cmdShortLs(cmd *) {
     if (converter.boost() && abs(sensors.Vin->ewm.avg.get()) < 0.05) {
         g_app.manualPwm = true;
+        mppt.setManualTarget(0);
         converter.shortLs();
     } else {
         CMD_FAIL_RETURN("short-ls: requires boost mode and Vin~0");
@@ -257,6 +259,7 @@ static void cmdSweep(cmd *) {
         converter.setManualRect(-1);
         g_app.manualPwm = false;
     }
+    mppt.clearBootTarget(); // drop config-derived duty cap so sweep can run
     mppt.clearBackoff(); // user override: don't absorb the manual sweep into a stale trip timer
     mppt.startSweep();
 }
@@ -491,7 +494,7 @@ static void cmdOta(cmd *c) {
     // Latch manual mode (also disables the !manualPwm-gated watchdogs) and ramp the converter
     // to 0, then wait for it to actually disable so the supply is settled when flashing begins.
     g_app.manualPwm = true;
-    mppt.setTargetDutyCycle(0); // graceful ramp-down, then converter.disable()
+    mppt.setManualTarget(0); // graceful ramp-down, then converter.disable()
     for (int i = 0; i < 100 && !converter.disabled(); ++i) delay(100); // <=10s for the ramp
     delay(500);                 // let the output coil/caps de-energize
     adcSampler.halted = true;   // disable ADC reading
@@ -1719,8 +1722,11 @@ bool handleCommand(const String &inp) {
         int pwmStep = inp.toInt();
         int target = (int) converter.getCtrlOnPwmCnt() + pwmStep;
         if (target < 0) target = 0;
-        mppt.setTargetDutyCycle((uint16_t) target);
-        ESP_LOGI("main", "Manual PWM step %i -> target %i", pwmStep, target);
+        if (g_app.manualPwm)
+            mppt.setManualTarget((uint16_t) target);
+        else
+            mppt.setAutoRampTarget((uint16_t) target);
+        ESP_LOGI("main", "PWM step %i -> target %i", pwmStep, target);
         loopLF(wallClockUs(), true);
         return true;
     }

@@ -45,7 +45,7 @@ static float medianN(float *a, int n) {
 
 // Set the duty target, wait for the RT fade to arrive (or stall), settle, then median 5 EWM reads.
 static void settleAndRead(uint16_t H, uint32_t dwellMs, Reading &out) {
-    mppt.setTargetDutyCycle(H);
+    mppt.setManualTarget(H);
     time_ms deadline = wallClockMs() + max<uint32_t>(dwellMs, 3000) + (uint32_t) H * 4;
     while (converter.getCtrlOnPwmCnt() != H && wallClockMs() < deadline)
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -255,7 +255,7 @@ static void measureCoilTask(void *arg) {
         if (a.ls) sweepLs(a); else sweepL0(a);
     }
     converter.setManualRect(-1);
-    mppt.setTargetDutyCycle(0); // RT core ramps down and disables (avoids cross-core LEDC race)
+    mppt.setManualTarget(0); // RT core ramps down and disables (avoids cross-core LEDC race)
     time_ms doneDeadline = wallClockMs() + 2000;
     while (!converter.disabled() && wallClockMs() < doneDeadline)
         vTaskDelay(pdMS_TO_TICKS(10));

@@ -375,30 +375,29 @@ void MpptController::updateCV() {
 
 
 void MpptController::updateManual() {
-    // Keep lastUs fresh so the first mppt.update() after `mppt` sees a normal dt_us
     lastUs = wallClockUs();
 
-    if (_targetDisable) {
-        // dc 0 from the console: ramp pwmCtrl down on the RT core, then disable().
-        // disable() from the console task would race an in-flight ledc_update_duty
-        // (re-asserts sig_out_en=true on LEDC); doing it here keeps all PWM writes on core 1.
+    if (inBackoff()) {
+        if (!converter.disabled()) converter.disable();
+        return;
+    }
+
+    if (manualTarget == 0) {
+        if (!converter.disabled()) {
+            if (converter.getCtrlOnPwmCnt() <= converter.pwmCtrlMin)
+                converter.disable();
+            else
+                converter.pwmPerturb(-4);
+        }
+    } else {
         if (converter.disabled()) {
-            _targetDisable = false;
-        } else if (converter.getCtrlOnPwmCnt() <= converter.pwmCtrlMin) {
-            ESP_LOGI("mppt", "Reached target duty cycle 0, disabling");
-            converter.disable();
-            _targetDisable = false;
-        } else {
-            converter.pwmPerturb(-4);
+            if (!limits.reverse_current_paranoia) {
+                converter.enableSyncRect(true);
+                bflow.enable(true);
+            }
         }
-    } else if (targetDutyCycle) {
-        int16_t step = constrain(targetDutyCycle - converter.getCtrlOnPwmCnt(), -4, 4);
-        if (step == 0) {
-            ESP_LOGI("mppt", "Reached target duty cycle %hu", targetDutyCycle);
-            targetDutyCycle = 0;
-        } else {
-            converter.pwmPerturb(step);
-        }
+        int16_t step = constrain((int32_t)manualTarget - (int32_t)converter.getCtrlOnPwmCnt(), -4, 4);
+        if (step) converter.pwmPerturb(step);
     }
 }
 
@@ -408,11 +407,17 @@ void MpptController::begin(const ConfFile &trackerConf, const ConfFile &boardCon
     limits = limits_;
     tele = tele_;
 
-    targetPwmCnt = (uint16_t) std::round(
-        trackerConf.getFloat("target_duty_cycle", 0.0f) * (float) converter.pwmMaxDriver());
+    float frac = trackerConf.getFloat("target_duty_cycle", 0.0f);
+    if (std::isfinite(frac) && frac > 0.0f && frac <= 1.0f)
+        targetPwmCnt = (uint16_t) std::round(frac * (float) converter.pwmMaxDriver());
+    else
+        targetPwmCnt = 0;
 
     if (targetPwmCnt) {
-        ESP_LOGW("mppt", "target duty cycle PWM=%.2hu, not performing tracking!", targetPwmCnt);
+        g_app.manualPwm = true;
+        manualTarget = std::min(targetPwmCnt, converter.pwmCtrlMax);
+        ESP_LOGW("mppt", "target duty cycle PWM=%hu, manual mode (fixed duty), pwmMaxDriver=%u",
+                 targetPwmCnt, (unsigned) converter.pwmMaxDriver());
     }
 
     sweepSpeed = std::max(0.1f, trackerConf.getFloat("sweep_speed", 4.0f));
@@ -435,7 +440,14 @@ void MpptController::begin(const ConfFile &trackerConf, const ConfFile &boardCon
 
     bflow.init(boardConf);
     meter.load();
-    startSweep();
+    if (targetPwmCnt) {
+        if (!limits.reverse_current_paranoia) {
+            converter.enableSyncRect(true);
+            bflow.enable(true);
+        }
+    } else {
+        startSweep();
+    }
 }
 
 void MpptController::telemetry() {

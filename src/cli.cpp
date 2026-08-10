@@ -25,6 +25,7 @@
 #include <SimpleCLI.h>
 
 #include "logging.h"
+#include "console.h"
 #include "conf.h"
 #include "util.h"
 #include "buck.h"
@@ -1435,6 +1436,140 @@ static void cmdVconv(cmd *c) {
 }
 #endif
 
+// --- Scripts ---------------------------------------------------------------------------------
+
+static const char *SCRIPTS_DIR = "/littlefs/scripts";
+
+static std::string scriptPath(const String &name) {
+    return std::string(SCRIPTS_DIR) + "/" + name.c_str();
+}
+
+static void cmdSleep(cmd *c) {
+    auto v = Command(c).getArg(0).getValue();
+    if (v.length() == 0)
+        CMD_FAIL_RETURN("sleep: expected <seconds>");
+    float secs = v.toFloat();
+    if (!std::isfinite(secs) || secs <= 0 || secs > 60)
+        CMD_FAIL_RETURN("sleep: %.2f out of range (0..60)", (double) secs);
+    int ms = (int) (secs * 1000);
+    UART_LOG("sleep %.3f", (double) secs);
+    for (int t = 0; t < ms; t += 100) {
+        vTaskDelay(pdMS_TO_TICKS(std::min(100, ms - t)));
+        consoleFlush();
+    }
+}
+
+static int s_scriptDepth = 0;
+
+static void cmdRun(cmd *c) {
+    Command cc(c);
+    auto name = cc.getArg(0).getValue();
+    if (name.length() == 0)
+        CMD_FAIL_RETURN("run: expected <script name>");
+    if (name.indexOf('/') != -1 || name.indexOf("..") != -1)
+        CMD_FAIL_RETURN("run: invalid script name '%s'", name.c_str());
+    if (s_scriptDepth >= 3)
+        CMD_FAIL_RETURN("run: script nesting too deep (max 3)");
+    auto path = scriptPath(name);
+    FILE *f = fopen(path.c_str(), "r");
+    if (!f) {
+        path += ".txt";
+        f = fopen(path.c_str(), "r");
+    }
+    if (!f)
+        CMD_FAIL_RETURN("run: script not found: %s", name.c_str());
+    s_scriptDepth++;
+    try {
+        char line[200];
+        int ln = 0, executed = 0;
+        while (fgets(line, sizeof(line), f)) {
+            ++ln;
+            size_t l = strlen(line);
+            while (l && (line[l - 1] == '\n' || line[l - 1] == '\r')) line[--l] = 0;
+            char *p = line;
+            while (*p == ' ' || *p == '\t') ++p;
+            if (*p == '#' || *p == 0) continue;
+            String inp(p);
+            inp.trim();
+            if (!inp.length()) continue;
+            UART_LOG("=== %s ===", inp.c_str());
+            bool ok = handleCommand(inp);
+            consoleFlush();
+            if (!ok) {
+                s_scriptDepth--;
+                fclose(f);
+                CMD_FAIL_RETURN("run: aborted at line %d: %s", ln, inp.c_str());
+            }
+            ++executed;
+        }
+        fclose(f);
+        s_scriptDepth--;
+        UART_LOG("run: %s — %d commands, %d lines", name.c_str(), executed, ln);
+    } catch (...) {
+        s_scriptDepth--;
+        fclose(f);
+        throw;
+    }
+}
+
+static void cmdScripts(cmd *) {
+    DIR *d = opendir(SCRIPTS_DIR);
+    if (!d) {
+        UART_LOG("scripts: none (no %s directory)", SCRIPTS_DIR);
+        return;
+    }
+    int n = 0;
+    for (dirent *e; (e = readdir(d));) {
+        std::string full = std::string(SCRIPTS_DIR) + "/" + e->d_name;
+        struct stat st;
+        bool ok = stat(full.c_str(), &st) == 0;
+        UART_LOG("%8lu  %s", (unsigned long) (ok ? st.st_size : 0), e->d_name);
+        ++n;
+    }
+    closedir(d);
+    UART_LOG("scripts: %d in %s", n, SCRIPTS_DIR);
+}
+
+static void cmdScriptSet(cmd *c) {
+    Command cc(c);
+    if (cc.countArgs() < 2)
+        CMD_FAIL_RETURN("script-set: expected <name> <cmd; cmd; ...>");
+    auto name = cc.getArg(0).getValue();
+    if (name.indexOf('/') != -1 || name.indexOf("..") != -1 || name.length() == 0)
+        CMD_FAIL_RETURN("script-set: invalid name '%s'", name.c_str());
+    std::string body;
+    for (int i = 1; i < cc.countArgs(); ++i) {
+        if (i > 1) body += ' ';
+        body += cc.getArg(i).getValue().c_str();
+    }
+    mkdir(SCRIPTS_DIR, 0777);
+    auto path = scriptPath(name) + ".txt";
+    struct stat probe;
+    bool exists = stat(path.c_str(), &probe) == 0;
+    FILE *f = fopen(path.c_str(), "w");
+    if (!f)
+        CMD_FAIL_RETURN("script-set: cannot write %s", path.c_str());
+    int lines = 0;
+    size_t start = 0;
+    while (start <= body.size()) {
+        size_t sep = body.find(';', start);
+        std::string seg = (sep == std::string::npos) ? body.substr(start) : body.substr(start, sep - start);
+        size_t a = seg.find_first_not_of(" \t"), b = seg.find_last_not_of(" \t");
+        if (a != std::string::npos) {
+            fprintf(f, "%s\n", seg.substr(a, b - a + 1).c_str());
+            ++lines;
+        }
+        if (sep == std::string::npos) break;
+        start = sep + 1;
+    }
+    if (fsync(fileno(f)) != 0) {
+        fclose(f);
+        CMD_FAIL_RETURN("script-set: fsync failed for %s", path.c_str());
+    }
+    fclose(f);
+    UART_LOG("script-set: %s '%s' — %d lines", exists ? "overwritten" : "created", path.c_str(), lines);
+}
+
 static void cmdHelp(cmd *) { UART_LOG("%s", cli.toString().c_str()); }
 
 void setupCli() {
@@ -1546,6 +1681,10 @@ void setupCli() {
     cli.addBoundlessCmd("get-config,getc", cmdGetConfig);
     cli.addBoundlessCmd("conf-check,confcheck", cmdConfCheck);
     cli.addBoundlessCmd("service,svc", cmdService);
+    cli.addSingleArgCmd("sleep", cmdSleep);
+    cli.addSingleArgCmd("run", cmdRun);
+    cli.addCommand("scripts", cmdScripts);
+    cli.addBoundlessCmd("script-set,script", cmdScriptSet);
 #ifdef WITH_BLE
     cli.addBoundlessCmd("ota-ble", cmdOtaBle);
 #endif

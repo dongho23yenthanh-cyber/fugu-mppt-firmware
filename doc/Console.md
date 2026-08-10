@@ -20,7 +20,7 @@ rejection message for invalid arguments / wrong context.
 
 | Command | Description |
 | --- | --- |
-| `wifi on`, `wifi off [minutes]` | Enable / disable Wi-Fi (and with it all network services). Disabling Wi-Fi usually increases the control-loop rate. Bare `wifi off` disables for good and clears the stored SSID in NVS; `wifi off <minutes>` disables temporarily and re-enables after the timeout, keeping the stored SSID. |
+| `wifi on`, `wifi off [minutes]` | Enable / disable Wi-Fi (and with it all network services). Disabling Wi-Fi usually increases the control-loop rate. Bare `wifi off` disables for good and clears the stored SSID in NVS — it persists across reboots (NVS `wifi_off`) until `wifi on`; `wifi off <minutes>` disables temporarily (RAM only, a reboot re-enables Wi-Fi) and re-enables after the timeout, keeping the stored SSID. |
 | `wifi add <ssid>:<password>` | Store a new Wi-Fi network. |
 | `ip` | Show the local IP address. |
 | `hostname <hostname>` | Set the device hostname (persisted in NVS, applied on next boot). |
@@ -131,6 +131,33 @@ services. Each has its own state, log level, and `enabled` flag persisted in its
 | `svc off <name>` | Disable (persist) and stop a service. |
 | `svc restart <name>` / `svc rs <name>` | Restart a service (stop then start); re-reads its conf. |
 | `svc log <name> <error\|warn\|info>` | Set and persist a service's log level. |
+
+# Scripts
+
+Console scripts are plain text files stored on the device's littlefs partition under
+`/littlefs/scripts/`. Each line is a console command (same syntax as typing it). Lines starting
+with `#` are comments; blank lines are skipped. Upload via FTP (to `/littlefs/scripts/`) or
+create them with `script-set` below. View with `cat scripts/<name>`.
+
+| Command | Description |
+| --- | --- |
+| `run <name>` | Execute a stored script. Resolves `/littlefs/scripts/<name>` then `<name>.txt`. Each command's output is prefixed with `=== <cmd> ===`. Stops on the first error and aborts. Nesting up to 3 levels deep. |
+| `sleep <seconds>` | Delay 0–60 seconds (fractional OK, e.g. `sleep 0.5`). Blocks the console task but not the RT control loop. Mainly for use inside scripts to wait between commands. |
+| `scripts` | List all scripts in `/littlefs/scripts/`. |
+| `script-set <name> <cmd; cmd; …>` (alias `script`) | Create or overwrite a script from a single line. Commands are separated by `;`. The file is written to `/littlefs/scripts/<name>.txt`. Overwrites if the file exists. |
+
+Examples:
+
+```
+script-set setup_rig set-config board.conf mcu esp32s3; set-config coil.conf L0 50; sleep 2; conf-check
+run setup_rig
+scripts
+cat scripts/setup_rig.txt
+```
+
+Limitations: `;` is the command separator and cannot appear in command arguments — use FTP for
+scripts that need `;` in values (e.g. URLs). Line length is limited to ~199 characters. `;;` in
+a script acts as SimpleCLI's line delimiter and will execute as separate commands.
 
 # Telnet
 

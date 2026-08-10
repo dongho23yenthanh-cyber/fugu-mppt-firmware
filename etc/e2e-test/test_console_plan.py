@@ -35,11 +35,17 @@ GROUP_ALWAYS, GROUP_MOCK, GROUP_NET = "always", "mock", "net"
 
 # Per-command timeout overrides (seconds), keyed by command verb. The default 4 s fits most
 # commands; the I2C bus scan is slower and the nettools reach the network.
-TIMEOUT_OVERRIDE = {"scan-i2c": 12.0, "curl": 15.0, "ping": 8.0, "tcpconnect": 8.0}
+TIMEOUT_OVERRIDE = {"scan-i2c": 12.0, "curl": 15.0, "ping": 8.0, "tcpconnect": 8.0, "run": 180.0}
 
 
 def _timeout_for(cmd, default=4.0):
-    return TIMEOUT_OVERRIDE.get(cmd.split(None, 1)[0] if cmd else cmd, default)
+    verb = cmd.split(None, 1)[0] if cmd else cmd
+    if verb == "sleep":
+        try:
+            return min(max(float(cmd.split(None, 1)[1]) + 2.0, default), 62.0)
+        except (IndexError, ValueError):
+            return default
+    return TIMEOUT_OVERRIDE.get(verb, default)
 
 
 # Each step: (command, expect_substr | None, group, tolerate_reject)

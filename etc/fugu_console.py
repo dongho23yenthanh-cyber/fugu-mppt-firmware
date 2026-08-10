@@ -233,7 +233,8 @@ def scan_ble(timeout=5.0):
     async def _scan():
         found = []
         for dev, adv in (await BleakScanner.discover(timeout=timeout, return_adv=True)).values():
-            if nus in (s.lower() for s in (adv.service_uuids or [])):
+            if nus in (s.lower() for s in (adv.service_uuids or [])) \
+                    or BleTransport.is_tele_adv(adv.manufacturer_data):
                 found.append((dev.name or "?", dev.address))
         return found
 
@@ -314,8 +315,8 @@ def scan_ble_proxy(timeout=8.0):
 
         def on_raw(resp):
             for a in resp.advertisements:
-                name, uuids = EspHomeBleTransport._parse_adv(bytes(a.data))
-                if EspHomeBleTransport.NUS_SERVICE in uuids:
+                name, uuids, mfr = EspHomeBleTransport._parse_adv(bytes(a.data))
+                if EspHomeBleTransport.NUS_SERVICE in uuids or BleTransport.is_tele_adv(mfr):
                     found[a.address] = (name, a.address_type)
 
         unsub = cli.subscribe_bluetooth_le_raw_advertisements(on_raw)
@@ -438,11 +439,17 @@ def discover_devices():
 # fits most commands; the I2C bus scan is slower, and `ota <url>` blocks until the firmware
 # finishes downloading and reboots (or its 10 s connect timeout fires + recovery) — ~40 s for a
 # successful flash, so 180 s gives comfortable headroom.
-TIMEOUT_OVERRIDE = {"scan-i2c": 12.0, "ota": 180.0, "curl": 15.0, "ping": 8.0, "tcpconnect": 8.0}
+TIMEOUT_OVERRIDE = {"scan-i2c": 12.0, "ota": 180.0, "curl": 15.0, "ping": 8.0, "tcpconnect": 8.0, "run": 180.0}
 
 
 def _timeout_for(cmd: str, default: float = 4.0) -> float:
-    return TIMEOUT_OVERRIDE.get(cmd.split(None, 1)[0] if cmd else cmd, default)
+    verb = cmd.split(None, 1)[0] if cmd else cmd
+    if verb == "sleep":
+        try:
+            return min(max(float(cmd.split(None, 1)[1]) + 2.0, default), 62.0)
+        except (IndexError, ValueError):
+            return default
+    return TIMEOUT_OVERRIDE.get(verb, default)
 
 
 _PEEK_TYPED_RE = re.compile(r"peek\s+0x[0-9a-fA-F]+\s+=\s+0x([0-9a-fA-F]+)")
@@ -813,7 +820,8 @@ def make_transport(args):
             stream = TeleStream(on_error=lambda e: print(f"tele decode error: {e} (resync)",
                                                          file=sys.stderr))
             tele_cb = lambda data: [print("tele| " + ln) for ln in stream.feed(data)]
-        return BleTransport(name=args.name, address=args.address, tele_cb=tele_cb)
+        return BleTransport(name=args.name, address=args.address, tele_cb=tele_cb,
+                            adapter=args.adapter)
     if args.mqtt:
         ro = " (read-only)" if args.mqtt_readonly else ""
         print(f"connecting to MQTT broker {args.mqtt}:{args.mqtt_port}, device ~{args.name!r}{ro}")
@@ -839,6 +847,10 @@ def main():
     ap.add_argument("--name", default="fugu",
                     help="device-name substring filter (with --ble: advertised name; with --mqtt: hostname)")
     ap.add_argument("--address", help="BLE address to connect to (with --ble / --ble-proxy)")
+    ap.add_argument("--adapter", default=None, metavar="hciN",
+                    help="BlueZ adapter for --ble (default $BLE_ADAPTER, else hci0). A host whose\n"
+                         "on-board controller shares its antenna with wlan0 connects far more\n"
+                         "reliably on a separate dongle.")
     ap.add_argument("--ble-proxy", metavar="HOST[:PORT]",
                     help="reach BLE NUS through an ESPHome bluetooth_proxy at this host "
                          "(plaintext API, no noise); scans by --name unless --address is given")

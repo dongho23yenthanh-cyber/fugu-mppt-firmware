@@ -1,0 +1,178 @@
+*this document is an LLM generated placeholder*
+
+# DCM Coil Ringing
+
+In discontinuous conduction mode (DCM), when the inductor current reaches zero the LS
+rectifier turns off. The residual energy in the inductor then resonates with the parasitic
+capacitance at the switch node — MOSFET C_oss, LS FET junction capacitance, PCB trace
+capacitance — forming an LC tank. In a synchronous buck with diode emulation (this
+firmware, `src/buck.h`), the LS FET's C_oss is the dominant capacitance and the **main
+inductor L** is the tank inductance.
+
+**Not to be confused with the HF transition ring.** There are two distinct ringing
+phenomena on the switch node:
+
+- **HF transition ringing** — occurs at *every* HS/LS switching edge, caused by the
+  *parasitic loop inductance* (trace + package ~10–30 nH) resonating with C_oss at
+  tens to hundreds of MHz. Duration is a few ns; addressed by snubbers, gate-R, and
+  layout. This is what most app notes (TI slyt465, Specter Engineering, ADI) focus on.
+- **DCM coil ringing** (this document) — occurs *only after* the inductor current
+  reaches zero and both FETs are off, caused by the **main power inductor L**
+  (~50–80 µH on fry/flat) resonating with C_oss (~100–200 pF). Frequency
+  f_r ≈ 1/(2π√(L·C_oss)) ≈ **1.3–2 MHz** on this hardware — well above f_sw (39 kHz)
+  but far below the HF transition ring. The ring duration is hundreds of ns to µs,
+  and its lower frequency makes firmware active damping feasible (T_ring/4 ≈ 125–192 ns
+  is within MCPWM tick resolution).
+
+This is a companion to [Diode Emulation.md](Diode%20Emulation.md), which covers the ZCD
+timing. Here we cover what happens *after* the LS FET turns off at the zero crossing.
+
+## Reduction techniques
+
+### 1. RC snubber (hardware)
+
+Series R+C from the switch node to ground, placed as close to the LS FET as possible. The
+standard design procedure (ADI, TI, Severns):
+
+1. **Measure ringing frequency** f_r on the switch node with a scope (bandwidth limiting
+   off, short ground spring).
+2. **Find parasitic C**: add capacitance C_ext from SW to GND until f_r drops to **half**.
+   Then C_parasitic = C_ext / 3 (total C quadrupled → f halved, since f ∝ 1/√(LC)).
+3. **Find parasitic L**: L_parasitic = 1 / (4π² · f_r² · C_parasitic).
+4. **R_snubber = √(L_parasitic / C_parasitic)** — the characteristic impedance of the tank.
+   This is the value that critically damps it.
+5. **C_snubber = 3–10× C_parasitic** (ADI says 1–4×, TI says 3–10×). Larger C = more
+   damping but more loss.
+6. **Snubber loss**: P = ½ · C_snub · V² · f_sw — the efficiency penalty per cycle.
+
+Practical tuning (from the EE StackExchange thread on an LM2576 buck): the calculations
+get you close, but the final value should be found empirically — solder in a pot and tune
+R for best waveform. The RC time constant should be ≥ 3× the ringing rise time. Don't
+chase critical damping; "tidy waveform" costs more efficiency than it's worth. Final
+values for that example: 1 nF + 470 Ω.
+
+For a nonsynchronous buck, the ringing voltage never exceeds the switching voltage, so
+it's primarily an EMI concern, not a reliability one. In a synchronous buck the same
+applies — the ring is bounded by the tank energy, not by V_in.
+
+### 2. Gate resistance tuning (hardware / firmware)
+
+Increase the LS FET turn-off gate resistance to slow dv/dt at the moment the FET opens.
+This reduces the excitation energy injected into the LC tank. Trade-off: higher switching
+loss. In this firmware the MCPWM dead-time pair and gate driver strength already influence
+this; adjusting the dead-time can marginally affect ringing amplitude. Specter Engineering
+showed a near-linear decrease in overshoot vs. gate resistance from 1–20 Ω.
+
+### 3. Layout optimization (hardware)
+
+Minimize the high-di/dt commutation loop area: keep the input capacitor, HS FET, and LS
+FET as physically close as possible. ~10 nH per 25 mm of trace. Smaller loop = less
+parasitic L = less stored energy = lower overshoot. This is the single most effective
+hardware change but requires a board respin. Planar/laminated busbars or adjacent PCB
+power layers for magnetic field cancellation.
+
+### 4. Forced CCM (firmware)
+
+Keep the converter in continuous conduction mode so the inductor current never reaches
+zero and DCM ringing never occurs. Options:
+
+- **Minimum preload** (bleeder resistor on the output): the converter always draws enough
+  current to stay in CCM. Simple but wastes power continuously.
+- **Force CCM in firmware**: keep the LS FET on even at zero current, allowing negative
+  inductor current (forced PWM). Eliminates DCM ringing entirely but introduces
+  circulating current losses — at light loads this can be worse than the ringing.
+  **Already available in this firmware**: `sync forced` console command or
+  `forced_pwm=1` in `converter.conf` (`src/buck.h:453`). Sets `forcedPwm=true`, which
+  bypasses DCM detection (`computeDCM` returns false, `src/buck.h:721`) and keeps LS
+  on for the full complementary half-cycle.
+- **Lower inductance**: raises the critical load boundary (I_crit = ΔI_L / 2), extending
+  CCM to lower loads. Trade-off: higher ripple, larger core losses.
+
+### 5. Pulse skipping / burst mode (firmware)
+
+Instead of operating in DCM at light loads, skip switching pulses entirely. The converter
+fires a burst of CCM pulses to charge the output, then goes idle until V_out droops below
+a threshold. Each pulse is a CCM pulse, so DCM ringing doesn't occur. Trade-off:
+lower-frequency output ripple at the burst frequency, potential audible noise. Many IC
+controllers (onsemi FAN65008, TI LM5146) do this automatically.
+
+For this firmware: implement by setting a minimum PWM duty floor — if the computed duty
+falls below a threshold, either hold PWM at 0 (skip) or fire a minimum-width CCM pulse
+periodically.
+
+### 6. Active damping via LS FET (firmware, specific to synchronous buck)
+
+The ringing is between L and C_oss of the LS FET. Instead of letting it ring freely after
+the LS FET turns off:
+
+- **Keep the LS FET on briefly** after zero-current detection to clamp the switch node to
+  ground, dissipating the residual energy in R_ds(on) before releasing it. The FET acts as
+  a controlled dissipative element. This is the most promising firmware-only approach for
+  this project — the existing `SynchronousConverter` (`src/buck.h`) already computes
+  diode-emulation timing; a brief LS-FET re-trigger pulse at the first ring valley
+  (~T_ring/4 ≈ 125–250 ns after LS-off) could be added.
+  - **MCPWM**: the ESP32-S3 has 2 comparators per operator (`SOC_MCPWM_COMPARATORS_PER_OPERATOR=2`),
+    both already used for HS and LS edges (`cmpHS_`, `cmpLS_` in `src/pwm/mcpwm.h`). An LS
+    re-trigger pulse would need a different mechanism — e.g. a second operator's comparator
+    cross-triggered, or the dead-time submodule, or a software-triggered one-shot event.
+    Feasible but not trivial; no spare hardware comparator is available.
+  - **LEDC**: not feasible — LEDC uses 2 channels (one for HS, one for LS), each producing
+    exactly one pulse per period via duty/hpoint registers. There is no event system for
+    generating an additional edge.
+  - Note: `boot_refresh_ns` / `pwmRectMin` (2000 ns default, `src/buck.h:574`) is a
+    *minimum LS on-time* for HS bootstrap cap refresh — it keeps LS on *before* the ring
+    starts, not after. It is not a ring damper; active damping needs a *new* LS re-trigger
+    pulse timed to the ring valley, which is a different mechanism.
+  - **`rect_offset_ns`** (`coil.conf`, `src/buck.h:588`) already provides partial
+    damping: it delays LS turn-off slightly past the true zero crossing, so a small
+    reverse current flows, loading the tank and dissipating ring energy. Calibrated per
+    board (fry +100, flat +78 counts). Increasing it further damps more but pushes
+    operating point toward the reverse-current cliff (see
+    `project_rect_offset_and_intrinsic_oscillation.md`).
+- **Turn the HS FET on early** (before the next nominal cycle) to clamp the switch node to
+  V_in, absorbing the ring energy into the input cap. Requires precise timing; used in
+  some advanced controllers.
+- **Briefly re-turn the LS FET on** for a few ns at the zero-crossing to short the tank.
+  This is the "active clamp" approach (see US8933635B2 patent for LED driver
+  application).
+
+### 7. Schottky diode in parallel with LS FET body diode (hardware)
+
+An external Schottky diode has near-zero reverse recovery current, reducing the current
+step that excites the RLC tank at turn-off. Specter Engineering's simulation showed ~90 V
+overshoot reduction. This is a BOM change, not firmware.
+
+## Summary
+
+| Technique | HW/FW | Effectiveness | Efficiency cost | No board change? |
+|---|---|---|---|---|
+| RC snubber | HW | High | Low–moderate (½CV²f) | No |
+| Gate R tuning | HW/FW | Medium | Moderate | Partially (dead-time) |
+| Layout optimization | HW | High | None | No (respin) |
+| Forced CCM | FW | Complete | High at light load | Yes |
+| Pulse skipping / burst | FW | High | Low | Yes |
+| Active damping (LS keep-on) | FW | High | Low | Yes (experimental) |
+| Schottky parallel diode | HW | Medium | Low | No |
+
+For this project, the most promising **no-hardware-change** approaches are burst/pulse-skip
+at light load and active damping via a brief LS-FET keep-alive pulse at the zero crossing.
+Both build on the existing diode-emulation logic in `src/buck.h`.
+
+## Sources
+
+- Analog Devices, "The Unseen Ring: Taming Parasitics in Buck Converters Using a Snubber"
+  (2026-03-16) — https://www.analog.com/en/resources/technical-articles/the-unseen-ring.html
+  — full snubber calculation + LTspice optimization method
+- Specter Engineering, "Switch Node Ringing" (2019-10-04) —
+  https://www.specterengineering.com/blog/2019/9/26/switch-node-ringing — first-principles
+  RLC analysis, gate-R sweep, Schottky parallel diode, snubber
+- EE StackExchange, "Snubbing DCM (nonsynchronous) Buck converter" —
+  https://electronics.stackexchange.com/questions/246301/ — practical tuning outcome
+  (1 nF + 470 Ω on LM2576), "snubbing improves waveforms, not makes them perfect"
+- TI, "Controlling switch-node ringing in synchronous buck converters" —
+  https://www.ti.com/lit/pdf/slyt465
+- ResearchGate, "Impact of inductor current ringing in DCM on output voltage of DC-DC buck
+  power converters" (2017) —
+  https://www.researchgate.net/publication/317525001
+- US Patent 8933635B2, "Method of preventing spurious ringing" —
+  https://patents.google.com/patent/US8933635B2/en — active clamp for LED drivers

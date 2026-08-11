@@ -376,6 +376,9 @@ void MpptController::updateCV() {
 
 void MpptController::updateManual() {
     lastUs = wallClockUs();
+    ctrlState.mode = MpptControlMode::None;
+
+    const int16_t rampStep = std::max(1, (int) std::lround((float) converter.pwmMaxDriver() / 512.f));
 
     if (inBackoff()) {
         if (!converter.disabled()) converter.disable();
@@ -387,7 +390,7 @@ void MpptController::updateManual() {
             if (converter.getCtrlOnPwmCnt() <= converter.pwmCtrlMin)
                 converter.disable();
             else
-                converter.pwmPerturb(-4);
+                converter.pwmPerturb(-rampStep);
         }
     } else {
         if (converter.disabled()) {
@@ -396,7 +399,7 @@ void MpptController::updateManual() {
                 bflow.enable(true);
             }
         }
-        int16_t step = constrain((int32_t)manualTarget - (int32_t)converter.getCtrlOnPwmCnt(), -4, 4);
+        int16_t step = constrain((int32_t)manualTarget - (int32_t)converter.getCtrlOnPwmCnt(), -rampStep, rampStep);
         if (step) converter.pwmPerturb(step);
     }
 }

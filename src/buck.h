@@ -556,7 +556,22 @@ public:
         // not otherwise pulled low (high duty, or DCM/zero coil current). Fixed time, not a duty
         // fraction: the recharge need is set by HS gate charge, independent of fsw. During normal
         // conversion the LS body diode refreshes the cap, so this only binds in those corners.
-        auto bootRefreshNs = boardConf.getFloat("boot_refresh_ns", 500.f);
+        // 2000 ns. NOT the 500 ns this shipped with, and not the ~1500 ns that merely restores
+        // the hardcoded MinDutyCycleLS = 0.06 it replaced -- 6% is ~244 counts here and that is
+        // BELOW the measured floor.
+        //
+        // MEASURED on fbuck 2026-08-11, buck output open, Vin 40.9 V. Out of `reset` the
+        // converter comes up at DCM(H|L|Lm)=1506|80|80, i.e. the LS on-time pinned at this
+        // minimum. With no load the LS body diode never conducts, so this refresh is the ONLY
+        // thing recharging the HS bootstrap cap (see the comment above). Starved, the high-side
+        // gate drive does not fail cleanly -- it fires in BURSTS, so the switch node shows a
+        // clean hard turn-off but no fast turn-on for most cycles. Fab established LS >= 300
+        // counts as the safe lower bound on this board; 2000 ns gives 320 counts at 39.3 kHz on
+        // the 4069-count driver, keeping margin above it.
+        //
+        // Being a time rather than a count, this stays correct across the LEDC<->MCPWM
+        // resolution change; the 300-count floor is board- and fsw-specific, the 2 us is not.
+        auto bootRefreshNs = boardConf.getFloat("boot_refresh_ns", 2000.f);
         pwmRectMin = isBoost ? 0 : (uint16_t) std::ceil(
                          bootRefreshNs * 1e-9f * (float) pwmFrequency * (float) driverPwmMax);
         pwmCtrlMax = (uint16_t) (driverPwmMax - pwmRectMin);
@@ -640,7 +655,7 @@ public:
 
                 // "fade-in" the low-side duty cycle
                 // start slowly, then quickly step towards pwmRectMax
-                auto step = 1 + ((pwmRect > pwmRectMin + 32) ? (pwmRectMax - pwmRect) / 64 : 0);
+                auto step = 1 + ((pwmRect > pwmRectMin + (driverPwmMax / 64)) ? (pwmRectMax - pwmRect) / 64 : 0);
                 pwmRect = syncRectEnabled
                               ? constrain(pwmRect + step, pwmRectMin, pwmRectMax)
                               : pwmRectMin;

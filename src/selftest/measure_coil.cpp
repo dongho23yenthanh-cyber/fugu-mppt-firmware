@@ -259,6 +259,7 @@ static void measureCoilTask(void *arg) {
     time_ms doneDeadline = wallClockMs() + 2000;
     while (!converter.disabled() && wallClockMs() < doneDeadline)
         vTaskDelay(pdMS_TO_TICKS(10));
+    mppt.clearBootTarget();
     g_app.manualPwm = false;
     s_measureBusy.store(false);
     UART_LOG("measure-coil: done, MPPT restored");

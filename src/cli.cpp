@@ -177,6 +177,7 @@ static void cmdDc(cmd *c) {
 
 static void cmdShortLs(cmd *) {
     if (converter.boost() && abs(sensors.Vin->ewm.avg.get()) < 0.05) {
+        mppt.abortSweep();
         g_app.manualPwm = true;
         mppt.setManualTarget(0);
         converter.shortLs();
@@ -255,11 +256,11 @@ static void cmdMcpwmTest(cmd *c) {
 static void cmdSweep(cmd *) {
     // Sweep state advances inside mppt.update(), which loopRTNewData only calls
     // when !g_app.manualPwm. Drop manual mode here so the sweep can actually ramp PWM.
+    mppt.clearBootTarget(); // drop config-derived duty cap before flipping mode
     if (g_app.manualPwm) {
         converter.setManualRect(-1);
         g_app.manualPwm = false;
     }
-    mppt.clearBootTarget(); // drop config-derived duty cap so sweep can run
     mppt.clearBackoff(); // user override: don't absorb the manual sweep into a stale trip timer
     mppt.startSweep();
 }
@@ -504,6 +505,7 @@ static void cmdOta(cmd *c) {
     // OTA failed — resume normal operation (mirror cmdMppt).
     adcSampler.halted = false;
     converter.setManualRect(-1);
+    mppt.clearBootTarget();
     g_app.manualPwm = false;
     if (!ok)
         CMD_FAIL_RETURN("ota: update failed");
@@ -1722,6 +1724,7 @@ bool handleCommand(const String &inp) {
         int pwmStep = inp.toInt();
         int target = (int) converter.getCtrlOnPwmCnt() + pwmStep;
         if (target < 0) target = 0;
+        if (target > converter.pwmCtrlMax) target = converter.pwmCtrlMax;
         if (g_app.manualPwm)
             mppt.setManualTarget((uint16_t) target);
         else

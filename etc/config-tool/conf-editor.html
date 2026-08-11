@@ -339,7 +339,7 @@ const META = {
   vout_offset_max:{unit:"V",desc:"Worst-case Vout-sensor error tolerated during float: how far below the float floor the BMS-driven EOC loop may pull to stop charging a full pack when Vout reads high",type:"float"},
 
   // tracker.conf
-  target_duty_cycle:{unit:"",desc:"Fixed duty cycle fraction; if set, disables MPPT tracking",type:"float"},
+  target_duty_cycle:{unit:"",desc:"Fixed duty cycle fraction (0-1 of pwmMaxDriver); if > 0 enters manual PWM mode with hard-fixed duty (no PD control, no MPPT tracking)",type:"float"},
   sweep_speed:{unit:"",desc:"Global-sweep speed; scales both per-tick cap and limit-tracking gain (default 4.0)",type:"float"},
 
   // mqtt.conf

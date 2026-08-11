@@ -144,10 +144,24 @@ void test_buck_sync_rect_active_in_dcm_with_current() {
 // --- boot_refresh_ns -> pwmRectMin count conversion (replaces the old fixed 6%). ---
 
 void test_buck_bootstrap_min_default() {
+    // Assert the INTENT, not the literal. The previous version of this test recomputed the
+    // expectation with the same `500e-9` constant the code used, so it compared the default
+    // against itself and could never detect a wrong one -- and it duly held green while the
+    // default sat at a third of the required refresh (measured on fbuck: Lm=80, starved HS
+    // gate drive, no fast turn-on at all with the output open).
+    //
+    // The bound is EMPIRICAL, not the 6% of the MinDutyCycleLS this conf replaced: 6% is ~244
+    // counts here and fbuck was measured to need >= 300. Below that the HS gate drive does not
+    // fail cleanly, it fires in bursts, which is far harder to spot than a dead gate.
+    //
+    // Asserted as a floor, not an equality, so raising the default for more margin does not
+    // break the test while lowering it back into the burst region does.
     SynchronousConverter c;
-    initConv(c); // no boot_refresh_ns -> default 500 ns (buck.h)
-    auto expect = (uint16_t) std::ceil(500e-9f * kFsw * (float) c.pwmMaxDriver());
-    TEST_ASSERT_EQUAL_UINT(expect, c.getRectOnPwmMin());
+    initConv(c); // no boot_refresh_ns -> default from buck.h
+    const float minLsDutyMeasured = 300.f / 4069.f; // fbuck 2026-08-11, 39.3 kHz, MCPWM
+    auto floorCounts = (float) c.pwmMaxDriver() * minLsDutyMeasured;
+    TEST_ASSERT_TRUE_MESSAGE((float) c.getRectOnPwmMin() >= floorCounts,
+                             "default boot_refresh_ns is below the measured HS-bootstrap floor");
 }
 
 void test_buck_bootstrap_min_scales_with_conf() {
